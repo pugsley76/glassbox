@@ -9,7 +9,7 @@ require (
 	github.com/getsentry/sentry-go v0.31.1
 	github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e
 	github.com/gorilla/rpc v1.2.1
-	github.com/hashicorp/go-version v1.8.0
+	github.com/hashicorp/go-version v1.9.0
 	github.com/klauspost/compress v1.18.0
 	github.com/mattn/go-isatty v0.0.21
 	github.com/prometheus/client_golang v1.23.2
