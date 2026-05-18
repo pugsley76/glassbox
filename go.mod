@@ -11,7 +11,7 @@ require (
 	github.com/gorilla/rpc v1.2.1
 	github.com/hashicorp/go-version v1.8.0
 	github.com/klauspost/compress v1.18.0
-	github.com/mattn/go-isatty v0.0.21
+	github.com/mattn/go-isatty v0.0.22
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.10.2
 	github.com/stellar/go-stellar-sdk v0.5.0
