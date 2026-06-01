@@ -73,7 +73,7 @@ jobs:
             ./cmd/glassbox
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: go-${{ matrix.artifact }}
           path: dist/release/${{ matrix.artifact }}
@@ -102,7 +102,7 @@ jobs:
         run: npm test -- --passWithNoTests
 
       - name: Upload TS dist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ts-dist
           path: dist/
@@ -192,7 +192,7 @@ jobs:
         run: bash scripts/verify-release.sh dist/release
 
       - name: Upload packaged release
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-${{ steps.version.outputs.version }}
           path: dist/release/
@@ -260,7 +260,7 @@ jobs:
           go test -v -run 'TestGenerate_DeterministicHash' ./internal/cmd/... \
             | tee hash_output_${{ matrix.os }}.txt
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: hash-output-${{ matrix.os }}
           path: hash_output_${{ matrix.os }}.txt
