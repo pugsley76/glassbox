@@ -147,14 +147,14 @@ jobs:
           echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Download all Go binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: go-*
           path: dist/release
           merge-multiple: true
 
       - name: Download TS dist
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ts-dist
           path: dist/ts
@@ -272,7 +272,7 @@ jobs:
     needs: determinism
 
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: hash-output-*
           merge-multiple: true
