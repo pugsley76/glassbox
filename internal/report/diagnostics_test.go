@@ -38,6 +38,53 @@ func TestDiagnosticReportText(t *testing.T) {
 
 	text := NewDiagnosticReport(tr).Text()
 	if !strings.Contains(text, "[HIGH] execution: Execution error") {
-		t.Fatalf("text report missing high severity diagnostic: %s", text)
+		t.Errorf("text output should contain execution error header, got:\n%s", text)
 	}
+}
+
+func TestDiagnosticReport_WithSourceMapping_IncludesLocation(t *testing.T) {
+	tr := trace.NewExecutionTrace("tx789", 0)
+	tr.AddState(trace.ExecutionState{
+		Operation:  "invoke",
+		ContractID: "CTEST",
+		Error:      "panic: index out of bounds",
+		SourceRef: &trace.SourceRef{
+			File:     "src/contract.rs",
+			Line:     42,
+			Column:   10,
+			Function: "transfer",
+		},
+	})
+
+	r := NewDiagnosticReport(tr)
+	if len(r.Diagnostics) != 1 {
+		t.Fatalf("expected 1 diagnostic, got %d", len(r.Diagnostics))
+	}
+
+	d := r.Diagnostics[0]
+	if d.Contract != "CTEST" {
+		t.Errorf("expected Contract=CTEST, got %s", d.Contract)
+	}
+	if !strings.Contains(d.Action, "src/contract.rs") {
+		t.Errorf("action should include source file, got: %s", d.Action)
+	}
+	if !strings.Contains(d.Action, ":42") {
+		t.Errorf("action should include source line, got: %s", d.Action)
+	}
+}
+
+func TestDiagnosticReport_WithoutSourceMapping_NoSourceHint(t *testing.T) {
+	tr := trace.NewExecutionTrace("tx000", 0)
+	tr.AddState(trace.ExecutionState{
+		Operation:  "invoke",
+		ContractID: "CTEST",
+		Error:      "failed",
+	})
+
+	r := NewDiagnosticReport(tr)
+	d := r.Diagnostics[0]
+	if strings.Contains(d.Action, "Source:") {
+		t.Errorf("action should not include source hint when no SourceRef, got: %s", d.Action)
+	}
+}
 }
