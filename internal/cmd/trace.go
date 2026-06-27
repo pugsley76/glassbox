@@ -410,7 +410,7 @@ Performance notes:
 				printStart = time.Now()
 			}
 			opts := trace.PrintOptions{
-				NoColor:      traceNoColor,
+				NoColor:      traceNoColor || NoColorFlag,
 				EventSchemas: eventSchemas,
 			}
 			trace.PrintExecutionTrace(executionTrace, opts)
