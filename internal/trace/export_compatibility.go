@@ -256,6 +256,58 @@ func joinVersions(versions []string) string {
 	return result
 }
 
+// SchemaCompatibilityReport describes the compatibility between two trace versions.
+type SchemaCompatibilityReport struct {
+	FromVersion       TraceFormatVersion
+	ToVersion         TraceFormatVersion
+	Compatible        bool
+	RequiresMigration bool
+	Warnings          []string
+	Actions           []string
+}
+
+// CheckSchemaCompatibility produces a detailed compatibility report between
+// two trace format versions, including actionable migration guidance.
+func CheckSchemaCompatibility(from, to TraceFormatVersion) SchemaCompatibilityReport {
+	r := SchemaCompatibilityReport{
+		FromVersion: from,
+		ToVersion:   to,
+	}
+
+	if from.Major != to.Major {
+		r.Compatible = false
+		r.RequiresMigration = true
+		r.Warnings = append(r.Warnings,
+			fmt.Sprintf("major version mismatch: %s → %s", from.String(), to.String()))
+		r.Actions = append(r.Actions,
+			fmt.Sprintf("use Glassbox CLI v%d.x.x to work with this trace", from.Major))
+		return r
+	}
+
+	if from.Minor > to.Minor {
+		r.Compatible = false
+		r.RequiresMigration = true
+		r.Warnings = append(r.Warnings,
+			fmt.Sprintf("trace is newer minor (%s) than CLI (%s)", from.String(), to.String()))
+		r.Actions = append(r.Actions,
+			"upgrade Glassbox CLI to match the trace version")
+		return r
+	}
+
+	if from.Minor < to.Minor {
+		r.Compatible = true
+		r.RequiresMigration = true
+		r.Warnings = append(r.Warnings,
+			fmt.Sprintf("trace uses older minor version (%s); migration to %s required", from.String(), to.String()))
+		r.Actions = append(r.Actions,
+			fmt.Sprintf("re-export trace with current CLI (%s) for best results", to.String()))
+		return r
+	}
+
+	r.Compatible = true
+	return r
+}
+
 // migrateTrace migrates a trace from one version to another
 func migrateTrace(trace *ExecutionTrace, fromVersion, toVersion TraceFormatVersion) (*ExecutionTrace, error) {
 	if trace == nil {

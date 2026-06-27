@@ -340,3 +340,85 @@ func TestIsJSONSchemaVersionSupported_KnownVersions(t *testing.T) {
 		t.Error("version \"99.9\" should not be supported")
 	}
 }
+
+// ── SchemaCompatibilityReport ──────────────────────────────────────────────
+
+func TestCheckSchemaCompatibility_SameVersion(t *testing.T) {
+	r := CheckSchemaCompatibility(
+		TraceFormatVersion{Major: 1, Minor: 0, Patch: 0},
+		TraceFormatVersion{Major: 1, Minor: 0, Patch: 0},
+	)
+	if !r.Compatible {
+		t.Error("expected same version to be compatible")
+	}
+	if r.RequiresMigration {
+		t.Error("expected same version to not require migration")
+	}
+	if len(r.Warnings) != 0 {
+		t.Errorf("expected no warnings for same version, got: %v", r.Warnings)
+	}
+}
+
+func TestCheckSchemaCompatibility_MajorMismatch(t *testing.T) {
+	r := CheckSchemaCompatibility(
+		TraceFormatVersion{Major: 2, Minor: 0, Patch: 0},
+		TraceFormatVersion{Major: 1, Minor: 0, Patch: 0},
+	)
+	if r.Compatible {
+		t.Error("expected major mismatch to be incompatible")
+	}
+	if !r.RequiresMigration {
+		t.Error("expected major mismatch to require migration")
+	}
+	if len(r.Actions) == 0 {
+		t.Error("expected at least one action for major mismatch")
+	}
+	if !strings.Contains(r.Actions[0], "v2.x.x") {
+		t.Errorf("action should reference major version 2, got: %s", r.Actions[0])
+	}
+}
+
+func TestCheckSchemaCompatibility_OlderMinorCompatible(t *testing.T) {
+	r := CheckSchemaCompatibility(
+		TraceFormatVersion{Major: 1, Minor: 0, Patch: 0},
+		TraceFormatVersion{Major: 1, Minor: 1, Patch: 0},
+	)
+	if !r.Compatible {
+		t.Error("expected older minor to be compatible")
+	}
+	if !r.RequiresMigration {
+		t.Error("expected older minor to require migration")
+	}
+	if len(r.Actions) == 0 {
+		t.Error("expected at least one action")
+	}
+}
+
+func TestCheckSchemaCompatibility_NewerMinorIncompatible(t *testing.T) {
+	r := CheckSchemaCompatibility(
+		TraceFormatVersion{Major: 1, Minor: 2, Patch: 0},
+		TraceFormatVersion{Major: 1, Minor: 1, Patch: 0},
+	)
+	if r.Compatible {
+		t.Error("expected newer minor to be incompatible without AllowNewerMinor")
+	}
+	if !r.RequiresMigration {
+		t.Error("expected newer minor to require migration")
+	}
+	if len(r.Actions) == 0 {
+		t.Error("expected at least one action for newer minor")
+	}
+}
+
+func TestCheckSchemaCompatibility_PatchIgnored(t *testing.T) {
+	r := CheckSchemaCompatibility(
+		TraceFormatVersion{Major: 1, Minor: 0, Patch: 5},
+		TraceFormatVersion{Major: 1, Minor: 0, Patch: 0},
+	)
+	if !r.Compatible {
+		t.Error("patch differences should not affect compatibility")
+	}
+	if r.RequiresMigration {
+		t.Error("patch differences should not require migration")
+	}
+}
