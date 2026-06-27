@@ -173,8 +173,12 @@ func (p *SplitPane) renderDivider(w io.Writer, width int, src *SourceContext) {
 func (p *SplitPane) renderSourcePane(w io.Writer, src *SourceContext, width int) {
 	limit := paneRows(p.SrcRows, defaultSrcRows)
 	if src == nil || len(src.Lines) == 0 {
-		_, _ = fmt.Fprintf(w, "  %s\n", visualizer.Colorize("No source mapping available for this node.", "dim"))
-		for i := 1; i < limit; i++ {
+		_, _ = fmt.Fprintln(w, "  "+visualizer.Colorize("Source mapping unavailable.", "red"))
+		_, _ = fmt.Fprintln(w, "  "+visualizer.Colorize("Suggestions:", "yellow"))
+		_, _ = fmt.Fprintln(w, "    - Use --contract-source <path> to provide local source files")
+		_, _ = fmt.Fprintln(w, "    - Recompile with 'debug = true' in [profile.release] for DWARF info")
+		_, _ = fmt.Fprintln(w, "    - Use --skip-source-mapping to proceed without source mapping")
+		for i := 1; i < limit-4 && i < limit; i++ {
 			_, _ = fmt.Fprintln(w)
 		}
 		_, _ = fmt.Fprintln(w, hBorder("", width))
