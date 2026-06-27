@@ -270,3 +270,37 @@ func TestImportArchive_ArchiveVersionTooNew_ReturnsUpgradeHint(t *testing.T) {
 		t.Errorf("error should mention 'upgrade' or 'newer', got: %v", err)
 	}
 }
+
+func TestImportArchive_SchemaVersionTooNew_ReturnsUpgradeHint(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "future_schema.gbx")
+
+	meta := archiveMeta{
+		ArchiveVersion:  archiveVersion,
+		GlassboxVersion: "99.0.0",
+		CreatedAt:       "2026-01-01T00:00:00Z",
+		SchemaVersion:   SchemaVersion + 99,
+	}
+	metaBytes, _ := json.Marshal(meta)
+	sessionBytes, _ := json.Marshal(sampleData())
+
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	w, _ := zw.Create("meta.json")
+	_, _ = w.Write(metaBytes)
+	w, _ = zw.Create("session.json")
+	_, _ = w.Write(sessionBytes)
+	_ = zw.Close()
+	_ = f.Close()
+
+	_, err = ImportArchive(archivePath)
+	if err == nil {
+		t.Fatal("expected error for schema version too new")
+	}
+	if !strings.Contains(err.Error(), "schema version") {
+		t.Errorf("error should mention schema version, got: %v", err)
+	}
+}

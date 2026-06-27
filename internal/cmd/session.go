@@ -50,7 +50,8 @@ Available subcommands:
   save    - Save current session to disk
   resume  - Restore a saved session
   list    - View all saved sessions
-  delete  - Remove a saved session`,
+  delete  - Remove a saved session
+  doctor  - Check saved sessions for schema and integrity problems`,
 	Example: `  # Save current debug session
   Glassbox session save
 
@@ -110,6 +111,10 @@ The session ID can be auto-generated or specified with --id flag.`,
 		data.Status = "saved"
 		data.LastAccessAt = time.Now()
 
+		if data.EnvFingerprint == "" {
+			data.EnvFingerprint = session.BuildEnvFingerprint()
+		}
+
 		// Open session store
 		store, err := session.NewStore()
 		if err != nil {
@@ -125,7 +130,7 @@ The session ID can be auto-generated or specified with --id flag.`,
 		}
 
 		// Save session
-		if err := store.Save(ctx, data); err != nil {
+		if err := store.SaveWithValidation(ctx, data); err != nil {
 			return errors.WrapValidationError(fmt.Sprintf("failed to save session: %v", err))
 		}
 
@@ -191,8 +196,12 @@ Use 'Glassbox session list' to see available session IDs and names.`,
 		}
 
 		// Resolve session by exact ID, partial ID prefix, tx hash, or fuzzy match.
+		// Load validates schema compatibility and auto-upgrades older sessions.
 		data, resolveErr := resolveSessionInput(ctx, store, sessionID)
 		if resolveErr != nil {
+			if session.IsSchemaError(resolveErr) {
+				return resolveErr
+			}
 			return fmt.Errorf(
 				"session %q not found: %w\n"+
 					"Hint: run 'glassbox session list' to see all available sessions",
@@ -217,12 +226,6 @@ Use 'Glassbox session list' to see available session IDs and names.`,
 			fmt.Fprintf(os.Stderr, "To re-debug:   glassbox debug %s --network %s\n",
 				data.TxHash, data.Network)
 			return fmt.Errorf("session %s failed integrity validation (%d issue(s))", data.ID, len(report.Issues))
-		}
-
-		// Schema forward-compatibility check (also validated by ValidateIntegrity,
-		// but we surface a cleaner error with upgrade guidance here).
-		if !report.SchemaCompatible {
-			return errors.WrapProtocolUnsupported(uint32(report.StoredSchemaVersion))
 		}
 
 		// Update status and make it current.
@@ -532,6 +535,56 @@ printed so you know how to re-run the debug command.`,
 	},
 }
 
+var sessionDoctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Check saved sessions for schema and integrity problems",
+	Long: `Run diagnostics on all persisted debug sessions in ~/.Glassbox/sessions.db.
+
+Reports schema version mismatches, missing fields, and other integrity issues
+with actionable remediation hints for each degraded session.`,
+	Example: `  # Check all saved sessions
+  glassbox session doctor`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+
+		store, err := session.NewStore()
+		if err != nil {
+			return errors.WrapValidationError(fmt.Sprintf(
+				"failed to open session store: %v\n"+
+					"Hint: ensure ~/.Glassbox/ is writable and not corrupted", err))
+		}
+		defer store.Close()
+
+		result, err := store.RunStoreDiagnostics(ctx)
+		if err != nil {
+			return err
+		}
+
+		fmt.Println(result.Summary())
+		if result.DegradedSessions == 0 {
+			return nil
+		}
+
+		fmt.Printf("\nDegraded sessions (%d):\n\n", result.DegradedSessions)
+		for _, report := range result.Reports {
+			fmt.Printf("Session %s:\n", report.SessionID)
+			for i, issue := range report.Issues {
+				fmt.Printf("  %d. [%s] %s\n", i+1, issue.Field, issue.Description)
+				if issue.Hint != "" {
+					fmt.Printf("     Hint: %s\n", issue.Hint)
+				}
+			}
+			if report.StoredSchemaVersion > 0 && report.StoredSchemaVersion != session.SchemaVersion {
+				fmt.Printf("  Schema: %s\n", session.SchemaVersionSummary(report.StoredSchemaVersion))
+			}
+			fmt.Println()
+		}
+
+		return fmt.Errorf("%d session(s) failed diagnostics", result.DegradedSessions)
+	},
+}
+
 func init() {
 	sessionSaveCmd.Flags().StringVar(&sessionIDFlag, "id", "", "Custom session ID (default: auto-generated)")
 	sessionSaveCmd.Flags().StringVar(&sessionNameFlag, "name", "", "Bookmark name for this session snapshot")
@@ -542,6 +595,7 @@ func init() {
 	sessionCmd.AddCommand(sessionListCmd)
 	sessionCmd.AddCommand(sessionDeleteCmd)
 	sessionCmd.AddCommand(sessionRecoverCmd)
+	sessionCmd.AddCommand(sessionDoctorCmd)
 
 	rootCmd.AddCommand(sessionCmd)
 }

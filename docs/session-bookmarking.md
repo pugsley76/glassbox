@@ -1,5 +1,13 @@
 # Session Bookmarking
 
+Saved debug sessions are stored in `~/.Glassbox/sessions.db` with a
+`schema_version` field that tracks the on-disk format. Glassbox automatically
+upgrades older sessions when they are loaded and rejects sessions created by
+a newer binary with actionable upgrade guidance.
+
+Run `glassbox session doctor` to scan all saved sessions for schema or integrity
+problems before resuming work.
+
 Saved debug sessions can be bookmarked with a human-readable name:
 
 ```bash

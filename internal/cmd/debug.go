@@ -1316,6 +1316,7 @@ Local WASM Replay Mode:
 			SimResponseJSON: string(simRespJSON),
 			ErstVersion:     version.Version,
 			SchemaVersion:   session.SchemaVersion,
+			EnvFingerprint:  session.BuildEnvFingerprint(),
 		}
 		SetCurrentSession(sessionData)
 		fmt.Printf("\nSession created: %s\n", sessionData.ID)
