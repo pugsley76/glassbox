@@ -95,31 +95,42 @@ func DefaultCompatibilityOptions() CompatibilityOptions {
 
 // ExportVersionedTrace exports a trace with version information
 func ExportVersionedTrace(trace *ExecutionTrace, format, outputPath string, opts ExportOptions, compatOpts CompatibilityOptions) error {
-	// Wrap trace with version
+	if err := ValidateTraceExportParams(trace, format, outputPath, opts); err != nil {
+		return fmt.Errorf("pre-export validation failed: %w", err)
+	}
+
+	if err := ValidateTraceFormatCompatibility(trace, format); err != nil {
+		return fmt.Errorf("format compatibility check failed: %w", err)
+	}
+
 	versioned := VersionedTrace{
 		Version: CurrentFormatVersion,
 		Trace:   trace,
 	}
-	
-	// For JSON format, export with version envelope
+
 	if strings.ToLower(format) == "json" {
 		data, err := json.MarshalIndent(versioned, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal versioned trace: %w", err)
 		}
-		
+
 		if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-			return fmt.Errorf("failed to create directory: %w", err)
+			return fmt.Errorf("failed to create output directory: %w\n"+
+				"  Path: %s\n"+
+				"  Fix: ensure the parent directory exists and is writable",
+				err, filepath.Dir(outputPath))
 		}
-		
+
 		if err := os.WriteFile(outputPath, data, 0o644); err != nil {
-			return fmt.Errorf("failed to write file: %w", err)
+			return fmt.Errorf("failed to write versioned trace file: %w\n"+
+				"  Path: %s\n"+
+				"  Fix: check disk space and file permissions",
+				err, outputPath)
 		}
-		
+
 		return nil
 	}
-	
-	// For other formats, use standard export (HTML/Markdown don't need versioning in content)
+
 	return ExportExecutionTraceWithOptions(trace, format, outputPath, opts)
 }
 
