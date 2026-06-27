@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -99,10 +98,5 @@ func (c *Checkpoint) IsOrphaned() bool {
 	if c.PID <= 0 {
 		return true
 	}
-	// syscall.Kill(pid, 0) probes process existence on POSIX systems:
-	//   nil   → process exists and is accessible
-	//   ESRCH → no such process (orphaned)
-	//   EPERM → process exists but we lack permission (not orphaned)
-	err := syscall.Kill(c.PID, 0)
-	return err == syscall.ESRCH
+	return !processAlive(c.PID)
 }
