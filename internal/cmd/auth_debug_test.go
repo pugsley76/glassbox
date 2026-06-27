@@ -217,6 +217,88 @@ func TestAuthDebugPreRunE_AcceptsValidInputs(t *testing.T) {
 	}
 	authRPCURLFlag = ""
 
+	if err := authDebugCmd.PreRunE(auditVerifyCmd, []string{validAuthTxHash}); err != nil {
+		t.Fatalf("expected valid inputs to pass PreRunE, got: %v", err)
+	}
+}
+
+// ── Auth trace diagnostics (source mapping) ──────────────────────────────────
+
+func TestAuthTraceDiagnostics_EmptyTrace_ReasonSet(t *testing.T) {
+	tracker := authtrace.NewTracker(authtrace.Config{})
+	trace := tracker.GenerateTrace()
+
+	if trace.Diagnostics == nil {
+		t.Fatal("expected Diagnostics to be set for empty trace")
+	}
+	if trace.Diagnostics.EmptyTraceReason == "" {
+		t.Error("expected EmptyTraceReason to be populated for empty trace")
+	}
+	if !strings.Contains(trace.Diagnostics.EmptyTraceReason, "no Soroban authorization entries") {
+		t.Errorf("EmptyTraceReason should mention Soroban auth entries, got: %s", trace.Diagnostics.EmptyTraceReason)
+	}
+	if !strings.Contains(trace.Diagnostics.EmptyTraceReason, "doctor") {
+		t.Errorf("EmptyTraceReason should suggest running 'glassbox doctor', got: %s", trace.Diagnostics.EmptyTraceReason)
+	}
+}
+
+func TestAuthTraceDiagnostics_WithEvents_SourceMappingHintPresent(t *testing.T) {
+	tracker := authtrace.NewTracker(authtrace.Config{
+		TraceCustomContracts: true,
+		CaptureSigDetails:    true,
+		MaxEventDepth:        1000,
+	})
+	tracker.RecordEvent(authtrace.AuthEvent{
+		EventType: "signature_verification",
+		Status:    "valid",
+		Weight:    1,
+		AccountID: "GABC",
+	})
+	trace := tracker.GenerateTrace()
+
+	if trace.Diagnostics == nil {
+		t.Fatal("expected Diagnostics to be set when events are present")
+	}
+	if trace.Diagnostics.SourceMappingAvailable {
+		t.Error("expected SourceMappingAvailable to be false when events lack source mapping")
+	}
+	if !strings.Contains(trace.Diagnostics.SourceMappingHint, "debug = true") {
+		t.Errorf("SourceMappingHint should suggest recompiling with debug=true, got: %s", trace.Diagnostics.SourceMappingHint)
+	}
+	if !strings.Contains(trace.Diagnostics.SourceMappingHint, "--contract-source") {
+		t.Errorf("SourceMappingHint should suggest --contract-source, got: %s", trace.Diagnostics.SourceMappingHint)
+	}
+}
+
+func TestAuthTraceDiagnostics_WithSourceMapping_CoverageTracked(t *testing.T) {
+	tracker := authtrace.NewTracker(authtrace.Config{})
+	tracker.RecordEvent(authtrace.AuthEvent{
+		EventType:  "signature_verification",
+		Status:     "valid",
+		SourceFile: "src/contract.rs",
+		SourceLine: 42,
+	})
+	tracker.RecordEvent(authtrace.AuthEvent{
+		EventType: "threshold_check",
+		Status:    "fail",
+	})
+	trace := tracker.GenerateTrace()
+
+	if trace.Diagnostics == nil {
+		t.Fatal("expected Diagnostics to be set")
+	}
+	if !trace.Diagnostics.SourceMappingAvailable {
+		t.Error("expected SourceMappingAvailable to be true when at least one event has source context")
+	}
+	if trace.Diagnostics.EventsWithSourceCount != 1 {
+		t.Errorf("expected 1 event with source mapping, got %d", trace.Diagnostics.EventsWithSourceCount)
+	}
+	if trace.Diagnostics.SourceMappingHint != "" {
+		t.Errorf("expected no source mapping hint when source context is available, got: %s", trace.Diagnostics.SourceMappingHint)
+	}
+}
+	authRPCURLFlag = ""
+
 	if err := authDebugCmd.PreRunE(authDebugCmd, []string{validAuthTxHash}); err != nil {
 		t.Fatalf("expected valid inputs to pass PreRunE, got: %v", err)
 	}
