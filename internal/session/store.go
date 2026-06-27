@@ -204,10 +204,65 @@ func (s *Store) SaveWithValidation(ctx context.Context, data *Data) error {
 	return s.Save(ctx, data)
 }
 
-// Save persists a session to the database
+// Save persists a session to the database after validating required fields.
+// It performs inline validation equivalent to SaveWithValidation but without
+// the full integrity-report formatting. Prefer SaveWithValidation when the
+// caller cannot guarantee the Data has already been validated externally.
 func (s *Store) Save(ctx context.Context, data *Data) error {
 	if data.ID == "" {
 		return fmt.Errorf("session ID is required")
+	}
+	if data.TxHash == "" {
+		return fmt.Errorf(
+			"session transaction hash is required\n" +
+				"  Fix: run 'glassbox debug <tx-hash>' to create a session with a valid transaction hash",
+		)
+	}
+	if data.Network == "" {
+		return fmt.Errorf(
+			"session network is required\n" +
+				"  Fix: provide a network with --network testnet (or mainnet, futurenet)",
+		)
+	}
+	validNetworks := map[string]bool{"testnet": true, "mainnet": true, "futurenet": true}
+	if !validNetworks[data.Network] {
+		return fmt.Errorf(
+			"unsupported network %q — must be one of: testnet, mainnet, futurenet\n"+
+				"  Fix: re-run with --network testnet (or mainnet, futurenet)",
+			data.Network,
+		)
+	}
+	if data.Status == "" {
+		data.Status = "active"
+	}
+	validStatuses := map[string]bool{
+		"active": true, "saved": true, "resumed": true,
+		"recovered": true, "expired": true,
+	}
+	if !validStatuses[data.Status] {
+		return fmt.Errorf(
+			"invalid session status %q — must be one of: active, saved, resumed, recovered, expired\n"+
+				"  Fix: set a valid status when creating the session",
+			data.Status,
+		)
+	}
+	if data.HorizonURL == "" && data.Network != "" {
+		// Auto-populate known Horizon URLs for convenience.
+		switch data.Network {
+		case "testnet":
+			data.HorizonURL = "https://horizon-testnet.stellar.org"
+		case "mainnet":
+			data.HorizonURL = "https://horizon.stellar.org"
+		case "futurenet":
+			data.HorizonURL = "https://horizon-futurenet.stellar.org"
+		}
+	}
+	if data.Name != "" && len(data.Name) > 128 {
+		return fmt.Errorf(
+			"session name is too long (%d characters, max 128)\n"+
+				"  Fix: provide a shorter name with --name",
+			len(data.Name),
+		)
 	}
 
 	now := time.Now()
@@ -658,6 +713,15 @@ func ValidateIntegrity(data *Data) *IntegrityReport {
 				data.SchemaVersion, SchemaVersion,
 			),
 			Hint: "Upgrade Glassbox to a newer release to open sessions created by a more recent version.",
+		})
+	}
+
+	// Optional: Name length limit
+	if len(data.Name) > 128 {
+		report.Issues = append(report.Issues, IntegrityIssue{
+			Field:       "Name",
+			Description: fmt.Sprintf("session name is too long (%d characters, max 128)", len(data.Name)),
+			Hint:        "Shorten the bookmark name and re-save with 'glassbox session save --name <shorter-name>'.",
 		})
 	}
 

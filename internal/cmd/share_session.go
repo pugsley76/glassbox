@@ -24,7 +24,12 @@ The archive contains all replay inputs, simulation results, and metadata
 required to reproduce the session on another machine. Load the archive with
 'Glassbox session load <archive>'.
 
-If no session-id is provided, the currently active session is archived.`,
+If no session-id is provided, the currently active session is archived.
+
+Validation:
+  The session data is validated before export so that corrupt or incomplete
+  sessions are rejected early with a clear diagnostic rather than silently
+  producing an archive that cannot be imported on the other side.`,
 	Example: `  # Export the active session
   Glassbox session share
 

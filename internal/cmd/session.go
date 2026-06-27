@@ -74,7 +74,17 @@ var sessionSaveCmd = &cobra.Command{
 	Long: `Save the current debug session state to disk for later resumption.
 
 You must run 'Glassbox debug <tx-hash>' first to create an active session.
-The session ID can be auto-generated or specified with --id flag.`,
+The session ID can be auto-generated or specified with --id flag.
+
+Validation:
+  The session data is validated before saving. The following checks are made:
+    • Transaction hash is present
+    • Network is one of: testnet, mainnet, futurenet
+    • Status is a recognized value (auto-set to 'active' if empty)
+    • Session name, if provided, must not exceed 128 characters
+    • Horizon URL is auto-populated from the network if not provided
+
+  If any check fails an actionable error is printed with a remediation hint.`,
 	Example: `  # Save with auto-generated ID
   Glassbox session save
 
@@ -100,7 +110,15 @@ The session ID can be auto-generated or specified with --id flag.`,
 			data.ID = session.GenerateID(data.TxHash)
 		}
 		if sessionNameFlag != "" {
-			data.Name = strings.TrimSpace(sessionNameFlag)
+			name := strings.TrimSpace(sessionNameFlag)
+			if len(name) > 128 {
+				return fmt.Errorf(
+					"session name is too long (%d characters, max 128)\n"+
+						"  Fix: provide a shorter name with --name",
+					len(name),
+				)
+			}
+			data.Name = name
 		}
 
 		if sessionPinEndpointFlag != "" {
@@ -124,8 +142,9 @@ The session ID can be auto-generated or specified with --id flag.`,
 			fmt.Fprintf(os.Stderr, "Warning: cleanup failed: %v\n", err)
 		}
 
-		// Save session
-		if err := store.Save(ctx, data); err != nil {
+		// Save with validation so corrupt or incomplete sessions are rejected
+		// early with a clear diagnostic instead of a silent partial write.
+		if err := store.SaveWithValidation(ctx, data); err != nil {
 			return errors.WrapValidationError(fmt.Sprintf("failed to save session: %v", err))
 		}
 
@@ -389,7 +408,13 @@ hints. The checkpoint is removed after a successful recovery.
 
 If the checkpoint references a session that was never flushed to the store (the
 process crashed before saving), the stale checkpoint is cleared and guidance is
-printed so you know how to re-run the debug command.`,
+printed so you know how to re-run the debug command.
+
+Validation:
+  The checkpoint file is validated for completeness before it is trusted.
+  Missing session ID, transaction hash, network, or invalid PID values are
+  detected and reported with actionable diagnostics. If the checkpoint is
+  corrupt, it is cleared and guidance is printed for starting a fresh session.`,
 	Example: `  # Check for and restore an orphaned session
   glassbox session recover`,
 	Args: cobra.NoArgs,

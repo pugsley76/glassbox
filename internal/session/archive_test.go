@@ -235,6 +235,68 @@ func TestImportArchive_MissingSessionJSON_ReturnsError(t *testing.T) {
 	}
 }
 
+// ── ExportArchive: invalid session rejected ─────────────────────────────────
+
+func TestExportArchive_InvalidSession_Rejected(t *testing.T) {
+	dir := t.TempDir()
+	d := sampleData()
+	d.TxHash = "" // make it invalid
+	err := ExportArchive(d, filepath.Join(dir, "session.gbx"))
+	if err == nil {
+		t.Fatal("expected error when exporting invalid session")
+	}
+	if !strings.Contains(err.Error(), "TxHash") && !strings.Contains(err.Error(), "validation") {
+		t.Errorf("error should mention validation failure, got: %v", err)
+	}
+}
+
+// ── ImportArchive: invalid session in archive ────────────────────────────────
+
+func TestImportArchive_InvalidDataInArchive_ReturnsDiagnostic(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "bad_data.gbx")
+
+	// Build a zip with valid meta.json but invalid session.json (missing fields).
+	meta := archiveMeta{
+		ArchiveVersion:  archiveVersion,
+		GlassboxVersion: "0.0.0",
+		CreatedAt:       "2026-01-01T00:00:00Z",
+		SchemaVersion:   SchemaVersion,
+	}
+	metaBytes, _ := json.Marshal(meta)
+
+	// Session with all required fields empty.
+	badData := map[string]interface{}{
+		"id":             "",
+		"tx_hash":        "",
+		"network":        "",
+		"status":         "",
+		"created_at":     "2026-01-01T00:00:00Z",
+		"last_access_at": "2026-01-01T00:00:00Z",
+	}
+	sessionBytes, _ := json.Marshal(badData)
+
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	w, _ := zw.Create("meta.json")
+	_, _ = w.Write(metaBytes)
+	w, _ = zw.Create("session.json")
+	_, _ = w.Write(sessionBytes)
+	_ = zw.Close()
+	_ = f.Close()
+
+	_, err = ImportArchive(archivePath)
+	if err == nil {
+		t.Fatal("expected error for invalid session data in archive")
+	}
+	if !strings.Contains(err.Error(), "invalid session") {
+		t.Errorf("error should mention 'invalid session', got: %v", err)
+	}
+}
+
 // ── ImportArchive: archive version too new ──────────────────────────────────
 
 func TestImportArchive_ArchiveVersionTooNew_ReturnsUpgradeHint(t *testing.T) {
