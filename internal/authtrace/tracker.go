@@ -6,6 +6,7 @@ package authtrace
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -348,6 +349,15 @@ func (t *Tracker) GenerateTrace() *AuthTrace {
 		trace.Success = true
 	}
 
+	// Populate AccountID and SignerCount from the first initialised context so
+	// that exported JSON contains meaningful account metadata. Previously these
+	// fields were always empty, making the output ambiguous.
+	for id, ctx := range t.accountContexts {
+		trace.AccountID = id
+		trace.SignerCount = uint32(len(ctx.Signers))
+		break // use first context; multi-account traces set both fields via the first entry
+	}
+
 	for _, event := range t.events {
 		if event.EventType == "signature_verification" && event.Status == "valid" {
 			trace.ValidSignatures++
@@ -395,10 +405,15 @@ func (t *Tracker) Clear() {
 }
 
 // ExportTraceJSON serialises the current AuthTrace to indented JSON suitable
-// for ingestion by external audit tools (#1213). It delegates to the
-// AuthTrace.ToJSON helper defined in types.go.
+// for ingestion by external audit tools (#1213). It validates the trace before
+// marshalling so callers receive a clear error rather than empty/misleading JSON.
 func (t *Tracker) ExportTraceJSON() ([]byte, error) {
 	trace := t.GenerateTrace()
+	if err := ValidateAuthTrace(trace); err != nil {
+		// Non-fatal: surface warnings to stderr and continue — the export may
+		// still be useful even with degraded data.
+		fmt.Fprintf(os.Stderr, "Warning: auth trace export has quality issues:\n%s\n", err.Error())
+	}
 	out, err := json.MarshalIndent(trace, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("authtrace: failed to marshal trace to JSON: %w", err)
