@@ -60,6 +60,9 @@ type AuthEvent struct {
 	Status        string            `json:"status"`
 	Details       string            `json:"details,omitempty"`
 	ErrorReason   AuthFailureReason `json:"error_reason,omitempty"`
+	// Source mapping context: where this auth event occurred in contract source.
+	SourceFile string `json:"source_file,omitempty"`
+	SourceLine uint32 `json:"source_line,omitempty"`
 }
 
 type AuthFailure struct {
@@ -74,6 +77,21 @@ type AuthFailure struct {
 	DetailedTrace   []AuthEvent       `json:"detailed_trace"`
 }
 
+// AuthTraceDiagnostics carries metadata about how the auth trace was generated
+// and any source-mapping or completeness issues encountered.
+type AuthTraceDiagnostics struct {
+	// SourceMappingAvailable is true when at least one auth event has source file info.
+	SourceMappingAvailable bool `json:"source_mapping_available"`
+	// EventsWithSourceCount is the number of events with source file/line data.
+	EventsWithSourceCount int `json:"events_with_source_count"`
+	// TotalAuthEvents is the total number of auth events in the trace.
+	TotalAuthEvents int `json:"total_auth_events"`
+	// EmptyTraceReason describes why the trace has no auth events (e.g., "no Soroban auth entries found").
+	EmptyTraceReason string `json:"empty_trace_reason,omitempty"`
+	// SourceMappingHint is an actionable hint when source mapping is missing.
+	SourceMappingHint string `json:"source_mapping_hint,omitempty"`
+}
+
 type AuthTrace struct {
 	Success          bool                 `json:"success"`
 	AccountID        string               `json:"account_id"`
@@ -84,6 +102,7 @@ type AuthTrace struct {
 	AuthEvents       []AuthEvent          `json:"auth_events"`
 	Failures         []AuthFailure        `json:"failures"`
 	CustomContracts  []CustomContractAuth `json:"custom_contracts,omitempty"`
+	Diagnostics      *AuthTraceDiagnostics `json:"diagnostics,omitempty"`
 }
 
 // ToJSON serialises an AuthTrace to indented JSON for use by external audit

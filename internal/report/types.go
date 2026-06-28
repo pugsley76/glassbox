@@ -48,6 +48,9 @@ type ExecutionStep struct {
 	Details    string                 `json:"details,omitempty"`
 	Input      map[string]interface{} `json:"input,omitempty"`
 	Output     map[string]interface{} `json:"output,omitempty"`
+	// Source mapping context for this step
+	SourceFile string `json:"source_file,omitempty"`
+	SourceLine int    `json:"source_line,omitempty"`
 }
 
 type CallInfo struct {

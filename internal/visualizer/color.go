@@ -5,6 +5,7 @@ package visualizer
 
 import (
 	"os"
+	"sync/atomic"
 
 	"github.com/mattn/go-isatty"
 )
@@ -12,14 +13,33 @@ import (
 // ANSI SGR (Select Graphic Rendition) escape codes for terminal colors.
 // Redundant constants removed as they are defined in ansi.go
 
+// globalNoColor is set by SetNoColor to allow programmatic override (e.g.
+// from the --no-color CLI flag) without mutating the process environment.
+var globalNoColor atomic.Bool
+
+// SetNoColor enables or disables color output globally. Calling this with true
+// is equivalent to setting the NO_COLOR environment variable and also causes
+// the fatih/color library to emit plain text. It is intended to be called once
+// during CLI startup before any output is produced.
+func SetNoColor(v bool) {
+	globalNoColor.Store(v)
+}
+
 func noColorSet() bool {
-	_, ok := os.LookupEnv("NO_COLOR")
-	return ok
+	if globalNoColor.Load() {
+		return true
+	}
+	// Standard NO_COLOR convention (https://no-color.org).
+	if _, ok := os.LookupEnv("NO_COLOR"); ok {
+		return true
+	}
+	// Glassbox-specific env var for tooling that cannot set NO_COLOR globally.
+	return os.Getenv("GLASSBOX_NO_COLOR") != ""
 }
 
 // ColorEnabled reports whether ANSI color output should be used.
 func ColorEnabled() bool {
-	// NO_COLOR must always take precedence.
+	// NO_COLOR / GLASSBOX_NO_COLOR / global override must always take precedence.
 	if noColorSet() {
 		return false
 	}

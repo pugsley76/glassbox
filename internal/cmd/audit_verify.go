@@ -391,22 +391,37 @@ func validateProvenance(p *SignatureProvenance) (bool, error) {
 		return true, nil
 	}
 
-	// Validate certificate chain: each entry must be a parseable PEM block.
+	var issues []string
+
+	if len(p.CertificateChain) == 0 && (p.SignerIdentity != "" || p.KeyID != "" || p.PreviousSignatureHash != "") {
+		issues = append(issues, "provenance has identity fields but no certificate chain — "+
+			"provide --cert-chain for full chain-of-trust verification")
+	}
+
 	for i, certPEM := range p.CertificateChain {
-		block, _ := pem.Decode([]byte(certPEM))
+		block, rest := pem.Decode([]byte(certPEM))
 		if block == nil {
-			return false, fmt.Errorf("certificate_chain[%d] is not valid PEM", i)
+			issues = append(issues, fmt.Sprintf("certificate_chain[%d] is not valid PEM (decode failed)", i))
+			continue
 		}
 		if block.Type != "CERTIFICATE" {
-			return false, fmt.Errorf("certificate_chain[%d] has unexpected PEM type %q", i, block.Type)
+			issues = append(issues, fmt.Sprintf("certificate_chain[%d] has unexpected PEM type %q", i, block.Type))
+		}
+		if len(rest) != 0 && i < len(p.CertificateChain)-1 {
+			issues = append(issues, fmt.Sprintf("certificate_chain[%d] contains trailing data after PEM block; "+
+				"each certificate should be a single PEM block, not concatenated", i))
 		}
 	}
 
-	// Validate previous_signature_hash: must be a 64-char hex string when set.
 	if p.PreviousSignatureHash != "" {
 		if err := validateSHA256HexHash("previous_signature_hash", p.PreviousSignatureHash); err != nil {
-			return false, err
+			issues = append(issues, fmt.Sprintf("previous_signature_hash format invalid: %v — "+
+				"the chain link cannot be verified; pass --previous-signature-hash <hex> to attempt verification", err))
 		}
+	}
+
+	if len(issues) > 0 {
+		return false, fmt.Errorf("provenance validation failed:\n  - %s", strings.Join(issues, "\n  - "))
 	}
 
 	return true, nil
@@ -455,6 +470,9 @@ func validateAuditLogFields(log *SignedAuditLog, hasPubKeyOverride bool) error {
 	if strings.TrimSpace(log.TraceHash) == "" {
 		missing = append(missing, "trace_hash")
 	}
+	if strings.TrimSpace(log.Provider) == "" {
+		missing = append(missing, "provider")
+	}
 	if !hasPubKeyOverride && strings.TrimSpace(log.PublicKey) == "" {
 		missing = append(missing, "public_key")
 	}
@@ -465,8 +483,9 @@ func validateAuditLogFields(log *SignedAuditLog, hasPubKeyOverride bool) error {
 	if len(missing) > 0 {
 		return errors.WrapValidationError(fmt.Sprintf(
 			"audit log is missing required field(s): %s\n"+
-				"  A signed audit log must contain signature, trace_hash, public_key, and payload.\n"+
-				"  If the public key is provided separately, pass it with --public-key.",
+				"  A valid signed audit log must contain signature, trace_hash, public_key, payload, and provider.\n"+
+				"  If the public key is provided separately, pass it with --public-key.\n"+
+				"  Run 'glassbox audit:sign --help' for the signing command usage.",
 			strings.Join(missing, ", ")))
 	}
 

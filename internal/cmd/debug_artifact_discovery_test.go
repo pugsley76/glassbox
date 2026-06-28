@@ -427,3 +427,99 @@ func TestLoadMockLedgerOverrides_ManifestSuccess(t *testing.T) {
 		t.Errorf("expected keyA to be set, got: %v", overrides)
 	}
 }
+
+// ── --wasm whitespace path validation ────────────────────────────────────────
+
+// TestDebugPreRunE_WasmWhitespaceOnly verifies that a whitespace-only --wasm
+// path is treated as a missing file rather than producing a confusing OS error.
+// The path is non-empty so the PreRunE validation branch fires, but the file
+// obviously doesn't exist.
+func TestDebugPreRunE_WasmWhitespacePath_NotFound(t *testing.T) {
+	resetArtifactFlags(t)
+	wasmPath = "   " // whitespace only — treated as invalid path
+
+	err := debugCmd.PreRunE(debugCmd, []string{})
+	// Expect an error — either "not found" or another path-related error.
+	// The key requirement is that it doesn't silently succeed.
+	if err == nil {
+		t.Fatal("expected error for whitespace-only --wasm path")
+	}
+}
+
+// ── --contract-source whitespace validation (inline PreRunE path) ─────────────
+
+// TestDebugPreRunE_ContractSourceWhitespace_InlinePath verifies that the
+// inline PreRunE check (used for the transaction-hash code path) also rejects
+// whitespace-only --contract-source values.
+func TestDebugPreRunE_ContractSourceWhitespace_Rejected(t *testing.T) {
+	resetArtifactFlags(t)
+	networkFlag = "testnet"
+	contractSourceFlag = "   " // whitespace only
+
+	validHash := "5c0a1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"
+	err := debugCmd.PreRunE(debugCmd, []string{validHash})
+	if err == nil {
+		t.Fatal("expected error for whitespace-only --contract-source")
+	}
+	if !strings.Contains(err.Error(), "--contract-source") {
+		t.Errorf("error should mention --contract-source, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "empty") && !strings.Contains(err.Error(), "whitespace") {
+		t.Errorf("error should mention empty/whitespace, got: %v", err)
+	}
+}
+
+// ── loadMockLedgerOverrides — no-flags baseline ───────────────────────────────
+
+// TestLoadMockLedgerOverrides_NoFlags_ReturnsEmptyMap verifies that calling
+// loadMockLedgerOverrides when neither --mock-ledger-manifest nor
+// --mock-ledger-entry flags are set returns an empty map without error.
+// This is the baseline "no overrides" case that every normal debug run uses.
+func TestLoadMockLedgerOverrides_NoFlags_ReturnsEmptyMap(t *testing.T) {
+	prevManifest := mockLedgerManifest
+	prevEntries := mockLedgerEntryFlags
+	mockLedgerManifest = ""
+	mockLedgerEntryFlags = []string{}
+	t.Cleanup(func() {
+		mockLedgerManifest = prevManifest
+		mockLedgerEntryFlags = prevEntries
+	})
+
+	overrides, err := loadMockLedgerOverrides()
+	if err != nil {
+		t.Fatalf("expected no error when no flags set, got: %v", err)
+	}
+	if len(overrides) != 0 {
+		t.Errorf("expected empty overrides map, got: %v", overrides)
+	}
+}
+
+// ── --source-alias target validation (warning, not error) ─────────────────────
+
+// TestDebugPreRunE_SourceAlias_MissingTarget_IsWarnNotError verifies that a
+// valid --source-alias JSON file where a target path doesn't exist on disk
+// produces a warning but does NOT cause PreRunE to return an error.
+// Users should still be able to debug even when some alias targets are stale.
+func TestDebugPreRunE_SourceAlias_MissingTarget_IsWarnNotError(t *testing.T) {
+	resetArtifactFlags(t)
+	networkFlag = "testnet"
+	dir := t.TempDir()
+	aliasPath := filepath.Join(dir, "aliases.json")
+
+	// Alias target does not exist on disk — should warn, not error.
+	aliasData := map[string]string{
+		"my_crate": "/nonexistent/path/that/does/not/exist",
+	}
+	data, _ := json.Marshal(aliasData)
+	if err := os.WriteFile(aliasPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	sourceAliasFlag = aliasPath
+
+	validHash := "5c0a1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"
+	err := debugCmd.PreRunE(debugCmd, []string{validHash})
+	// Must NOT return a --source-alias error for a missing target path.
+	if err != nil && strings.Contains(err.Error(), "--source-alias") {
+		t.Errorf("missing alias target should be a warning, not an error; got: %v", err)
+	}
+}

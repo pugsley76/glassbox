@@ -60,11 +60,22 @@ func NewDiagnosticReport(t *trace.ExecutionTrace) *DiagnosticReport {
 				severity = string(SeverityCritical)
 				action = "Reproduce locally with source maps enabled and inspect the trap stack."
 			}
+
+			details := state.Error
+			location := ""
+			if state.SourceRef != nil && state.SourceRef.File != "" {
+				location = state.SourceRef.File
+				if state.SourceRef.Line > 0 {
+					location = fmt.Sprintf("%s:%d", location, state.SourceRef.Line)
+				}
+				action += fmt.Sprintf(" Source: %s", location)
+			}
+
 			r.add(DiagnosticSummary{
 				Severity: severity,
 				Category: "execution",
 				Summary:  "Execution error",
-				Details:  state.Error,
+				Details:  details,
 				Action:   action,
 				Step:     state.Step,
 				Contract: state.ContractID,

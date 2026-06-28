@@ -89,6 +89,10 @@ package: release
 verify-release:
 	@bash scripts/verify-release.sh $(DIST_DIR)
 
+# Check binary sizes against thresholds
+size-check:
+	@bash scripts/check_binary_size.sh
+
 # Run tests
 test:
 	go test ./...

@@ -62,12 +62,31 @@ func ValidateArchivePath(destPath string) error {
 //
 // Additional artifacts (source maps, trace JSON) can be embedded by callers
 // that have access to them; the format reserves space via the zip comment.
+//
+// The session data is validated before export so that corrupt or incomplete
+// sessions are rejected early with a clear error rather than silently archived.
 func ExportArchive(data *Data, destPath string) error {
 	if data == nil {
 		return fmt.Errorf("session data is nil")
 	}
 	if err := ValidateArchivePath(destPath); err != nil {
 		return err
+	}
+
+	// Validate session data before exporting so the user gets an actionable
+	// error instead of an archive that cannot be imported on the other side.
+	report := ValidateIntegrity(data)
+	if !report.OK {
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("cannot export invalid session (%d issue(s)):\n", len(report.Issues)))
+		for i, issue := range report.Issues {
+			sb.WriteString(fmt.Sprintf("  %d. [%s] %s\n", i+1, issue.Field, issue.Description))
+			if issue.Hint != "" {
+				sb.WriteString(fmt.Sprintf("     Hint: %s\n", issue.Hint))
+			}
+		}
+		sb.WriteString("Fix the issues above and re-run 'glassbox session share'.")
+		return fmt.Errorf("%s", sb.String())
 	}
 
 	f, err := os.Create(destPath)
@@ -206,6 +225,26 @@ func ImportArchive(srcPath string) (*Data, error) {
 				"  Fix: upgrade Glassbox to the latest release to open this session",
 			meta.SchemaVersion, SchemaVersion,
 		)
+	}
+
+	// Validate the reconstructed session data so imported archives with missing
+	// or corrupt fields are rejected with a clear diagnostic instead of silently
+	// producing a broken session.
+	report := ValidateIntegrity(&data)
+	if !report.OK {
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf(
+			"archive %q contains an invalid session (%d issue(s)):\n",
+			srcPath, len(report.Issues),
+		))
+		for i, issue := range report.Issues {
+			sb.WriteString(fmt.Sprintf("  %d. [%s] %s\n", i+1, issue.Field, issue.Description))
+			if issue.Hint != "" {
+				sb.WriteString(fmt.Sprintf("     Hint: %s\n", issue.Hint))
+			}
+		}
+		sb.WriteString("Re-export with 'glassbox session share' from a valid session.")
+		return nil, fmt.Errorf("%s", sb.String())
 	}
 
 	return &data, nil

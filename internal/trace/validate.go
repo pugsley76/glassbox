@@ -171,7 +171,7 @@ func ValidateEventTypeField(eventType string) string {
 // choose whether to abort or merely warn.
 func ValidateExecutionTrace(t *ExecutionTrace) []string {
 	if t == nil {
-		return []string{"execution trace is nil"}
+		return []string{"trace is nil — execution trace must not be nil"}
 	}
 
 	var issues []string
@@ -318,60 +318,6 @@ func truncateForDiag(s string) string {
 	return s
 }
 
-// ValidateSnapshotForExport validates that a trace's snapshot state is suitable
-// for inclusion in an export. It is called before export operations that rely on
-// snapshot data (e.g. sandboxed replay exports) to surface snapshot reliability
-// issues early with actionable diagnostics.
-//
-// Parameters:
-//   - snapshotCount: number of snapshots captured during simulation
-//   - totalSteps: total execution steps in the trace
-//   - hasOOMError: whether the simulation hit an OOM condition
-//
-// Returns a descriptive, actionable error if snapshot coverage is insufficient.
-func ValidateSnapshotForExport(snapshotCount, totalSteps int, hasOOMError bool) error {
-	if hasOOMError {
-		return &TraceInputError{Failures: []string{
-			"snapshot capture failed due to memory pressure (OOM) — trace export may be incomplete\n" +
-				"  The simulation ran out of memory before all snapshots could be saved.\n" +
-				"  Fix: re-run with a smaller transaction or increase the simulator memory limit\n" +
-				"  Tip: use --trace-verbosity summary to reduce memory usage during capture",
-		}}
-	}
-
-	if totalSteps > 0 && snapshotCount == 0 {
-		return &TraceInputError{Failures: []string{
-			fmt.Sprintf(
-				"no snapshots were captured during simulation (%d steps executed, 0 snapshots) — "+
-					"sandboxed replay and step-navigation will be unavailable\n"+
-					"  Possible causes:\n"+
-					"    - Snapshot interval is set too high (no step hit the interval)\n"+
-					"    - Simulator version does not support snapshot capture\n"+
-					"  Fix: lower --snapshot-interval or re-run with a simulator that supports snapshots\n"+
-					"  Tip: run 'glassbox doctor' to check simulator snapshot support",
-				totalSteps,
-			),
-		}}
-	}
-
-	// Warn when coverage is sparse (far fewer snapshots than expected).
-	// Expected at minimum 1 snapshot per 200 steps; fewer indicates a problem.
-	if totalSteps > 0 && snapshotCount > 0 && snapshotCount < totalSteps/200 {
-		return &TraceInputError{Failures: []string{
-			fmt.Sprintf(
-				"sparse snapshot coverage: %d snapshot(s) for %d steps "+
-					"(expected at least %d) — step-navigation may jump large gaps\n"+
-					"  Fix: lower --snapshot-interval to capture more frequent snapshots\n"+
-					"  Current coverage: 1 snapshot per ~%d steps",
-				snapshotCount, totalSteps, totalSteps/200,
-				totalSteps/snapshotCount,
-			),
-		}}
-	}
-
-	return nil
-}
-
 // ValidateJSONSchemaVersion validates a schema_version string as found in the
 // ExportJSON envelope produced by --output-json. It rejects empty, malformed
 // (not MAJOR.MINOR), or unsupported version strings with actionable messages.
@@ -441,4 +387,7 @@ func joinSupportedVersions() string {
 	return strings.Join(parts, ", ")
 }
 
-
+// ValidateTraceFormatCompatibility is defined in export.go and checks
+// whether the trace data is compatible with the target export format.
+// It is documented here for discoverability: see export.go for the
+// implementation.
