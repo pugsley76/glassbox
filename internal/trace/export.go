@@ -350,7 +350,8 @@ func ValidateTraceFormatCompatibility(trace *ExecutionTrace, format string) erro
 				len(trace.States))
 		}
 
-		// Check for extremely large step details that could break HTML rendering
+		// Check for extremely large step details that could break HTML rendering.
+		// This covers both long error/operation strings and very large argument lists.
 		maxDetailSize := 1000000 // 1MB
 		for i, state := range trace.States {
 			detailSize := len(state.Error) + len(state.Operation) + len(state.Function)
@@ -359,6 +360,15 @@ func ValidateTraceFormatCompatibility(trace *ExecutionTrace, format string) erro
 					"trace step %d has excessively large detail fields (%d bytes total) — incompatible with HTML export\n"+
 						"  Fix: use --format json for traces with large step details",
 					i, detailSize)
+			}
+			// Arguments are rendered as a single string in HTML; check their
+			// serialised size so the browser doesn't receive a multi-megabyte payload.
+			argStr := fmt.Sprintf("%v", state.Arguments)
+			if len(argStr) > 50000 {
+				return fmt.Errorf(
+					"trace step %d has very large arguments (%d chars) that may cause browser rendering issues — incompatible with HTML export\n"+
+						"  Fix: use --format json for traces with large argument payloads",
+					i, len(argStr))
 			}
 		}
 
@@ -382,10 +392,19 @@ func ValidateTraceFormatCompatibility(trace *ExecutionTrace, format string) erro
 		}
 
 	case "json":
-		// JSON format is most flexible — very few constraints
-		// Just check that the trace can be serialized
-		if trace.cachedSubcallGraph != nil {
-			// Cached structures are excluded from JSON; this is expected
+		// JSON format is most flexible, but validate structural correctness
+		// that would prevent successful serialization or round-trip loading.
+
+		// Step indices must be sequential — a mismatch indicates a corrupted
+		// or externally-modified trace that cannot be reloaded reliably.
+		for i, state := range trace.States {
+			if state.Step != i {
+				return fmt.Errorf(
+					"trace step mismatch at position %d: expected step %d but got %d — trace may be corrupted\n"+
+						"  Fix: re-export or sanitize the trace before converting to JSON\n"+
+						"  Tip: use ExportWithResilience to auto-repair step indices",
+					i, i, state.Step)
+			}
 		}
 
 	case "text":

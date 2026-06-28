@@ -208,6 +208,31 @@ Performance notes:
 			}
 		}
 
+		// Validate --meta values are in key=value format with a non-empty key.
+		// This pre-flight check surfaces malformed flags before the trace file
+		// is loaded so users fix all CLI issues in a single pass.
+		for _, entry := range traceMetadata {
+			parts := strings.SplitN(entry, "=", 2)
+			if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+				failures = append(failures, fmt.Sprintf(
+					"--meta value %q is not in key=value format\n"+
+						"  Fix: supply metadata as key=value pairs, e.g. --meta env=testnet --meta version=1.2",
+					entry,
+				))
+			}
+		}
+
+		// Validate --comment values are not empty or whitespace-only.
+		for i, comment := range traceComments {
+			if strings.TrimSpace(comment) == "" {
+				failures = append(failures, fmt.Sprintf(
+					"--comment value at position %d is empty or whitespace-only\n"+
+						"  Fix: provide non-empty comment text or omit the empty --comment flag",
+					i,
+				))
+			}
+		}
+
 		if len(failures) == 1 {
 			return errors.WrapValidationError(failures[0])
 		}

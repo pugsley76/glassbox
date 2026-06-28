@@ -138,7 +138,9 @@ func ExportWithResilience(trace *ExecutionTrace, format, outputPath string, opts
 	// Write metadata file if enabled
 	if recoveryOpts.EnableMetadata {
 		metadata := ExportMetadata{
-			Version:         "1.0",
+			// Use the canonical schema version constant so the metadata version
+			// stays in sync automatically when the schema evolves.
+			Version:         CurrentJSONSchemaVersion,
 			Format:          format,
 			TransactionHash: trace.TransactionHash,
 			ExportedAt:      time.Now(),
