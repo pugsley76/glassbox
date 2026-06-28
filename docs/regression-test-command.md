@@ -19,7 +19,7 @@ glassbox regression-test [flags]
 | Flag | Default | Description |
 |---|---|---|
 | `--count` | `100` | Number of historic failed transactions to test. Must be between 1 and 1000 (inclusive). |
-| `--workers` | `4` | Number of parallel test workers. Must be a positive integer. |
+| `--workers` | `4` | Number of parallel test workers. When 0 or not set, defaults to 4. Must not be negative. |
 | `--network`, `-n` | `mainnet` | Stellar network: `testnet`, `mainnet`, or `futurenet`. |
 | `--rpc-url` | _(config)_ | Custom RPC URL. Overrides the default for the selected network. |
 | `--rpc-token` | _(env: `GLASSBOX_RPC_TOKEN`)_ | RPC authentication token. |
@@ -38,6 +38,7 @@ All flags are validated in `PreRunE` before any network or simulator calls are m
 | `--count` ≤ 0 | `--count must be greater than 0 (got N)` |
 | `--count` > 1000 | `--count N exceeds the maximum of 1000` |
 | `--workers` < 0 | `--workers must be a positive integer (got N)` |
+| `--workers` = 0 | Silently auto-corrected to `4` (not an error) |
 | `--network` unknown | `invalid --network "…"; must be one of: testnet, mainnet, futurenet` |
 | `--protocol-version` unsupported | `invalid --protocol-version N: …` with a hint to run `glassbox version` |
 
@@ -92,6 +93,54 @@ glassbox regression-test --count 50 --verbose
 # Use a custom RPC endpoint
 glassbox regression-test --count 200 --rpc-url https://my-rpc.example.com
 ```
+
+---
+
+## Mock Harness — Ledger Entry Overrides
+
+The regression harness and `glassbox debug` both support injecting synthetic ledger entries to test
+contract behavior against controlled state without hitting the network.
+
+### `--mock-ledger-manifest <file>`
+
+Load a JSON manifest file mapping base64-encoded XDR keys to base64-encoded XDR entry values:
+
+```json
+{
+  "ledger_entries": {
+    "<base64-xdr-key>": "<base64-xdr-entry>"
+  }
+}
+```
+
+**Validation:**
+
+| Condition | Error message |
+|---|---|
+| File not found | `--mock-ledger-manifest: file not found: "…"` with path hint |
+| Invalid JSON | `--mock-ledger-manifest: failed to parse "…" as JSON` with format hint |
+| Empty entry value | `--mock-ledger-manifest: entry "…" has an empty value` |
+| Invalid base64 value | `--mock-ledger-manifest: entry "…" has an invalid base64 value` |
+
+### `--mock-ledger-entry key:value`
+
+Inject a single ledger entry inline. Each value must be `key:value` where both are non-empty
+and the value is valid base64-encoded XDR.
+
+**Validation:**
+
+| Condition | Error message |
+|---|---|
+| Missing `:` separator | `--mock-ledger-entry: invalid format "…" — expected key:value` |
+| Empty key | `--mock-ledger-entry: invalid format "…"` (key must not be empty) |
+| Empty value | `--mock-ledger-entry: entry "…" has an empty value` |
+| Invalid base64 | `--mock-ledger-entry: entry "…" has an invalid base64 value` |
+
+### Merge behavior
+
+When both `--mock-ledger-manifest` and `--mock-ledger-entry` are used together, entries from
+`--mock-ledger-entry` take precedence over keys in the manifest (last-writer wins). The merge
+never mutates the original manifest map — it always returns a fresh copy.
 
 ---
 
