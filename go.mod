@@ -21,7 +21,7 @@ require (
 	github.com/mattn/go-isatty v0.0.21
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.10.2
-	github.com/stellar/go-stellar-sdk v0.5.0
+	github.com/stellar/go-stellar-sdk v0.6.0
 	github.com/stretchr/testify v1.11.1
 	go.lsp.dev/protocol v1.0.1
 	go.opentelemetry.io/otel v1.42.0
@@ -70,7 +70,7 @@ require (
 	github.com/segmentio/go-loggly v0.5.1-0.20171222203950-eb91657e62b2 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
-	github.com/stellar/go-xdr v0.0.0-20260423131911-a87d4d0789c3 // indirect
+	github.com/stellar/go-xdr v0.0.0-20260529210834-0bf8f4956364 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	go.lsp.dev/jsonrpc2 v1.0.1 // indirect
 	go.lsp.dev/uri v1.0.1 // indirect
