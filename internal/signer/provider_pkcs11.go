@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 )
 
 // wellKnownPKCS11Modules lists common PKCS#11 shared library paths per OS.
@@ -226,15 +228,21 @@ func (p *PKCS11Provider) resolveKeyIDHex(cfg ProviderConfig) string {
 	return os.Getenv("GLASSBOX_PKCS11_KEY_ID")
 }
 
-// discoveryHint returns a hint string listing discovered modules, if any.
+// discoveryHint returns a hint string listing discovered modules on this system,
+// so callers can copy-paste the correct path instead of guessing.
 func (p *PKCS11Provider) discoveryHint() string {
 	discovered := DiscoverPKCS11Modules()
 	if len(discovered) == 0 {
 		return ""
 	}
-	hint := "; discovered modules on this system:"
+	var paths []string
 	for _, m := range discovered {
-		hint += "\n  " + filepath.ToSlash(m)
+		paths = append(paths, filepath.ToSlash(m))
 	}
-	return hint
+	sortPaths := func() {
+		sort.Slice(paths, func(i, j int) bool {
+			return strings.ToLower(paths[i]) < strings.ToLower(paths[j])
+		})
+	}
+	return "; discovered modules available on this system:\n  " + strings.Join(paths, "\n  ")
 }

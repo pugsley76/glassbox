@@ -39,7 +39,7 @@ The tests help ensure that protocol changes don't introduce regressions.
 
 Validation:
   --count must be between 1 and 1000 (inclusive).
-  --workers must be a positive integer (defaults to 4).
+  --workers must be >= 0; when 0 it defaults to 4.
   --protocol-version is optional; when provided it must be a supported version.
   --network must be one of: testnet, mainnet, futurenet.`,
 	Example: `  # Run 100 regression tests on mainnet (default)

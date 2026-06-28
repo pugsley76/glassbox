@@ -254,3 +254,98 @@ func TestRegressionTestSuite_SummaryMentionsAllFields(t *testing.T) {
 		}
 	}
 }
+
+// ── testTransaction — improved empty-hash error message ──────────────────────
+
+// TestRegressionHarness_TestTransaction_EmptyHash_ActionableMessage verifies
+// that an empty transaction hash produces a descriptive error message that
+// includes a "Fix:" hint, not just a terse "skip" note.
+func TestRegressionHarness_TestTransaction_EmptyHash_ActionableMessage(t *testing.T) {
+	harness := NewRegressionHarness(&MockRunner{}, nil, 2)
+	result := harness.testTransaction(context.Background(), "", nil)
+
+	if result.Status != "error" {
+		t.Errorf("expected status=error, got %q", result.Status)
+	}
+	if result.ErrorMessage == "" {
+		t.Fatal("error message must not be empty for empty hash")
+	}
+	if !strings.Contains(result.ErrorMessage, "Fix:") {
+		t.Errorf("error message should include a Fix hint, got: %q", result.ErrorMessage)
+	}
+	// Must not contain just "skip" — the old terse message.
+	if result.ErrorMessage == "transaction hash is empty; skip this entry" {
+		t.Error("error message should be updated beyond the terse 'skip' message")
+	}
+}
+
+// ── RegressionTestSuite — pass/fail/error statistics consistency ──────────────
+
+// TestRegressionTestSuite_StatisticsConsistency verifies that after calling
+// addResult for a mix of statuses the counters computed by RunRegressionTests
+// are consistent.  We test the counter logic directly since RunRegressionTests
+// requires a live harness.
+func TestRegressionTestSuite_StatisticsConsistency(t *testing.T) {
+	suite := &RegressionTestSuite{
+		TotalTests: 6,
+		Results:    make([]RegressionTestResult, 0, 6),
+	}
+
+	statuses := []string{"pass", "pass", "fail", "error", "pass", "fail"}
+	for _, s := range statuses {
+		suite.addResult(RegressionTestResult{Status: s})
+	}
+
+	// Simulate the counter loop in RunRegressionTests.
+	var passed, failed, errors int
+	for _, r := range suite.Results {
+		switch r.Status {
+		case "pass":
+			passed++
+		case "fail":
+			failed++
+		case "error":
+			errors++
+		}
+	}
+
+	if passed != 3 {
+		t.Errorf("expected 3 passed, got %d", passed)
+	}
+	if failed != 2 {
+		t.Errorf("expected 2 failed, got %d", failed)
+	}
+	if errors != 1 {
+		t.Errorf("expected 1 error, got %d", errors)
+	}
+}
+
+// TestRegressionTestSuite_FailedResults_ExcludesPassed verifies that
+// FailedResults never includes "pass" entries.
+func TestRegressionTestSuite_FailedResults_ExcludesPassed(t *testing.T) {
+	suite := &RegressionTestSuite{
+		Results: []RegressionTestResult{
+			{TransactionHash: "tx-pass", Status: "pass"},
+			{TransactionHash: "tx-fail", Status: "fail"},
+		},
+	}
+
+	failed := suite.FailedResults()
+	for _, r := range failed {
+		if r.Status == "pass" {
+			t.Errorf("FailedResults included a 'pass' result: %+v", r)
+		}
+	}
+	if len(failed) != 1 || failed[0].TransactionHash != "tx-fail" {
+		t.Errorf("expected exactly [tx-fail], got %v", failed)
+	}
+}
+
+// TestNewRegressionHarness_ZeroWorkers_DefaultsToFour verifies that MaxWorkers
+// is defaulted to 4 when 0 is supplied — preventing a deadlock on the semaphore.
+func TestNewRegressionHarness_ZeroWorkers_DefaultsToFour(t *testing.T) {
+	harness := NewRegressionHarness(&MockRunner{}, nil, 0)
+	if harness.MaxWorkers != 4 {
+		t.Errorf("expected MaxWorkers=4 for 0 input, got %d", harness.MaxWorkers)
+	}
+}

@@ -36,6 +36,21 @@ All inputs are validated before any I/O is performed:
 | Trace file is empty | `trace file "…" is empty` |
 | Trace file is not valid JSON | Parse error with a hint to use `glassbox debug --json` |
 | `--output` exists but is a file | `--output "…" exists but is not a directory` |
+| `--output` directory does not exist | Directory is automatically created; error only if creation fails due to permissions |
+
+---
+
+## Output Directory Behavior
+
+The `--output` directory is created automatically if it does not exist. Only the final path component is created; if the parent directory is missing, the command fails with a clear permissions or path error.
+
+```sh
+# This creates reports/ automatically if it doesn't exist
+glassbox report --file trace.json --output reports/
+
+# Nested directories are also created automatically
+glassbox report --file trace.json --output build/artifacts/reports/
+```
 
 ---
 

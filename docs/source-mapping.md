@@ -172,6 +172,41 @@ If the build directory is missing, Glassbox logs a debug-level message and
 continues without local symbols. The message includes a suggestion to run
 `cargo build` if local symbols are needed.
 
+### WASM file validation during discovery
+
+Files found in the build output directory are validated before indexing:
+
+- Files named `.wasm` but not starting with the WASM magic bytes (`\0asm`) are
+  **skipped with a warning** rather than silently hashed. This prevents corrupt
+  or misnamed files (e.g. ELF binaries accidentally named `.wasm`) from
+  polluting the hash table with useless entries.
+- Files shorter than 4 bytes cannot contain a valid magic number and are also
+  skipped with a warning.
+
+**Example warning:**
+```
+"./target/wasm32-unknown-unknown/release/old_build.wasm" does not have a valid
+WASM magic number (\0asm) — skipped
+  Rebuild with 'cargo build --release --target wasm32-unknown-unknown'
+  to ensure the file is a proper WASM binary.
+```
+
+### Hash mismatch diagnostic
+
+When the local WASM binary's SHA-256 hash differs from the on-chain contract
+hash, Glassbox surfaces a `build mismatch` warning rather than the previous
+misleading `opt-level mismatch` message (the hash can differ for many reasons
+beyond opt-level — an outdated build, a different contract, or different
+compilation flags):
+
+```
+build mismatch: local WASM hash "a1b2c3..." does not match on-chain hash "d4e5f6..." (path: ./target/.../my_contract.wasm)
+  The local binary differs from the deployed contract — it may be outdated,
+  built with different flags, or be a completely different contract.
+  Hint: rebuild with 'cargo build --release --target wasm32-unknown-unknown'
+  and verify --opt-level matches the on-chain deployment.
+```
+
 ## `--source-alias` Alias Mapping
 
 When source file paths embedded in DWARF symbols don't match your local

@@ -150,6 +150,30 @@ func TestRunSnapshotSave_WithWasm(t *testing.T) {
 	}
 }
 
+func TestRunSnapshotSave_InvalidNetwork_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := writeLedgerStateFile(t, dir, map[string]string{"k": "v"})
+
+	snapSaveTxHashFlag = "abc123"
+	snapSaveNetworkFlag = "devnet"
+	snapSaveInputFlag = inputPath
+	snapSaveOutputFlag = filepath.Join(dir, "out.snap.json")
+	defer func() {
+		snapSaveTxHashFlag = ""
+		snapSaveNetworkFlag = "testnet"
+		snapSaveInputFlag = ""
+		snapSaveOutputFlag = ""
+	}()
+
+	err := snapshotSaveCmd.RunE(snapshotSaveCmd, nil)
+	if err == nil {
+		t.Fatal("expected error for invalid network")
+	}
+	if !strings.Contains(err.Error(), "devnet") && !strings.Contains(err.Error(), "network") {
+		t.Errorf("error should mention invalid network, got: %v", err)
+	}
+}
+
 func TestRunSnapshotSave_DefaultOutputPath(t *testing.T) {
 	dir := t.TempDir()
 	inputPath := writeLedgerStateFile(t, dir, map[string]string{"k": "v"})

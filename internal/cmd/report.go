@@ -6,6 +6,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -108,6 +109,14 @@ func reportExec(cmd *cobra.Command, args []string) error {
 			"--output %q exists but is not a directory; specify a directory path",
 			reportOutput,
 		))
+	} else if os.IsNotExist(err) {
+		if mkErr := os.MkdirAll(reportOutput, 0o755); mkErr != nil {
+			return errors.WrapValidationError(fmt.Sprintf(
+				"--output %q does not exist and could not be created: %v\n"+
+					"  Fix: ensure you have write permissions to the parent directory",
+				reportOutput, mkErr,
+			))
+		}
 	}
 
 	traceData, err := os.ReadFile(reportFile)
@@ -183,7 +192,7 @@ func reportExec(cmd *cobra.Command, args []string) error {
 	normalized := strings.ToLower(strings.TrimSpace(reportFormat))
 	switch normalized {
 	case "text":
-		filename := reportOutput + "/report.txt"
+		filename := filepath.Join(reportOutput, "report.txt")
 		if writeErr := os.WriteFile(filename, []byte(diagnosticReport.Text()), 0644); writeErr != nil {
 			return errors.WrapValidationError(fmt.Sprintf(
 				"failed to write text report to %q: %v", filename, writeErr,
@@ -197,7 +206,7 @@ func reportExec(cmd *cobra.Command, args []string) error {
 		if marshalErr != nil {
 			return errors.WrapMarshalFailed(marshalErr)
 		}
-		filename := reportOutput + "/report.json"
+		filename := filepath.Join(reportOutput, "report.json")
 		if writeErr := os.WriteFile(filename, jsonData, 0644); writeErr != nil {
 			return errors.WrapValidationError(fmt.Sprintf(
 				"failed to write JSON report to %q: %v", filename, writeErr,

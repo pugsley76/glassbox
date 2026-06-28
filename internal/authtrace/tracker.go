@@ -337,8 +337,11 @@ func (t *Tracker) GenerateTrace() *AuthTrace {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
+	events := make([]AuthEvent, len(t.events))
+	copy(events, t.events)
+
 	trace := &AuthTrace{
-		AuthEvents:       t.events,
+		AuthEvents:       events,
 		Failures:         t.failures,
 		SignatureWeights: make([]KeyWeight, 0),
 		CustomContracts:  make([]CustomContractAuth, 0),
@@ -348,10 +351,40 @@ func (t *Tracker) GenerateTrace() *AuthTrace {
 		trace.Success = true
 	}
 
-	for _, event := range t.events {
+	for _, event := range events {
 		if event.EventType == "signature_verification" && event.Status == "valid" {
 			trace.ValidSignatures++
 		}
+	}
+
+	diags := &AuthTraceDiagnostics{
+		TotalAuthEvents: len(events),
+	}
+	for _, event := range events {
+		if event.SourceFile != "" {
+			diags.EventsWithSourceCount++
+		}
+	}
+	if diags.EventsWithSourceCount > 0 {
+		diags.SourceMappingAvailable = true
+		diags.SourceMappingHint = ""
+	} else {
+		diags.SourceMappingHint = "Authorization events lack source mapping. " +
+			"Recompile the contract with 'debug = true' in [profile.release] to map auth checks to source lines. " +
+			"Use --contract-source <path> to provide local source files for mapping."
+	}
+	if len(events) == 0 && len(t.failures) == 0 {
+		diags.EmptyTraceReason = "no Soroban authorization entries were found in this transaction — " +
+			"the transaction may not trigger any require_auth or custom authorization checks, " +
+			"or the simulator did not emit auth diagnostic events. " +
+			"Verify the transaction type and --network, or run 'glassbox doctor' if you expected auth data."
+	}
+	if len(events) == 0 && len(t.failures) > 0 {
+		diags.EmptyTraceReason = "auth failures were detected but no detailed auth events were recorded — " +
+			"suggesting auth checks may have been bypassed or the simulator failed to capture them."
+	}
+	if diags.EmptyTraceReason != "" || diags.SourceMappingHint != "" {
+		trace.Diagnostics = diags
 	}
 
 	return trace

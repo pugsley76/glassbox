@@ -446,8 +446,8 @@ func effectivePKCS11Config() signer.Pkcs11Config {
 
 // validatePKCS11SignInputs rejects an incomplete PKCS#11 configuration before any
 // module is loaded, so the user gets an explicit message instead of a low-level
-// failure mid-signing. The module path and PIN are required; the module file must
-// exist on disk; the key CKA_ID, when supplied, must be valid hex.
+// failure mid-signing. The module path and PIN are required; the key CKA_ID,
+// when supplied, must be valid hex. Key-label and key-id are mutually exclusive.
 func validatePKCS11SignInputs(cfg signer.Pkcs11Config) error {
 	var missing []string
 	if cfg.ModulePath == "" {
@@ -492,14 +492,17 @@ func validatePKCS11SignInputs(cfg signer.Pkcs11Config) error {
 		}
 	}
 
-	// Warn when no key selector is provided — the key lookup step in the
-	// validator will fail, but surfacing this early is more helpful.
+	if cfg.KeyLabel != "" && cfg.KeyIDHex != "" {
+		return errors.WrapValidationError(
+			"--pkcs11-key-label and --pkcs11-key-id are mutually exclusive; provide only one identifier for the signing key\n" +
+				"  Fix: use --pkcs11-key-label <CKA_LABEL> OR --pkcs11-key-id <hex CKA_ID>, not both")
+	}
+
 	if cfg.KeyLabel == "" && cfg.KeyIDHex == "" {
 		return errors.WrapValidationError(
-			"no PKCS#11 key selector provided — set --pkcs11-key-label (or GLASSBOX_PKCS11_KEY_LABEL) " +
-				"or --pkcs11-key-id (or GLASSBOX_PKCS11_KEY_ID)\n" +
-				"  Tip: run 'pkcs11-tool --list-objects --type privkey' to list available key labels",
-		)
+			"pkcs11 signing requires one of --pkcs11-key-label (CKA_LABEL) or --pkcs11-key-id (hex CKA_ID)\n" +
+				"  Fix: set GLASSBOX_PKCS11_KEY_LABEL or GLASSBOX_PKCS11_KEY_ID, or use the corresponding --pkcs11-* flag")
+	}
 	}
 
 	return nil

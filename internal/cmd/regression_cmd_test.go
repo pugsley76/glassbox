@@ -198,3 +198,90 @@ func TestRegressionTestCmd_LongDescriptionMentionsValidation(t *testing.T) {
 		t.Error("Long description should mention --network validation")
 	}
 }
+
+// ── --workers=0 auto-correction behavior ─────────────────────────────────────
+
+// TestValidateRegressionFlags_ZeroWorkers_Passes verifies that --workers=0
+// passes PreRunE (it is auto-corrected to 4 in RunE, not rejected upfront).
+func TestValidateRegressionFlags_ZeroWorkers_Passes(t *testing.T) {
+	t.Cleanup(resetRegressionFlags)
+	regressionMaxWorkers = 0
+	networkFlag = "mainnet"
+
+	err := validateRegressionFlags(regressionTestCmd, []string{})
+	if err != nil && strings.Contains(err.Error(), "--workers") {
+		t.Errorf("--workers=0 should pass PreRunE (auto-corrected to 4), got: %v", err)
+	}
+}
+
+// TestValidateRegressionFlags_NegativeWorkers_IsRejected verifies that a
+// genuinely negative --workers value is caught before any RPC calls.
+func TestValidateRegressionFlags_NegativeWorkers_IsRejected(t *testing.T) {
+	t.Cleanup(resetRegressionFlags)
+	regressionMaxWorkers = -5
+	networkFlag = "mainnet"
+
+	err := validateRegressionFlags(regressionTestCmd, []string{})
+	if err == nil {
+		t.Fatal("expected error for --workers=-5")
+	}
+	if !strings.Contains(err.Error(), "--workers") {
+		t.Errorf("error should mention --workers, got: %q", err.Error())
+	}
+}
+
+// ── Long description accuracy ─────────────────────────────────────────────────
+
+// TestRegressionTestCmd_LongDescriptionMentionsWorkers verifies the Long
+// description references --workers so users know it can be configured.
+func TestRegressionTestCmd_LongDescriptionMentionsWorkers(t *testing.T) {
+	if !strings.Contains(regressionTestCmd.Long, "--workers") {
+		t.Error("Long description should mention --workers validation behavior")
+	}
+}
+
+// TestRegressionTestCmd_LongDescriptionAccurateForZeroWorkers verifies that
+// the Long description correctly states workers=0 defaults to 4 (not that it
+// must be "a positive integer").
+func TestRegressionTestCmd_LongDescriptionAccurateForZeroWorkers(t *testing.T) {
+	long := regressionTestCmd.Long
+	// The old (incorrect) wording was "must be a positive integer".
+	// The correct wording accepts 0 with an auto-correction note.
+	if strings.Contains(long, "must be a positive integer") {
+		t.Error("Long description incorrectly says workers must be a positive integer; " +
+			"0 is allowed (auto-corrected to 4)")
+	}
+}
+
+// ── --count boundary enforcement ─────────────────────────────────────────────
+
+// TestValidateRegressionFlags_CountAtExactMaximum verifies count=1000 is accepted.
+func TestValidateRegressionFlags_CountAtExactMaximum(t *testing.T) {
+	t.Cleanup(resetRegressionFlags)
+	regressionTestCount = maxRegressionCount // 1000
+	networkFlag = "mainnet"
+
+	err := validateRegressionFlags(regressionTestCmd, []string{})
+	if err != nil && strings.Contains(err.Error(), "--count") {
+		t.Errorf("count=%d (exact maximum) should be accepted, got: %v", maxRegressionCount, err)
+	}
+}
+
+// TestValidateRegressionFlags_CountOneOverMaximum verifies count=1001 is rejected.
+func TestValidateRegressionFlags_CountOneOverMaximum(t *testing.T) {
+	t.Cleanup(resetRegressionFlags)
+	regressionTestCount = maxRegressionCount + 1
+	networkFlag = "mainnet"
+
+	err := validateRegressionFlags(regressionTestCmd, []string{})
+	if err == nil {
+		t.Fatalf("expected error for count=%d (one over maximum)", maxRegressionCount+1)
+	}
+	if !strings.Contains(err.Error(), "exceed") && !strings.Contains(err.Error(), "maximum") {
+		t.Errorf("error should mention exceeding maximum, got: %q", err.Error())
+	}
+	// Error must include the actual count for clarity.
+	if !strings.Contains(err.Error(), fmt.Sprintf("%d", maxRegressionCount+1)) {
+		t.Errorf("error should include the supplied count value, got: %q", err.Error())
+	}
+}
