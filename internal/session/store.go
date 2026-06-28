@@ -15,6 +15,7 @@ import (
 
 	"github.com/dotandev/glassbox/internal/logger"
 	"github.com/dotandev/glassbox/internal/simulator"
+	"github.com/dotandev/glassbox/internal/version"
 	_ "modernc.org/sqlite"
 )
 
@@ -216,13 +217,14 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 	}
 	data.LastAccessAt = now
 	data.SchemaVersion = SchemaVersion
+	data.ErstVersion = version.Version
 
 	query := `
 	INSERT INTO sessions (
 		id, name, created_at, last_access_at, status, network, horizon_url, tx_hash,
-		envelope_xdr, result_xdr, result_meta_xdr,
-		sim_request_json, sim_response_json, GLASSBOX_version, schema_version
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		envelope_xdr, result_xdr, result_meta_xdr, pinned_endpoint,
+		sim_request_json, sim_response_json, env_fingerprint, GLASSBOX_version, schema_version
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		name = excluded.name,
 		last_access_at = excluded.last_access_at,
@@ -244,7 +246,7 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 	_, err := s.db.ExecContext(ctx, query,
 		data.ID, data.Name, data.CreatedAt, data.LastAccessAt, data.Status,
 		data.Network, data.HorizonURL, data.TxHash,
-		data.EnvelopeXdr, data.ResultXdr, data.ResultMetaXdr,
+		data.EnvelopeXdr, data.ResultXdr, data.ResultMetaXdr, data.PinnedEndpoint,
 		data.SimRequestJSON, data.SimResponseJSON, data.EnvFingerprint, data.ErstVersion, data.SchemaVersion,
 	)
 
@@ -260,7 +262,7 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 	query := `
 	SELECT id, name, created_at, last_access_at, status, network, horizon_url, tx_hash,
-	       envelope_xdr, result_xdr, result_meta_xdr,
+	       envelope_xdr, result_xdr, result_meta_xdr, pinned_endpoint,
 	       sim_request_json, sim_response_json, env_fingerprint, GLASSBOX_version, schema_version
 	FROM sessions
 	WHERE id = ?
@@ -269,16 +271,18 @@ func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 	var data Data
 	var createdAt, lastAccessAt string
 	var pinnedEndpoint sql.NullString
-
 	var envFP sql.NullString
 	err := s.db.QueryRowContext(ctx, query, sessionID).Scan(
 		&data.ID, &data.Name, &createdAt, &lastAccessAt, &data.Status,
 		&data.Network, &data.HorizonURL, &data.TxHash,
-		&data.EnvelopeXdr, &data.ResultXdr, &data.ResultMetaXdr,
+		&data.EnvelopeXdr, &data.ResultXdr, &data.ResultMetaXdr, &pinnedEndpoint,
 		&data.SimRequestJSON, &data.SimResponseJSON, &envFP, &data.ErstVersion, &data.SchemaVersion,
 	)
 	if envFP.Valid {
 		data.EnvFingerprint = envFP.String
+	}
+	if pinnedEndpoint.Valid {
+		data.PinnedEndpoint = pinnedEndpoint.String
 	}
 
 	if err == sql.ErrNoRows {
@@ -345,7 +349,7 @@ func (s *Store) List(ctx context.Context, limit int) ([]*Data, error) {
 
 	query := `
 	SELECT id, name, created_at, last_access_at, status, network, horizon_url, tx_hash,
-	       envelope_xdr, result_xdr, result_meta_xdr,
+	       envelope_xdr, result_xdr, result_meta_xdr, pinned_endpoint,
 	       sim_request_json, sim_response_json, env_fingerprint, GLASSBOX_version, schema_version
 	FROM sessions
 	ORDER BY last_access_at DESC
@@ -368,7 +372,7 @@ func (s *Store) List(ctx context.Context, limit int) ([]*Data, error) {
 		scanErr := rows.Scan(
 			&data.ID, &data.Name, &createdAt, &lastAccessAt, &data.Status,
 			&data.Network, &data.HorizonURL, &data.TxHash,
-			&data.EnvelopeXdr, &data.ResultXdr, &data.ResultMetaXdr,
+			&data.EnvelopeXdr, &data.ResultXdr, &data.ResultMetaXdr, &pinnedEndpoint,
 			&data.SimRequestJSON, &data.SimResponseJSON, &envFP, &data.ErstVersion, &data.SchemaVersion,
 		)
 		if scanErr != nil {
@@ -376,6 +380,9 @@ func (s *Store) List(ctx context.Context, limit int) ([]*Data, error) {
 		}
 		if envFP.Valid {
 			data.EnvFingerprint = envFP.String
+		}
+		if pinnedEndpoint.Valid {
+			data.PinnedEndpoint = pinnedEndpoint.String
 		}
 
 		// Parse timestamps
