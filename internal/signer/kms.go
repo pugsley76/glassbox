@@ -92,7 +92,7 @@ func buildAWSConfig(cfg ProviderConfig, region string) (aws.Config, error) {
 	if accessKey := cfg.Extra["aws_access_key_id"]; accessKey != "" {
 		secretKey := cfg.Extra["aws_secret_access_key"]
 		if secretKey == "" {
-			return nil, errors.New("AWS access key provided but secret key missing")
+			return aws.Config{}, errors.New("AWS access key provided but secret key missing")
 		}
 		opts = append(opts, config.WithCredentialsProvider(
 			credentials.NewStaticCredentialsProvider(accessKey, secretKey, ""),
@@ -103,10 +103,8 @@ func buildAWSConfig(cfg ProviderConfig, region string) (aws.Config, error) {
 	}
 	// Otherwise, use default credential chain (env, config file, EC2 role, etc.)
 
-	return config.LoadDefaultConfig(ctx, opts...)
+	return config.LoadDefaultConfig(context.Background(), opts...)
 }
-
-var ctx = &context.Background{}
 
 // KMSSigner implements Signer using AWS KMS.
 type KMSSigner struct {
@@ -117,9 +115,11 @@ type KMSSigner struct {
 
 // Sign signs a message using the KMS key.
 // The hash is computed over the message and passed to KMS for signing.
+// Note: AWS KMS doesn't support Ed25519 directly. We use ECDSA_SHA_512
+// (P-521 curve with SHA-512) which is the closest available option.
 func (s *KMSSigner) Sign(message []byte) ([]byte, error) {
 	// Compute SHA-512 hash of the message (KMS supports SIGN_DIGEST_SHA_256 and SHA_512)
-	// For Ed25519, we need to hash the message ourselves
+	// For ECDSA with SHA-512, we hash the message ourselves
 	digest := crypto.SHA512.New()
 	digest.Write(message)
 	h := digest.Sum(nil)
@@ -129,10 +129,10 @@ func (s *KMSSigner) Sign(message []byte) ([]byte, error) {
 		KeyId:            &s.keyID,
 		Message:          h,
 		MessageType:      kmsTypes.MessageTypeDigest,
-		SigningAlgorithm: kmsTypesSigningAlgorithm, // Ed25519
+		SigningAlgorithm: kmsTypesSigningAlgorithm, // ECDSA_SHA_512
 	}
 
-	result, err := s.client.Sign(ctx, input)
+	result, err := s.client.Sign(context.Background(), input)
 	if err != nil {
 		return nil, fmt.Errorf("KMS sign request failed: %w", err)
 	}
@@ -147,7 +147,7 @@ func (s *KMSSigner) PublicKey() ([]byte, error) {
 		KeyId: &s.keyID,
 	}
 
-	result, err := s.client.GetPublicKey(ctx, input)
+	result, err := s.client.GetPublicKey(context.Background(), input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get public key from KMS: %w", err)
 	}
@@ -162,7 +162,7 @@ func (s *KMSSigner) KeyID() string {
 
 // Algorithm returns the signing algorithm.
 func (s *KMSSigner) Algorithm() string {
-	return "Ed25519"
+	return "ECDSA_SHA_512"
 }
 
 // Close implements io.Closer. KMS doesn't require cleanup, but we implement
@@ -171,9 +171,10 @@ func (s *KMSSigner) Close() error {
 	return nil
 }
 
-// kmsTypesSigningAlgorithm is the Ed25519 signing algorithm for KMS.
-// This is a variable to allow testing with mocked clients.
-var kmsTypesSigningAlgorithm = kmsTypes.SigningAlgorithmSpecEd25519
+// kmsTypesSigningAlgorithm is the signing algorithm for KMS.
+// AWS KMS doesn't support Ed25519 directly; ECDSA_SHA_512 uses P-521 curve with SHA-512
+// which is the closest available option for SHA-512 based signatures.
+var kmsTypesSigningAlgorithm = kmsTypes.SigningAlgorithmSpecEcdsaSha512
 
 // RegisterKMSProvider registers the AWS KMS provider with the default registry.
 // This is called automatically during package initialization if the AWS SDK

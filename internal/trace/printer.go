@@ -276,7 +276,7 @@ func PrintExecutionTrace(t *ExecutionTrace, opts PrintOptions) {
 	if len(t.DecodedEvents) > 0 || len(t.DiagnosticEvents) > 0 {
 		events := t.DecodedEvents
 		if len(events) == 0 {
-			events = DecodeDiagnosticEventsWithSchemas(t.DiagnosticEvents, opts.EventSchemas)
+			events = DecodeDiagnosticEventsWithSchemas(toLocalDiagnosticEvents(t.DiagnosticEvents), opts.EventSchemas)
 		}
 		CorrelateEvents(events, t)
 		_, _ = p.separator.Fprintln(out, sep)

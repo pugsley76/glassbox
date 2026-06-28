@@ -17,8 +17,9 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
-	"go.opentelemetry.io/otel/sdk/trace"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Config holds OpenTelemetry configuration
@@ -53,10 +54,10 @@ var (
 // silentSpanExporter wraps a SpanExporter and swallows all export errors so
 // collector outages never block or log. Core SDK paths must not depend on telemetry.
 type silentSpanExporter struct {
-	delegate trace.SpanExporter
+	delegate sdktrace.SpanExporter
 }
 
-func (s *silentSpanExporter) ExportSpans(ctx context.Context, spans []trace.ReadOnlySpan) error {
+func (s *silentSpanExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
 	_ = s.delegate.ExportSpans(ctx, spans)
 	return nil
 }
@@ -95,7 +96,7 @@ func Init(ctx context.Context, config Config) (func(), error) {
 	)
 	if err != nil {
 		// Collector unreachable at init: use no-op so core paths are unaffected
-		otel.SetTracerProvider(trace.NewTracerProvider())
+		otel.SetTracerProvider(sdktrace.NewTracerProvider())
 		return func() {}, nil
 	}
 
@@ -108,7 +109,7 @@ func Init(ctx context.Context, config Config) (func(), error) {
 	)
 	if err != nil {
 		_ = exporter.Shutdown(ctx)
-		otel.SetTracerProvider(trace.NewTracerProvider())
+		otel.SetTracerProvider(sdktrace.NewTracerProvider())
 		return func() {}, nil
 	}
 
@@ -116,9 +117,9 @@ func Init(ctx context.Context, config Config) (func(), error) {
 	silent := &silentSpanExporter{delegate: exporter}
 
 	// Create trace provider with silent exporter so collector downtime doesn't block or log
-	tp := trace.NewTracerProvider(
-		trace.WithBatcher(silent),
-		trace.WithResource(res),
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(silent),
+		sdktrace.WithResource(res),
 	)
 
 	otel.SetTracerProvider(tp)
@@ -208,7 +209,7 @@ func GetEnvMetadata() EnvMetadata {
 }
 
 // GetTracer returns the global tracer instance
-func GetTracer() interface{} {
+func GetTracer() trace.Tracer {
 	tp := otel.GetTracerProvider()
 	return tp.Tracer("glassbox")
 }

@@ -63,11 +63,11 @@ type ExecutionTrace struct {
 	States           []ExecutionState            `json:"states"`
 	Snapshots        []StateSnapshot             `json:"snapshots"`
 	DiagnosticEvents []simulator.DiagnosticEvent `json:"diagnostic_events,omitempty"`
+	DecodedEvents    []*ContractEvent            `json:"decoded_events,omitempty"`
 	Annotations      TraceAnnotations            `json:"annotations,omitempty"`
 	CurrentStep      int                         `json:"current_step"`
 	SnapshotInterval int                         `json:"snapshot_interval"`
 
-	// cachedSubcallGraph holds the lazily-built SubcallGraph. Access via SubcallGraph().
 	cachedSubcallGraph *SubcallGraph `json:"-"`
 }
 
@@ -405,7 +405,7 @@ func (t *ExecutionTrace) ExportJSON(schemaVersion string, generatedAt time.Time)
 		gen = time.Now()
 	}
 
-	decodedEvents := DecodeDiagnosticEventsWithSchemas(t.DiagnosticEvents, nil)
+	decodedEvents := DecodeDiagnosticEventsWithSchemas(toLocalDiagnosticEvents(t.DiagnosticEvents), nil)
 
 	exportObj := map[string]interface{}{
 		"schema_version": schemaVersion,
@@ -562,4 +562,20 @@ func exportSubcallGraph(g *SubcallGraph) interface{} {
 		"root_call_count":   len(g.RootCalls),
 		"boundaries":        flatBoundaries,
 	}
+}
+
+// toLocalDiagnosticEvents converts simulator.DiagnosticEvent slice to the local
+// trace.DiagnosticEvent type for use with decoder functions in this package.
+func toLocalDiagnosticEvents(events []simulator.DiagnosticEvent) []DiagnosticEvent {
+	out := make([]DiagnosticEvent, len(events))
+	for i, e := range events {
+		out[i] = DiagnosticEvent{
+			EventType:       e.EventType,
+			ContractID:      e.ContractID,
+			Topics:          e.Topics,
+			Data:            e.Data,
+			WasmInstruction: e.WasmInstruction,
+		}
+	}
+	return out
 }

@@ -2019,16 +2019,16 @@ func printSimulationResult(network string, res *simulator.SimulationResponse) {
 				fmt.Printf("  %s", visualizer.Colorize(*event.ContractID, "dim"))
 			}
 			// Add resource info: CPU, Mem, and Fee for this event
-			if event.CPU != nil || event.Mem != nil {
+			if event.CPU != nil || event.Memory != nil {
 				var cpuStr, memStr, feeStr string
 				if event.CPU != nil {
 					cpuStr = fmt.Sprintf("CPU: %d", *event.CPU)
 				}
-				if event.Mem != nil {
-					memStr = fmt.Sprintf("Mem: %d", *event.Mem)
+				if event.Memory != nil {
+					memStr = fmt.Sprintf("Mem: %d", *event.Memory)
 				}
-				if event.CPU != nil && event.Mem != nil {
-					fee := (*event.CPU / 10000) + (*event.Mem / (64 * 1024))
+				if event.CPU != nil && event.Memory != nil {
+					fee := (*event.CPU / 10000) + (*event.Memory / (64 * 1024))
 					feeStr = fmt.Sprintf("Fee: %d stroops", fee)
 				}
 				parts := []string{}
@@ -2273,8 +2273,6 @@ func formatOperationSummary(op xdr.Operation) string {
 			summary = fmt.Sprintf("%s %s", typeName, op.Body.ManageDataOp.DataName)
 		}
 	case xdr.OperationTypeInvokeHostFunction:
-		summary = fmt.Sprintf("%s", typeName)
-	case xdr.OperationTypeInvokeContract:
 		summary = fmt.Sprintf("%s", typeName)
 	}
 

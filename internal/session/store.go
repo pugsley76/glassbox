@@ -145,6 +145,32 @@ func (s *Store) initSchema() error {
 	return nil
 }
 
+// columnExists checks if a column exists in a table.
+func (s *Store) columnExists(table, column string) (bool, error) {
+	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, fmt.Errorf("failed to inspect %s schema: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var defaultValue interface{}
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return false, fmt.Errorf("failed to scan %s schema: %w", table, err)
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
 func (s *Store) ensureColumn(table, column, definition string) error {
 	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
@@ -217,12 +243,12 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 	data.LastAccessAt = now
 	data.SchemaVersion = SchemaVersion
 
-	query := `
+query := `
 	INSERT INTO sessions (
 		id, name, created_at, last_access_at, status, network, horizon_url, tx_hash,
-		envelope_xdr, result_xdr, result_meta_xdr,
+		envelope_xdr, result_xdr, result_meta_xdr, pinned_endpoint,
 		sim_request_json, sim_response_json, GLASSBOX_version, schema_version
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		name = excluded.name,
 		last_access_at = excluded.last_access_at,
@@ -244,8 +270,8 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 	_, err := s.db.ExecContext(ctx, query,
 		data.ID, data.Name, data.CreatedAt, data.LastAccessAt, data.Status,
 		data.Network, data.HorizonURL, data.TxHash,
-		data.EnvelopeXdr, data.ResultXdr, data.ResultMetaXdr,
-		data.SimRequestJSON, data.SimResponseJSON, data.EnvFingerprint, data.ErstVersion, data.SchemaVersion,
+		data.EnvelopeXdr, data.ResultXdr, data.ResultMetaXdr, data.PinnedEndpoint,
+		data.SimRequestJSON, data.SimResponseJSON, data.ErstVersion, data.SchemaVersion,
 	)
 
 	if err != nil {
@@ -260,7 +286,7 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 	query := `
 	SELECT id, name, created_at, last_access_at, status, network, horizon_url, tx_hash,
-	       envelope_xdr, result_xdr, result_meta_xdr,
+	       envelope_xdr, result_xdr, result_meta_xdr, pinned_endpoint,
 	       sim_request_json, sim_response_json, env_fingerprint, GLASSBOX_version, schema_version
 	FROM sessions
 	WHERE id = ?
@@ -274,11 +300,14 @@ func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 	err := s.db.QueryRowContext(ctx, query, sessionID).Scan(
 		&data.ID, &data.Name, &createdAt, &lastAccessAt, &data.Status,
 		&data.Network, &data.HorizonURL, &data.TxHash,
-		&data.EnvelopeXdr, &data.ResultXdr, &data.ResultMetaXdr,
+		&data.EnvelopeXdr, &data.ResultXdr, &data.ResultMetaXdr, &pinnedEndpoint,
 		&data.SimRequestJSON, &data.SimResponseJSON, &envFP, &data.ErstVersion, &data.SchemaVersion,
 	)
 	if envFP.Valid {
 		data.EnvFingerprint = envFP.String
+	}
+	if pinnedEndpoint.Valid {
+		data.PinnedEndpoint = pinnedEndpoint.String
 	}
 
 	if err == sql.ErrNoRows {
@@ -345,7 +374,7 @@ func (s *Store) List(ctx context.Context, limit int) ([]*Data, error) {
 
 	query := `
 	SELECT id, name, created_at, last_access_at, status, network, horizon_url, tx_hash,
-	       envelope_xdr, result_xdr, result_meta_xdr,
+	       envelope_xdr, result_xdr, result_meta_xdr, pinned_endpoint,
 	       sim_request_json, sim_response_json, env_fingerprint, GLASSBOX_version, schema_version
 	FROM sessions
 	ORDER BY last_access_at DESC
@@ -363,12 +392,11 @@ func (s *Store) List(ctx context.Context, limit int) ([]*Data, error) {
 		var data Data
 		var createdAt, lastAccessAt string
 		var pinnedEndpoint sql.NullString
-
-		envFP := sql.NullString{}
+		var envFP sql.NullString
 		scanErr := rows.Scan(
 			&data.ID, &data.Name, &createdAt, &lastAccessAt, &data.Status,
 			&data.Network, &data.HorizonURL, &data.TxHash,
-			&data.EnvelopeXdr, &data.ResultXdr, &data.ResultMetaXdr,
+			&data.EnvelopeXdr, &data.ResultXdr, &data.ResultMetaXdr, &pinnedEndpoint,
 			&data.SimRequestJSON, &data.SimResponseJSON, &envFP, &data.ErstVersion, &data.SchemaVersion,
 		)
 		if scanErr != nil {
@@ -376,6 +404,9 @@ func (s *Store) List(ctx context.Context, limit int) ([]*Data, error) {
 		}
 		if envFP.Valid {
 			data.EnvFingerprint = envFP.String
+		}
+		if pinnedEndpoint.Valid {
+			data.PinnedEndpoint = pinnedEndpoint.String
 		}
 
 		// Parse timestamps
