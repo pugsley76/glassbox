@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	"github.com/dotandev/glassbox/internal/abi"
 )
 
 const (

@@ -29,8 +29,8 @@ Examples:
 	RunE: runTraceCompare,
 }
 
-// traceCmd is the parent command for trace operations
-var traceCmd = &cobra.Command{
+// traceCompareParentCmd is the parent command for trace sub-commands
+var traceCompareParentCmd = &cobra.Command{
 	Use:     "trace",
 	GroupID: "utility",
 	Short:   "Manage execution traces",
@@ -56,9 +56,9 @@ func init() {
 	traceCompareCmd.Flags().StringVar(&traceCompareBaselineNameFlag, "baseline-name", "Baseline", "Name for the baseline trace in output")
 	traceCompareCmd.Flags().StringVar(&traceCompareCurrentNameFlag, "current-name", "Current", "Name for the current trace in output")
 
-	traceCmd.AddCommand(traceCompareCmd)
-	traceCmd.AddCommand(traceSaveCmd)
-	rootCmd.AddCommand(traceCmd)
+	traceCompareParentCmd.AddCommand(traceCompareCmd)
+	traceCompareParentCmd.AddCommand(traceSaveCmd)
+	rootCmd.AddCommand(traceCompareParentCmd)
 }
 
 func runTraceCompare(cmd *cobra.Command, args []string) error {

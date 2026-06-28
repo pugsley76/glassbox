@@ -170,7 +170,9 @@ func (h *RegressionHarness) testTransaction(
 	}
 
 	if txHash == "" {
-		result.ErrorMessage = "transaction hash is empty; skip this entry"
+		result.ErrorMessage = "transaction hash is empty — cannot test an empty hash\n" +
+			"  Fix: verify the transaction hash list from the RPC is not corrupted\n" +
+			"  Tip: re-run with --verbose to see which transactions are being fetched"
 		return result
 	}
 

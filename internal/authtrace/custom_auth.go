@@ -58,6 +58,9 @@ func (v *CustomContractAuthValidator) UnregisterContract(contractID string) {
 }
 
 func (v *CustomContractAuthValidator) ValidateContract(contractID string, method string, params []interface{}) (bool, error) {
+	if err := ValidateContractAuthInput(contractID, method); err != nil {
+		return false, err
+	}
 	handler, ok := v.contracts[contractID]
 	if !ok {
 		return false, mapCustomAuthError(fmt.Errorf("SIGNER_NOT_FOUND: no handler registered for contract: %s", contractID))

@@ -230,3 +230,142 @@ func sha256hash(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }
+
+// ── DiscoverLocalSymbols — WASM magic byte validation ────────────────────────
+
+// TestDiscoverLocalSymbols_BadMagicFile_AddedToWarnings verifies that a file
+// ending in .wasm but not starting with the WASM magic bytes (\0asm) is
+// skipped with a warning rather than being silently hashed and indexed.
+// This prevents corrupt or misnamed files from poisoning the hash table.
+func TestDiscoverLocalSymbols_BadMagicFile_AddedToWarnings(t *testing.T) {
+	dir := t.TempDir()
+	targetDir := filepath.Join(dir, "target", "wasm32-unknown-unknown", "release")
+	require.NoError(t, os.MkdirAll(targetDir, 0755))
+
+	// Write a file named .wasm but with ELF magic bytes — not valid WASM.
+	badContent := []byte{0x7f, 0x45, 0x4c, 0x46, 0x00, 0x00, 0x00, 0x00}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(targetDir, "fake.wasm"), badContent, 0644))
+
+	// Also write a genuinely valid WASM file.
+	goodContent := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(targetDir, "real.wasm"), goodContent, 0644))
+
+	result, err := DiscoverLocalSymbols(dir)
+	require.NoError(t, err, "bad magic file should produce a warning, not an error")
+	require.NotNil(t, result)
+
+	// Only the valid WASM should be indexed.
+	assert.Len(t, result.Found, 1, "only the valid WASM should be in Found")
+	// The bad file must appear as a warning.
+	assert.Len(t, result.Warnings, 1, "should have one warning for the bad-magic file")
+	assert.Contains(t, result.Warnings[0], "fake.wasm",
+		"warning should name the offending file")
+	assert.Contains(t, result.Warnings[0], "magic",
+		"warning should mention WASM magic bytes")
+}
+
+// TestDiscoverLocalSymbols_TooSmallFile_NotIndexed verifies that a .wasm file
+// shorter than 4 bytes (cannot contain a valid magic number) is skipped.
+func TestDiscoverLocalSymbols_TooSmallFile_NotIndexed(t *testing.T) {
+	dir := t.TempDir()
+	targetDir := filepath.Join(dir, "target", "wasm32-unknown-unknown", "release")
+	require.NoError(t, os.MkdirAll(targetDir, 0755))
+
+	// Write a 2-byte file named .wasm — too short to hold magic bytes.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(targetDir, "tiny.wasm"), []byte{0x00, 0x61}, 0644))
+
+	result, err := DiscoverLocalSymbols(dir)
+	require.NoError(t, err)
+	assert.Empty(t, result.Found, "too-small file should not be indexed")
+	assert.Len(t, result.Warnings, 1, "should warn about the too-small file")
+}
+
+// TestDiscoverLocalSymbols_AllValidWasm_NoWarnings verifies that a directory
+// containing only valid WASM files produces no warnings.
+func TestDiscoverLocalSymbols_AllValidWasm_NoWarnings(t *testing.T) {
+	dir := t.TempDir()
+	targetDir := filepath.Join(dir, "target", "wasm32-unknown-unknown", "release")
+	require.NoError(t, os.MkdirAll(targetDir, 0755))
+
+	goodContent := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(targetDir, "a.wasm"), goodContent, 0644))
+
+	result, err := DiscoverLocalSymbols(dir)
+	require.NoError(t, err)
+	assert.Len(t, result.Found, 1)
+	assert.Empty(t, result.Warnings, "valid WASM files should not produce warnings")
+}
+
+// ── DiscoverLocalSymbols — projectRoot input sanitisation ────────────────────
+
+// TestDiscoverLocalSymbols_WhitespaceOnlyRoot_ReturnsError verifies that a
+// whitespace-only projectRoot is treated the same as an empty root — an
+// explicit error is returned immediately without touching the filesystem.
+func TestDiscoverLocalSymbols_WhitespaceOnlyRoot_ReturnsError(t *testing.T) {
+	result, err := DiscoverLocalSymbols("   ")
+	assert.Nil(t, result)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "projectRoot must not be empty",
+		"whitespace-only root should produce the same 'must not be empty' error")
+}
+
+// TestDiscoverLocalSymbols_NullByteInRoot_ReturnsError verifies that a
+// projectRoot containing a null byte is rejected before any filesystem access.
+func TestDiscoverLocalSymbols_NullByteInRoot_ReturnsError(t *testing.T) {
+	result, err := DiscoverLocalSymbols("/valid/path\x00injection")
+	assert.Nil(t, result)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "null bytes",
+		"null byte in projectRoot should produce a clear error")
+}
+
+// ── CheckHashMismatch — message quality ──────────────────────────────────────
+
+// TestCheckHashMismatch_MessageSaysBuildMismatch verifies that the error
+// message no longer says "opt-level mismatch" (which was misleading) and
+// instead uses broader language like "build mismatch" or "hash mismatch".
+func TestCheckHashMismatch_MessageSaysBuildMismatch(t *testing.T) {
+	dir := t.TempDir()
+	wasmPath := filepath.Join(dir, "contract.wasm")
+	content := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+	require.NoError(t, os.WriteFile(wasmPath, content, 0644))
+
+	err := CheckHashMismatch(wasmPath, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	require.Error(t, err)
+
+	msg := err.Error()
+	// Must not use the misleading "opt-level mismatch" wording.
+	assert.NotContains(t, msg, "opt-level mismatch",
+		"error message should not say 'opt-level mismatch' — the cause may be unrelated to opt-level")
+	// Must use broader, more accurate language.
+	assert.True(t,
+		strings.Contains(msg, "build mismatch") || strings.Contains(msg, "hash mismatch"),
+		"error should describe the mismatch in general terms, got: %q", msg)
+	// Must still include the remediation hint.
+	assert.Contains(t, msg, "cargo build",
+		"error should still suggest cargo build as a remedy")
+}
+
+// ── hasWasmMagic — unit tests ─────────────────────────────────────────────────
+
+func TestHasWasmMagic_ValidMagic_ReturnsTrue(t *testing.T) {
+	data := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+	assert.True(t, hasWasmMagic(data))
+}
+
+func TestHasWasmMagic_InvalidMagic_ReturnsFalse(t *testing.T) {
+	// ELF magic
+	assert.False(t, hasWasmMagic([]byte{0x7f, 0x45, 0x4c, 0x46}))
+	// PDF header
+	assert.False(t, hasWasmMagic([]byte{'%', 'P', 'D', 'F'}))
+}
+
+func TestHasWasmMagic_TooShort_ReturnsFalse(t *testing.T) {
+	assert.False(t, hasWasmMagic([]byte{0x00, 0x61}))
+	assert.False(t, hasWasmMagic(nil))
+	assert.False(t, hasWasmMagic([]byte{}))
+}

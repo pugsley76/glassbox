@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
-	"github.com/dotandev/glassbox/internal/abi"
 	"github.com/dotandev/glassbox/internal/dwarf"
 	"github.com/dotandev/glassbox/internal/session"
 	"github.com/dotandev/glassbox/internal/visualizer"

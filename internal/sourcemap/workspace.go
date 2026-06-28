@@ -200,10 +200,14 @@ func (wa *WorkspaceAggregator) updateWorkspaceMembership(ws *WorkspaceSource) {
 
 	// Update all crates to mark workspace membership
 	if workspaceRoot != "" {
-		for i := range ws.CrateInfo {
-			ws.CrateInfo[i].WorkspaceMember = workspaceRoot
+		for crateID := range ws.CrateInfo {
+			info := ws.CrateInfo[crateID]
+			info.WorkspaceMember = workspaceRoot
+			ws.CrateInfo[crateID] = info
 		}
-		ws.CrateInfo[workspaceRoot].Dependencies = workspaceMembers
+		rootInfo := ws.CrateInfo[workspaceRoot]
+		rootInfo.Dependencies = workspaceMembers
+		ws.CrateInfo[workspaceRoot] = rootInfo
 	}
 }
 

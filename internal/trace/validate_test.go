@@ -4,6 +4,7 @@
 package trace
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
@@ -425,5 +426,77 @@ func TestTraceInputError_Formatting(t *testing.T) {
 				t.Errorf("TraceInputError.Error() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// ── Source mapping validation ────────────────────────────────────────────────
+
+func TestValidateSourceMapping_UnknownQuality_HasActionableDiagnostic(t *testing.T) {
+	// When source mapping fails to resolve, the trace validation should surface
+	// a diagnostic that includes the contract hash and actionable hints.
+	tr := NewExecutionTrace("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 0)
+	tr.AddState(ExecutionState{
+		Operation:  "contract_call",
+		ContractID: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+		Function:   "transfer",
+		Timestamp:  time.Now(),
+	})
+
+	issues := ValidateExecutionTrace(tr)
+	found := false
+	for _, issue := range issues {
+		if strings.Contains(issue, "source") || strings.Contains(issue, "DWARF") || strings.Contains(issue, "contract") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected at least one issue mentioning source/DWARF/contract for trace with unresolved source mapping, got: %v", issues)
+	}
+}
+
+func TestSplitPane_NoSource_ContainsContractSourceHint(t *testing.T) {
+	node := NewTraceNode("call-1", "contract_call")
+	node.ContractID = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC"
+	node.Function = "transfer"
+
+	var buf bytes.Buffer
+	pane := &SplitPane{Width: 80, TraceRows: 6, SrcRows: 8}
+	pane.Render(&buf, node, nil)
+
+	out := buf.String()
+	if !strings.Contains(out, "--contract-source") {
+		t.Errorf("split pane no-source output should suggest --contract-source, got:\n%s", out)
+	}
+	if !strings.Contains(out, "--skip-source-mapping") {
+		t.Errorf("split pane no-source output should suggest --skip-source-mapping, got:\n%s", out)
+	}
+	if !strings.Contains(out, "debug = true") {
+		t.Errorf("split pane no-source output should suggest recompiling with debug=true, got:\n%s", out)
+	}
+}
+
+func TestValidateSourceMapping_ValidTrace_NoSourceWarning(t *testing.T) {
+	// A valid trace with proper steps should not raise source-mapping warnings
+	// when validation is run independently.
+	tr := NewExecutionTrace("abc123", 0)
+	for i := 0; i < 3; i++ {
+		tr.AddState(ExecutionState{
+			Operation:  "contract_call",
+			ContractID: "CTEST",
+			Function:   "mint",
+			Timestamp:  time.Now(),
+		})
+	}
+
+	issues := ValidateExecutionTrace(tr)
+	var sourceWarnings []string
+	for _, issue := range issues {
+		if strings.Contains(strings.ToLower(issue), "source") && strings.Contains(strings.ToLower(issue), "mapping") {
+			sourceWarnings = append(sourceWarnings, issue)
+		}
+	}
+	if len(sourceWarnings) > 0 {
+		t.Errorf("valid trace should not produce source mapping warnings, got: %v", sourceWarnings)
 	}
 }

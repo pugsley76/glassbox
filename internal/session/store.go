@@ -129,21 +129,43 @@ func (s *Store) initSchema() error {
 	if err := s.ensureColumn("sessions", "name", "TEXT"); err != nil {
 		return err
 	}
+	if err := s.ensureColumn("sessions", "pinned_endpoint", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("sessions", "env_fingerprint", "TEXT"); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_session_name ON sessions(name) WHERE name IS NOT NULL AND name != ''`); err != nil {
 		return fmt.Errorf("failed to create session name index: %w", err)
 	}
 
-	hasPinnedEndpoint, err := s.columnExists("sessions", "pinned_endpoint")
+	return nil
+}
+
+// columnExists checks if a column exists in a table.
+func (s *Store) columnExists(table, column string) (bool, error) {
+	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
-		return err
+		return false, fmt.Errorf("failed to inspect %s schema: %w", table, err)
 	}
-	if !hasPinnedEndpoint {
-		if _, err := s.db.Exec(`ALTER TABLE sessions ADD COLUMN pinned_endpoint TEXT`); err != nil {
-			return fmt.Errorf("failed to migrate sessions schema: %w", err)
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var defaultValue interface{}
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return false, fmt.Errorf("failed to scan %s schema: %w", table, err)
+		}
+		if name == column {
+			return true, nil
 		}
 	}
-
-	return nil
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 func (s *Store) ensureColumn(table, column, definition string) error {
@@ -205,10 +227,65 @@ func (s *Store) SaveWithValidation(ctx context.Context, data *Data) error {
 	return s.Save(ctx, data)
 }
 
-// Save persists a session to the database
+// Save persists a session to the database after validating required fields.
+// It performs inline validation equivalent to SaveWithValidation but without
+// the full integrity-report formatting. Prefer SaveWithValidation when the
+// caller cannot guarantee the Data has already been validated externally.
 func (s *Store) Save(ctx context.Context, data *Data) error {
 	if data.ID == "" {
 		return fmt.Errorf("session ID is required")
+	}
+	if data.TxHash == "" {
+		return fmt.Errorf(
+			"session transaction hash is required\n" +
+				"  Fix: run 'glassbox debug <tx-hash>' to create a session with a valid transaction hash",
+		)
+	}
+	if data.Network == "" {
+		return fmt.Errorf(
+			"session network is required\n" +
+				"  Fix: provide a network with --network testnet (or mainnet, futurenet)",
+		)
+	}
+	validNetworks := map[string]bool{"testnet": true, "mainnet": true, "futurenet": true}
+	if !validNetworks[data.Network] {
+		return fmt.Errorf(
+			"unsupported network %q — must be one of: testnet, mainnet, futurenet\n"+
+				"  Fix: re-run with --network testnet (or mainnet, futurenet)",
+			data.Network,
+		)
+	}
+	if data.Status == "" {
+		data.Status = "active"
+	}
+	validStatuses := map[string]bool{
+		"active": true, "saved": true, "resumed": true,
+		"recovered": true, "expired": true,
+	}
+	if !validStatuses[data.Status] {
+		return fmt.Errorf(
+			"invalid session status %q — must be one of: active, saved, resumed, recovered, expired\n"+
+				"  Fix: set a valid status when creating the session",
+			data.Status,
+		)
+	}
+	if data.HorizonURL == "" && data.Network != "" {
+		// Auto-populate known Horizon URLs for convenience.
+		switch data.Network {
+		case "testnet":
+			data.HorizonURL = "https://horizon-testnet.stellar.org"
+		case "mainnet":
+			data.HorizonURL = "https://horizon.stellar.org"
+		case "futurenet":
+			data.HorizonURL = "https://horizon-futurenet.stellar.org"
+		}
+	}
+	if data.Name != "" && len(data.Name) > 128 {
+		return fmt.Errorf(
+			"session name is too long (%d characters, max 128)\n"+
+				"  Fix: provide a shorter name with --name",
+			len(data.Name),
+		)
 	}
 
 	now := time.Now()
@@ -218,6 +295,10 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 	data.LastAccessAt = now
 	data.SchemaVersion = SchemaVersion
 	data.ErstVersion = version.Version
+
+	if data.EnvFingerprint == "" {
+		data.EnvFingerprint = BuildEnvFingerprint()
+	}
 
 	query := `
 	INSERT INTO sessions (
@@ -258,6 +339,60 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 	return nil
 }
 
+// SavePreservingSchemaVersion persists a session without bumping schema_version
+// to the current constant. It exists for tests that need to seed rows with
+// specific schema versions.
+func (s *Store) SavePreservingSchemaVersion(ctx context.Context, data *Data) error {
+	if data.ID == "" {
+		return fmt.Errorf("session ID is required")
+	}
+
+	now := time.Now()
+	if data.CreatedAt.IsZero() {
+		data.CreatedAt = now
+	}
+	data.LastAccessAt = now
+
+	if data.EnvFingerprint == "" {
+		data.EnvFingerprint = BuildEnvFingerprint()
+	}
+
+	query := `
+	INSERT INTO sessions (
+		id, name, created_at, last_access_at, status, network, horizon_url, tx_hash,
+		envelope_xdr, result_xdr, result_meta_xdr, pinned_endpoint,
+		sim_request_json, sim_response_json, env_fingerprint, GLASSBOX_version, schema_version
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		name = excluded.name,
+		last_access_at = excluded.last_access_at,
+		status = excluded.status,
+		network = excluded.network,
+		horizon_url = excluded.horizon_url,
+		tx_hash = excluded.tx_hash,
+		envelope_xdr = excluded.envelope_xdr,
+		result_xdr = excluded.result_xdr,
+		result_meta_xdr = excluded.result_meta_xdr,
+		pinned_endpoint = excluded.pinned_endpoint,
+		sim_request_json = excluded.sim_request_json,
+		sim_response_json = excluded.sim_response_json,
+		env_fingerprint = excluded.env_fingerprint,
+		GLASSBOX_version = excluded.GLASSBOX_version,
+		schema_version = excluded.schema_version
+	`
+
+	_, err := s.db.ExecContext(ctx, query,
+		data.ID, data.Name, data.CreatedAt, data.LastAccessAt, data.Status,
+		data.Network, data.HorizonURL, data.TxHash,
+		data.EnvelopeXdr, data.ResultXdr, data.ResultMetaXdr, data.PinnedEndpoint,
+		data.SimRequestJSON, data.SimResponseJSON, data.EnvFingerprint, data.ErstVersion, data.SchemaVersion,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save session: %w", err)
+	}
+	return nil
+}
+
 // Load retrieves a session by ID
 func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 	query := `
@@ -268,23 +403,7 @@ func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 	WHERE id = ?
 	`
 
-	var data Data
-	var createdAt, lastAccessAt string
-	var pinnedEndpoint sql.NullString
-	var envFP sql.NullString
-	err := s.db.QueryRowContext(ctx, query, sessionID).Scan(
-		&data.ID, &data.Name, &createdAt, &lastAccessAt, &data.Status,
-		&data.Network, &data.HorizonURL, &data.TxHash,
-		&data.EnvelopeXdr, &data.ResultXdr, &data.ResultMetaXdr, &pinnedEndpoint,
-		&data.SimRequestJSON, &data.SimResponseJSON, &envFP, &data.ErstVersion, &data.SchemaVersion,
-	)
-	if envFP.Valid {
-		data.EnvFingerprint = envFP.String
-	}
-	if pinnedEndpoint.Valid {
-		data.PinnedEndpoint = pinnedEndpoint.String
-	}
-
+	data, err := s.scanSessionRow(s.db.QueryRowContext(ctx, query, sessionID))
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf(
 			"session not found: %s\n"+
@@ -300,22 +419,29 @@ func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 		)
 	}
 
-	// Parse timestamps
-	if data.CreatedAt, err = time.Parse(time.RFC3339, createdAt); err != nil {
-		return nil, fmt.Errorf("failed to parse created_at: %w", err)
+	if schemaErr := ValidateSchemaVersion(data.SchemaVersion, data.ID); schemaErr != nil {
+		return nil, schemaErr
 	}
-	if data.LastAccessAt, err = time.Parse(time.RFC3339, lastAccessAt); err != nil {
-		return nil, fmt.Errorf("failed to parse last_access_at: %w", err)
+
+	upgraded, upgradeErr := UpgradeSessionData(data)
+	if upgradeErr != nil {
+		return nil, upgradeErr
 	}
 
 	// Update last_access_at on load
 	data.LastAccessAt = time.Now()
-	updateQuery := `UPDATE sessions SET last_access_at = ? WHERE id = ?`
-	if _, updateErr := s.db.ExecContext(ctx, updateQuery, data.LastAccessAt, sessionID); updateErr != nil {
-		logger.Logger.Warn("Failed to update last_access_at", "error", updateErr)
+	if upgraded {
+		if saveErr := s.Save(ctx, data); saveErr != nil {
+			return nil, fmt.Errorf("failed to persist upgraded session %q: %w", sessionID, saveErr)
+		}
+	} else {
+		updateQuery := `UPDATE sessions SET last_access_at = ? WHERE id = ?`
+		if _, updateErr := s.db.ExecContext(ctx, updateQuery, data.LastAccessAt, sessionID); updateErr != nil {
+			logger.Logger.Warn("Failed to update last_access_at", "error", updateErr)
+		}
 	}
 
-	return &data, nil
+	return data, nil
 }
 
 // LoadByName retrieves a saved session snapshot by its user-facing bookmark name.
@@ -347,16 +473,22 @@ func (s *Store) List(ctx context.Context, limit int) ([]*Data, error) {
 		limit = 50
 	}
 
-	query := `
+	queryBase := `
 	SELECT id, name, created_at, last_access_at, status, network, horizon_url, tx_hash,
 	       envelope_xdr, result_xdr, result_meta_xdr, pinned_endpoint,
 	       sim_request_json, sim_response_json, env_fingerprint, GLASSBOX_version, schema_version
 	FROM sessions
 	ORDER BY last_access_at DESC
-	LIMIT ?
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, limit)
+	var rows *sql.Rows
+	var err error
+	if limit > 0 {
+		query := queryBase + "LIMIT ?"
+		rows, err = s.db.QueryContext(ctx, query, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, queryBase)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to list sessions: %w", err)
 	}
@@ -364,36 +496,11 @@ func (s *Store) List(ctx context.Context, limit int) ([]*Data, error) {
 
 	var sessions []*Data
 	for rows.Next() {
-		var data Data
-		var createdAt, lastAccessAt string
-		var pinnedEndpoint sql.NullString
-
-		envFP := sql.NullString{}
-		scanErr := rows.Scan(
-			&data.ID, &data.Name, &createdAt, &lastAccessAt, &data.Status,
-			&data.Network, &data.HorizonURL, &data.TxHash,
-			&data.EnvelopeXdr, &data.ResultXdr, &data.ResultMetaXdr, &pinnedEndpoint,
-			&data.SimRequestJSON, &data.SimResponseJSON, &envFP, &data.ErstVersion, &data.SchemaVersion,
-		)
+		data, scanErr := s.scanSessionRow(rows)
 		if scanErr != nil {
 			return nil, fmt.Errorf("failed to scan session: %w", scanErr)
 		}
-		if envFP.Valid {
-			data.EnvFingerprint = envFP.String
-		}
-		if pinnedEndpoint.Valid {
-			data.PinnedEndpoint = pinnedEndpoint.String
-		}
-
-		// Parse timestamps
-		if data.CreatedAt, scanErr = time.Parse(time.RFC3339, createdAt); scanErr != nil {
-			return nil, fmt.Errorf("failed to parse created_at: %w", scanErr)
-		}
-		if data.LastAccessAt, scanErr = time.Parse(time.RFC3339, lastAccessAt); scanErr != nil {
-			return nil, fmt.Errorf("failed to parse last_access_at: %w", scanErr)
-		}
-
-		sessions = append(sessions, &data)
+		sessions = append(sessions, data)
 	}
 
 	if rowsErr := rows.Err(); rowsErr != nil {
@@ -477,6 +584,42 @@ func (s *Store) Cleanup(ctx context.Context, ttl time.Duration, maxSessions int)
 // Close closes the database connection
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+type sessionRowScanner interface {
+	Scan(dest ...interface{}) error
+}
+
+func (s *Store) scanSessionRow(row sessionRowScanner) (*Data, error) {
+	var data Data
+	var createdAt, lastAccessAt string
+	var pinnedEndpoint sql.NullString
+	var envFP sql.NullString
+
+	err := row.Scan(
+		&data.ID, &data.Name, &createdAt, &lastAccessAt, &data.Status,
+		&data.Network, &data.HorizonURL, &data.TxHash,
+		&data.EnvelopeXdr, &data.ResultXdr, &data.ResultMetaXdr, &pinnedEndpoint,
+		&data.SimRequestJSON, &data.SimResponseJSON, &envFP, &data.ErstVersion, &data.SchemaVersion,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if pinnedEndpoint.Valid {
+		data.PinnedEndpoint = pinnedEndpoint.String
+	}
+	if envFP.Valid {
+		data.EnvFingerprint = envFP.String
+	}
+
+	if data.CreatedAt, err = time.Parse(time.RFC3339, createdAt); err != nil {
+		return nil, fmt.Errorf("failed to parse created_at: %w", err)
+	}
+	if data.LastAccessAt, err = time.Parse(time.RFC3339, lastAccessAt); err != nil {
+		return nil, fmt.Errorf("failed to parse last_access_at: %w", err)
+	}
+
+	return &data, nil
 }
 
 // GenerateID creates a new session ID from transaction hash and timestamp
@@ -665,6 +808,25 @@ func ValidateIntegrity(data *Data) *IntegrityReport {
 				data.SchemaVersion, SchemaVersion,
 			),
 			Hint: "Upgrade Glassbox to a newer release to open sessions created by a more recent version.",
+		})
+	} else if data.SchemaVersion < MinSupportedSchemaVersion {
+		report.SchemaCompatible = false
+		report.Issues = append(report.Issues, IntegrityIssue{
+			Field: "SchemaVersion",
+			Description: fmt.Sprintf(
+				"session schema version %d is too old to load (minimum supported: %d, current: %d)",
+				data.SchemaVersion, MinSupportedSchemaVersion, SchemaVersion,
+			),
+			Hint: "Re-run 'glassbox debug <tx-hash>' to recreate the session with the current format.",
+		})
+	}
+
+	// Optional: Name length limit
+	if len(data.Name) > 128 {
+		report.Issues = append(report.Issues, IntegrityIssue{
+			Field:       "Name",
+			Description: fmt.Sprintf("session name is too long (%d characters, max 128)", len(data.Name)),
+			Hint:        "Shorten the bookmark name and re-save with 'glassbox session save --name <shorter-name>'.",
 		})
 	}
 

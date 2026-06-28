@@ -6,6 +6,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,6 +103,89 @@ func TestCheckpoint_IsOrphaned_DeadPID(t *testing.T) {
 	// We expect this to be orphaned, but it might not be if the OS wraps pids.
 	// At minimum the call must not panic.
 	_ = cp.IsOrphaned()
+}
+
+// ─── WriteCheckpoint validation ──────────────────────────────────────────────
+
+func TestWriteCheckpoint_NilCheckpoint_ReturnsError(t *testing.T) {
+	err := WriteCheckpoint(nil)
+	if err == nil {
+		t.Fatal("expected error for nil checkpoint")
+	}
+}
+
+func TestWriteCheckpoint_MissingSessionID_ReturnsError(t *testing.T) {
+	cp := &Checkpoint{TxHash: "abc", Network: "testnet"}
+	err := WriteCheckpoint(cp)
+	if err == nil {
+		t.Fatal("expected error for missing SessionID")
+	}
+	if !strings.Contains(err.Error(), "session ID") {
+		t.Errorf("error should mention 'session ID', got: %v", err)
+	}
+}
+
+func TestWriteCheckpoint_MissingTxHash_ReturnsError(t *testing.T) {
+	cp := &Checkpoint{SessionID: "s1", Network: "testnet"}
+	err := WriteCheckpoint(cp)
+	if err == nil {
+		t.Fatal("expected error for missing TxHash")
+	}
+	if !strings.Contains(err.Error(), "transaction hash") {
+		t.Errorf("error should mention 'transaction hash', got: %v", err)
+	}
+}
+
+func TestWriteCheckpoint_MissingNetwork_ReturnsError(t *testing.T) {
+	cp := &Checkpoint{SessionID: "s1", TxHash: "abc"}
+	err := WriteCheckpoint(cp)
+	if err == nil {
+		t.Fatal("expected error for missing Network")
+	}
+	if !strings.Contains(err.Error(), "network") {
+		t.Errorf("error should mention 'network', got: %v", err)
+	}
+}
+
+func TestWriteCheckpoint_InvalidNetwork_ReturnsError(t *testing.T) {
+	cp := &Checkpoint{SessionID: "s1", TxHash: "abc", Network: "devnet"}
+	err := WriteCheckpoint(cp)
+	if err == nil {
+		t.Fatal("expected error for invalid Network")
+	}
+	if !strings.Contains(err.Error(), "devnet") {
+		t.Errorf("error should name the invalid network, got: %v", err)
+	}
+}
+
+func TestWriteCheckpoint_ZeroStartedAt_AutoPopulated(t *testing.T) {
+	overrideCheckpointDir(t)
+
+	cp := &Checkpoint{SessionID: "s1", TxHash: "abc", Network: "testnet"}
+	require.NoError(t, WriteCheckpoint(cp))
+
+	loaded, err := LoadCheckpoint()
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.False(t, loaded.StartedAt.IsZero(), "StartedAt should be auto-populated")
+}
+
+func TestWriteCheckpoint_AllValidFields_Succeeds(t *testing.T) {
+	overrideCheckpointDir(t)
+
+	cp := &Checkpoint{
+		SessionID: "valid-session",
+		TxHash:    "abc123def456",
+		Network:   "futurenet",
+		StartedAt: time.Now().Truncate(time.Second),
+	}
+	require.NoError(t, WriteCheckpoint(cp))
+
+	loaded, err := LoadCheckpoint()
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, cp.SessionID, loaded.SessionID)
+	assert.Equal(t, cp.Network, loaded.Network)
 }
 
 func TestCheckpoint_WriteCreatesGlassboxDir(t *testing.T) {
