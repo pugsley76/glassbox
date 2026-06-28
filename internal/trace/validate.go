@@ -160,13 +160,18 @@ func ValidateEventTypeField(eventType string) string {
 //   - Trace is not nil.
 //   - States slice is not empty (empty trace → diagnostic warning).
 //   - Each state has a non-negative Step that matches its slice index.
+//   - Each state has a non-zero Timestamp (zero timestamp reduces accuracy).
+//   - Each state has at least one context field set (Operation or EventType).
+//   - States with a ContractID also have a Function (missing function reduces context).
 //   - Unrecognised EventType fields are noted with their step index.
+//   - Timestamps are monotonically non-decreasing across steps.
+//   - DiagnosticEvents count (when non-zero) matches States count.
 //
 // This is deliberately permissive: it returns all issues at once so callers can
 // choose whether to abort or merely warn.
 func ValidateExecutionTrace(t *ExecutionTrace) []string {
 	if t == nil {
-		return []string{"execution trace is nil"}
+		return []string{"trace is nil — execution trace must not be nil"}
 	}
 
 	var issues []string
@@ -181,21 +186,128 @@ func ValidateExecutionTrace(t *ExecutionTrace) []string {
 		return issues // nothing further to check on an empty trace
 	}
 
+	// DiagnosticEvents alignment: when events are present, count must match states.
+	if len(t.DiagnosticEvents) > 0 && len(t.DiagnosticEvents) != len(t.States) {
+		issues = append(issues, fmt.Sprintf(
+			"diagnostic event count (%d) does not match step count (%d) — "+
+				"trace accuracy may be reduced; event-to-step mapping will be approximate. "+
+				"This can happen when the simulator emits events outside of tracked steps",
+			len(t.DiagnosticEvents), len(t.States),
+		))
+	}
+
 	// Per-step checks.
 	for i, state := range t.States {
+		prefix := fmt.Sprintf("step %d", i)
+
+		// Step index integrity.
 		if state.Step != i {
 			issues = append(issues, fmt.Sprintf(
-				"step index mismatch at position %d: state.Step=%d "+
-					"(trace may have been modified after construction; trace accuracy may be affected)",
-				i, state.Step,
+				"%s: index mismatch (state.Step=%d) — "+
+					"trace may have been modified after construction; accuracy may be affected",
+				prefix, state.Step,
 			))
 		}
+
+		// Timestamp presence — zero timestamps break timeline rendering.
+		if state.Timestamp.IsZero() {
+			issues = append(issues, fmt.Sprintf(
+				"%s: timestamp is zero — temporal context is missing for this step. "+
+					"Timeline and duration calculations will be inaccurate. "+
+					"Check that the simulator is emitting timestamps for all events",
+				prefix,
+			))
+		}
+
+		// Monotonic timestamp check (only when both current and previous are non-zero).
+		if i > 0 && !state.Timestamp.IsZero() && !t.States[i-1].Timestamp.IsZero() {
+			if state.Timestamp.Before(t.States[i-1].Timestamp) {
+				issues = append(issues, fmt.Sprintf(
+					"%s: timestamp %s is before previous step timestamp %s — "+
+						"non-monotonic timestamps will corrupt timeline ordering in exports",
+					prefix,
+					state.Timestamp.Format("15:04:05.000"),
+					t.States[i-1].Timestamp.Format("15:04:05.000"),
+				))
+			}
+		}
+
+		// Context completeness: at least one of Operation or EventType must be set.
+		if strings.TrimSpace(state.Operation) == "" && strings.TrimSpace(state.EventType) == "" {
+			issues = append(issues, fmt.Sprintf(
+				"%s: neither Operation nor EventType is set — "+
+					"this step has no context and will appear as %q in exports. "+
+					"Verify the simulator is populating event type fields",
+				prefix, fmt.Sprintf("step %d", i),
+			))
+		}
+
+		// Contract call context: ContractID without Function reduces usefulness.
+		if strings.TrimSpace(state.ContractID) != "" && strings.TrimSpace(state.Function) == "" {
+			issues = append(issues, fmt.Sprintf(
+				"%s: ContractID %q is set but Function is empty — "+
+					"contract call context is incomplete; exports will not show the called function. "+
+					"Check that the ABI decoder is resolving function names",
+				prefix, state.ContractID,
+			))
+		}
+
+		// Event type recognition.
 		if diag := ValidateEventTypeField(state.EventType); diag != "" {
-			issues = append(issues, fmt.Sprintf("step %d: %s", i, diag))
+			issues = append(issues, fmt.Sprintf("%s: %s", prefix, diag))
 		}
 	}
 
 	return issues
+}
+
+// ValidateTraceAccuracy performs a higher-level accuracy audit on a complete
+// ExecutionTrace and returns a summary suitable for surfacing to users before
+// export. Unlike ValidateExecutionTrace (which checks structural correctness),
+// this function focuses on whether the trace is likely to produce an accurate
+// and useful export.
+//
+// Returns nil when the trace passes all accuracy checks.
+// Returns a *TraceInputError when one or more accuracy problems are found.
+func ValidateTraceAccuracy(t *ExecutionTrace) error {
+	if t == nil {
+		return &TraceInputError{Failures: []string{
+			"execution trace is nil — cannot assess accuracy of a nil trace",
+		}}
+	}
+
+	issues := ValidateExecutionTrace(t)
+	if len(issues) == 0 {
+		return nil
+	}
+
+	// Separate hard accuracy failures from soft warnings.
+	// Hard: index mismatch, non-monotonic timestamps, missing tx hash.
+	// Soft: missing context fields, zero timestamps (recoverable).
+	var hard, soft []string
+	for _, issue := range issues {
+		if strings.Contains(issue, "index mismatch") ||
+			strings.Contains(issue, "non-monotonic") ||
+			strings.Contains(issue, "diagnostic event count") {
+			hard = append(hard, issue)
+		} else {
+			soft = append(soft, issue)
+		}
+	}
+
+	if len(hard) == 0 && len(soft) == 0 {
+		return nil
+	}
+
+	var failures []string
+	for _, h := range hard {
+		failures = append(failures, fmt.Sprintf("[accuracy] %s", h))
+	}
+	for _, s := range soft {
+		failures = append(failures, fmt.Sprintf("[context] %s", s))
+	}
+
+	return &TraceInputError{Failures: failures}
 }
 
 // truncateForDiag trims a string for use in diagnostic messages.
@@ -204,126 +316,6 @@ func truncateForDiag(s string) string {
 		return s[:17] + "..."
 	}
 	return s
-}
-
-// ValidateTraceExportParams performs comprehensive validation of trace export parameters.
-// It checks the trace, format, output path, and export options for validity before export.
-// Returns a detailed error if validation fails, or nil if all checks pass.
-func ValidateTraceExportParams(trace *ExecutionTrace, format, outputPath string, opts ExportOptions) error {
-	var failures []string
-
-	// 1. Validate trace is not nil
-	if trace == nil {
-		failures = append(failures, "trace is nil — cannot export a nil trace\n"+
-			"  Fix: ensure a valid trace object is provided to the export function\n"+
-			"  This typically means the trace failed to load or deserialize correctly")
-	} else {
-		// 2. Validate trace has states
-		if len(trace.States) == 0 {
-			failures = append(failures, "trace has no execution states — no steps in trace to export\n"+
-				"  Possible causes:\n"+
-				"    - The trace was captured successfully but no execution steps were recorded\n"+
-				"    - The diagnostic events are empty or filtered out\n"+
-				"    - The trace file may be truncated or corrupted\n"+
-				"  Fix: re-run the simulation with --verbose to capture more detailed trace data")
-		}
-
-		// 3. Validate transaction hash is present
-		if strings.TrimSpace(trace.TransactionHash) == "" {
-			failures = append(failures, "trace has no transaction hash — transaction context is missing\n"+
-				"  Fix: ensure the trace was created with a valid transaction hash\n"+
-				"  This is usually set automatically when loading a trace from a file")
-		}
-
-		// 4. Validate time ordering if both times are set
-		if !trace.StartTime.IsZero() && !trace.EndTime.IsZero() && trace.EndTime.Before(trace.StartTime) {
-			failures = append(failures, "end time is before start time — trace has invalid temporal ordering\n"+
-				"  Fix: verify the trace timestamps were recorded correctly\n"+
-				"  Start: "+trace.StartTime.String()+", End: "+trace.EndTime.String())
-		}
-	}
-
-	// 5. Validate format string
-	if strings.TrimSpace(format) == "" {
-		failures = append(failures, "--export-format is empty — must specify a format\n"+
-			"  Fix: use --export-format with one of: html, markdown, json, text\n"+
-			"  Default is html if not specified during export")
-	} else {
-		normalizedFormat := strings.ToLower(strings.TrimSpace(format))
-		validFormats := map[string]bool{"html": true, "markdown": true, "md": true, "json": true, "text": true}
-		if !validFormats[normalizedFormat] {
-			failures = append(failures, fmt.Sprintf(
-				"invalid --export-format %q — unsupported format; must be one of: html, markdown, json, text\n"+
-					"  Fix: use a supported format\n"+
-					"  html     — interactive HTML (best for browsers)\n"+
-					"  markdown — GitHub-friendly markdown report\n"+
-					"  json     — machine-readable JSON\n"+
-					"  text     — plain text ASCII output",
-				format))
-		}
-	}
-
-	// 6. Validate output path
-	if strings.TrimSpace(outputPath) == "" {
-		failures = append(failures, "--export output path is empty — must specify a target file\n"+
-			"  Fix: provide an output file path (e.g., ./trace.html or /tmp/report.md)\n"+
-			"  Example: glassbox trace --export ./output/trace.html --format html input.json")
-	} else {
-		if strings.HasSuffix(outputPath, "/") || strings.HasSuffix(outputPath, "\\") {
-			failures = append(failures, fmt.Sprintf(
-				"--export path %q looks like a directory (ends with %q); provide a full file path\n"+
-					"  Fix: specify a complete filename\n"+
-					"  Example: --export ./output/trace.html instead of --export ./output/",
-				outputPath, string(outputPath[len(outputPath)-1])))
-		}
-		if strings.Contains(outputPath, "\x00") {
-			failures = append(failures, "output path contains null bytes — invalid file path\n"+
-				"  Fix: remove any null bytes from the path")
-		}
-	}
-
-	// 7. Validate Comments count and length
-	if len(opts.Comments) > 100 {
-		failures = append(failures, fmt.Sprintf(
-			"too many comments (%d) — maximum is 100 comments per export\n"+
-				"  Fix: reduce the number of comments or split the export into multiple files",
-			len(opts.Comments)))
-	}
-	for i, comment := range opts.Comments {
-		if strings.TrimSpace(comment) == "" {
-			failures = append(failures, fmt.Sprintf(
-				"comment #%d is empty or whitespace-only\n"+
-					"  Fix: provide non-empty comments or remove empty entries from the list",
-				i+1))
-		}
-		if len(comment) > 10000 {
-			failures = append(failures, fmt.Sprintf(
-				"comment #%d exceeds maximum length of 10000 characters (got %d)\n"+
-					"  Fix: shorten the comment or split it into multiple comments",
-				i+1, len(comment)))
-		}
-	}
-
-	// 8. Validate ExportOptions.SessionMetadata keys and values
-	for key, value := range opts.SessionMetadata {
-		if strings.TrimSpace(key) == "" {
-			failures = append(failures, "session metadata key is empty or whitespace-only\n"+
-				"  Fix: provide non-empty keys for all metadata entries")
-		}
-		if strings.TrimSpace(value) == "" {
-			failures = append(failures, fmt.Sprintf(
-				"session metadata value for key %q is empty or whitespace-only\n"+
-					"  Fix: provide non-empty values or omit the metadata entry", key))
-		}
-	}
-
-	if len(failures) > 0 {
-		if len(failures) == 1 {
-			return &TraceInputError{Failures: []string{failures[0]}}
-		}
-		return &TraceInputError{Failures: failures}
-	}
-	return nil
 }
 
 // ValidateJSONSchemaVersion validates a schema_version string as found in the
@@ -395,77 +387,7 @@ func joinSupportedVersions() string {
 	return strings.Join(parts, ", ")
 }
 
-// ValidateTraceFormatCompatibility checks if the trace data is suitable for the target export format.
-// Some formats have specific requirements or may produce suboptimal results with certain trace data.
-// Returns an error if the trace is fundamentally incompatible with the format, or nil if compatible.
-func ValidateTraceFormatCompatibility(trace *ExecutionTrace, format string) error {
-	if trace == nil {
-		return fmt.Errorf("trace is nil — cannot check format compatibility")
-	}
-
-	normalizedFormat := strings.ToLower(strings.TrimSpace(format))
-
-	// Format-specific validation checks
-	switch normalizedFormat {
-	case "html":
-		if len(trace.States) > 50000 {
-			return fmt.Errorf(
-				"trace has %d steps — too large for HTML export (browser may become unresponsive)\n"+
-					"  Fix: use --format json for large traces or filter the trace verbosity\n"+
-					"  Alternatively: use --trace-verbosity summary to reduce output size",
-				len(trace.States))
-		}
-
-		for i, state := range trace.States {
-			argStr := fmt.Sprintf("%v", state.Arguments)
-			if len(argStr) > 50000 {
-				return fmt.Errorf(
-					"step %d has very large arguments (%d chars) that may cause browser rendering issues in HTML format — consider using JSON format instead",
-					i, len(argStr))
-			}
-		}
-
-	case "markdown", "md":
-		if len(trace.States) > 10000 {
-			return fmt.Errorf(
-				"trace has %d steps — markdown output will be extremely long (>1MB) and difficult to view\n"+
-					"  Fix: use --format json for large traces or filter the trace verbosity",
-				len(trace.States))
-		}
-
-		for i, state := range trace.States {
-			if strings.Count(state.Error, "```") > 0 {
-				return fmt.Errorf(
-					"trace step %d error contains markdown code fence markers (```) — may break markdown formatting\n"+
-						"  This is usually OK and will be handled gracefully, but you may want to review the step details",
-					i)
-			}
-		}
-
-	case "json":
-		for i, state := range trace.States {
-			if state.Step != i {
-				return fmt.Errorf(
-					"trace step mismatch at position %d: expected step %d but got %d — trace may be corrupted",
-					i, i, state.Step)
-			}
-		}
-
-	case "text":
-		if len(trace.States) > 100000 {
-			return fmt.Errorf(
-				"trace has %d steps — plain text export will be extremely large (likely >5MB) and slow to generate\n"+
-					"  Fix: use --format json for very large traces or filter the trace verbosity",
-				len(trace.States))
-		}
-
-	default:
-		return fmt.Errorf(
-			"unsupported trace export format: %q\n"+
-				"  Supported formats: html, markdown, json, text\n"+
-				"  Fix: use --export-format with one of the supported values",
-			format)
-	}
-
-	return nil
-}
+// ValidateTraceFormatCompatibility is defined in export.go and checks
+// whether the trace data is compatible with the target export format.
+// It is documented here for discoverability: see export.go for the
+// implementation.

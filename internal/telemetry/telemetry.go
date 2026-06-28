@@ -17,7 +17,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace"
+	oteltrace "go.opentelemetry.io/otel/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -209,7 +210,7 @@ func GetEnvMetadata() EnvMetadata {
 }
 
 // GetTracer returns the global tracer instance
-func GetTracer() trace.Tracer {
+func GetTracer() oteltrace.Tracer {
 	tp := otel.GetTracerProvider()
 	return tp.Tracer("glassbox")
 }

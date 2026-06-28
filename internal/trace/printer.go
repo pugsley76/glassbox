@@ -13,6 +13,14 @@ import (
 	"github.com/fatih/color"
 )
 
+// SetNoColor globally disables ANSI colour output for the fatih/color library
+// used by the trace printer. Call this once during startup when --no-color is
+// requested so that all palette instances emit plain text regardless of how
+// PrintOptions.NoColor is set on individual calls.
+func SetNoColor(v bool) {
+	color.NoColor = v
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Options
 // ─────────────────────────────────────────────────────────────────────────────

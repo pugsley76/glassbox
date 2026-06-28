@@ -169,6 +169,264 @@ const traceMarkdownTemplate = `# Glassbox Trace Export
 
 {{ end }}`
 
+// ValidateTraceExportParams performs comprehensive validation of trace export parameters.
+// It checks the trace, format, output path, and export options for validity before export.
+// Returns an error if any validation check fails, with clear and actionable guidance.
+// All failures are collected and returned together so callers can fix them in one pass.
+func ValidateTraceExportParams(trace *ExecutionTrace, format string, outputPath string, opts ExportOptions) error {
+	var validationErrors []string
+
+	// 1. Validate trace is not nil
+	if trace == nil {
+		validationErrors = append(validationErrors, "trace is nil — cannot export a nil trace\n"+
+			"  Fix: ensure a valid trace object is provided to the export function\n"+
+			"  This typically means the trace failed to load or deserialize correctly")
+	} else {
+		// 2. Validate trace has states (no steps recorded means nothing to export)
+		if len(trace.States) == 0 {
+			validationErrors = append(validationErrors, "trace has no execution states (no steps recorded) — empty trace cannot be exported\n"+
+				"  Possible causes:\n"+
+				"    - Simulation did not produce any diagnostic events\n"+
+				"    - Transaction envelope is invalid\n"+
+				"    - Simulator version is incompatible\n"+
+				"  Fix: verify that the trace was captured correctly and contains at least one step\n"+
+				"  Tip: check that the traced transaction actually executed any code")
+		}
+
+		// 3. Validate transaction hash is present
+		if strings.TrimSpace(trace.TransactionHash) == "" {
+			validationErrors = append(validationErrors, "trace has no transaction hash — transaction context is missing\n"+
+				"  Fix: ensure the trace was created with a valid transaction hash\n"+
+				"  This is usually set automatically when loading a trace from a file")
+		}
+
+		// 4. Validate time fields are sensible
+		if trace.StartTime.IsZero() {
+			validationErrors = append(validationErrors, "trace start time is zero — missing temporal context\n"+
+				"  Fix: verify the trace was properly initialized with a start timestamp")
+		}
+		if trace.EndTime.IsZero() {
+			validationErrors = append(validationErrors, "trace end time is zero — missing temporal context\n"+
+				"  Fix: verify the trace was properly finalized with an end timestamp")
+		}
+		if !trace.StartTime.IsZero() && !trace.EndTime.IsZero() && trace.EndTime.Before(trace.StartTime) {
+			validationErrors = append(validationErrors, "trace end time is before start time — invalid temporal ordering\n"+
+				"  Fix: verify the trace timestamps were recorded correctly\n"+
+				"  Start: "+trace.StartTime.String()+", End: "+trace.EndTime.String())
+		}
+	}
+
+	// 5. Validate format string
+	if strings.TrimSpace(format) == "" {
+		validationErrors = append(validationErrors, "--export-format is empty (format is empty) — must specify a format\n"+
+			"  Fix: use --export-format with one of: html, markdown, json, text\n"+
+			"  Default is html if not specified during export")
+	} else {
+		normalizedFormat := strings.ToLower(strings.TrimSpace(format))
+		validFormats := map[string]bool{"html": true, "markdown": true, "md": true, "json": true, "text": true}
+		if !validFormats[normalizedFormat] {
+			validationErrors = append(validationErrors, fmt.Sprintf(
+				"invalid or unsupported --export-format %q — must be one of: html, markdown, json, text\n"+
+					"  Fix: use a supported format\n"+
+					"  html     — interactive HTML (best for browsers)\n"+
+					"  markdown — GitHub-friendly markdown report\n"+
+					"  json     — machine-readable JSON\n"+
+					"  text     — plain text ASCII output",
+				format))
+		}
+	}
+
+	// 6. Validate output path
+	if strings.TrimSpace(outputPath) == "" {
+		validationErrors = append(validationErrors, "output path is empty — must specify a target file\n"+
+			"  Fix: provide an output file path (e.g., ./trace.html or /tmp/report.md)\n"+
+			"  Example: glassbox trace --export ./output/trace.html --format html input.json")
+	} else {
+		// Check for directory-like paths (ending with / or \)
+		if strings.HasSuffix(outputPath, "/") || strings.HasSuffix(outputPath, "\\") {
+			validationErrors = append(validationErrors, fmt.Sprintf(
+				"output path %q looks like a directory path (ends with %q); provide a full file path\n"+
+					"  Fix: specify a complete filename\n"+
+					"  Example: --export ./output/trace.html instead of --export ./output/",
+				outputPath, string(outputPath[len(outputPath)-1])))
+		}
+
+		// Null bytes in paths are a shell-injection risk.
+		if strings.ContainsRune(outputPath, 0) {
+			validationErrors = append(validationErrors, "output path contains null bytes — invalid file path\n"+
+				"  Fix: remove any null bytes from the path")
+		}
+
+		// Check parent directory viability (can surface permission issues early)
+		parentDir := filepath.Dir(outputPath)
+		if parentDir != "." && parentDir != "" {
+			if info, err := os.Stat(parentDir); err != nil {
+				if os.IsPermission(err) {
+					validationErrors = append(validationErrors, fmt.Sprintf(
+						"output directory %q is not accessible — permission denied\n"+
+							"  Fix: ensure you have read and execute permissions on the parent directory\n"+
+							"  Check: ls -ld %s", parentDir, parentDir))
+				}
+				// Non-existent parent directory is OK — created at export time.
+			} else if !info.IsDir() {
+				validationErrors = append(validationErrors, fmt.Sprintf(
+					"output path parent %q exists but is not a directory — invalid path\n"+
+						"  Fix: provide a path where the parent is a directory\n"+
+						"  Check: ls -l %s", parentDir, parentDir))
+			}
+		}
+	}
+
+	// 7. Validate ExportOptions.Comments count and length
+	if len(opts.Comments) > 100 {
+		validationErrors = append(validationErrors, fmt.Sprintf(
+			"too many comments (%d) — maximum is 100 comments per trace export\n"+
+				"  Fix: reduce the number of comments or split into multiple exports",
+			len(opts.Comments),
+		))
+	}
+	for i, comment := range opts.Comments {
+		if len(comment) > 10000 {
+			validationErrors = append(validationErrors, fmt.Sprintf(
+				"comment #%d exceeds maximum length of 10000 characters (got %d)\n"+
+					"  Fix: shorten the comment or split it into multiple shorter comments",
+				i+1, len(comment),
+			))
+		} else if strings.TrimSpace(comment) == "" {
+			validationErrors = append(validationErrors, fmt.Sprintf(
+				"--comment index %d is empty or whitespace-only\n"+
+					"  Fix: provide non-empty comments or omit empty ones", i))
+		}
+	}
+
+	// 8. Validate ExportOptions.SessionMetadata keys and values
+	for key, value := range opts.SessionMetadata {
+		if strings.TrimSpace(key) == "" {
+			validationErrors = append(validationErrors, "session metadata key is empty or whitespace-only\n"+
+				"  Fix: provide non-empty keys for all metadata entries")
+		}
+		if strings.TrimSpace(value) == "" {
+			validationErrors = append(validationErrors, fmt.Sprintf(
+				"session metadata value for key %q is empty or whitespace-only\n"+
+					"  Fix: provide non-empty values or omit the metadata entry", key))
+		}
+	}
+
+	// Return aggregated errors if any
+	if len(validationErrors) > 0 {
+		if len(validationErrors) == 1 {
+			return fmt.Errorf("%s", validationErrors[0])
+		}
+		msg := fmt.Sprintf("%d trace export validation error(s):\n", len(validationErrors))
+		for i, err := range validationErrors {
+			msg += fmt.Sprintf("  %d. %s\n", i+1, err)
+		}
+		return fmt.Errorf("%s", strings.TrimRight(msg, "\n"))
+	}
+
+	return nil
+}
+
+// ValidateTraceFormatCompatibility checks if the trace data is suitable for the target export format.
+// Some formats have specific requirements or may produce suboptimal results with certain trace data.
+// Returns an error if the trace is fundamentally incompatible with the format, or nil if compatible.
+func ValidateTraceFormatCompatibility(trace *ExecutionTrace, format string) error {
+	if trace == nil {
+		return fmt.Errorf("trace is nil — cannot check format compatibility")
+	}
+
+	normalizedFormat := strings.ToLower(strings.TrimSpace(format))
+
+	// Format-specific validation checks
+	switch normalizedFormat {
+	case "html":
+		// HTML format handles most traces well, but check for problematic sizes
+		// Large traces may cause browser rendering issues
+		if len(trace.States) > 50000 {
+			return fmt.Errorf(
+				"trace has %d steps — too large for HTML export (browser may become unresponsive)\n"+
+					"  Fix: use --format json for large traces or filter the trace verbosity\n"+
+					"  Alternatively: use --trace-verbosity summary to reduce output size",
+				len(trace.States))
+		}
+
+		// Check for extremely large step details that could break HTML rendering.
+		// This covers both long error/operation strings and very large argument lists.
+		maxDetailSize := 1000000 // 1MB
+		for i, state := range trace.States {
+			detailSize := len(state.Error) + len(state.Operation) + len(state.Function)
+			if detailSize > maxDetailSize {
+				return fmt.Errorf(
+					"trace step %d has excessively large detail fields (%d bytes total) — incompatible with HTML export\n"+
+						"  Fix: use --format json for traces with large step details",
+					i, detailSize)
+			}
+			// Arguments are rendered as a single string in HTML; check their
+			// serialised size so the browser doesn't receive a multi-megabyte payload.
+			argStr := fmt.Sprintf("%v", state.Arguments)
+			if len(argStr) > 50000 {
+				return fmt.Errorf(
+					"trace step %d has very large arguments (%d chars) that may cause browser rendering issues — incompatible with HTML export\n"+
+						"  Fix: use --format json for traces with large argument payloads",
+					i, len(argStr))
+			}
+		}
+
+	case "markdown", "md":
+		// Markdown format requires careful handling of special characters
+		if len(trace.States) > 10000 {
+			return fmt.Errorf(
+				"trace has %d steps — markdown output will be extremely long (>1MB) and difficult to view\n"+
+					"  Fix: use --format json for large traces or filter the trace verbosity",
+				len(trace.States))
+		}
+
+		// Check for problematic markdown characters in error messages
+		for i, state := range trace.States {
+			if strings.Count(state.Error, "```") > 0 {
+				return fmt.Errorf(
+					"trace step %d error contains markdown code fence markers (`) — may break markdown formatting\n"+
+						"  This is usually OK and will be handled gracefully, but you may want to review the step details",
+					i)
+			}
+		}
+
+	case "json":
+		// JSON format is most flexible, but validate structural correctness
+		// that would prevent successful serialization or round-trip loading.
+
+		// Step indices must be sequential — a mismatch indicates a corrupted
+		// or externally-modified trace that cannot be reloaded reliably.
+		for i, state := range trace.States {
+			if state.Step != i {
+				return fmt.Errorf(
+					"trace step mismatch at position %d: expected step %d but got %d — trace may be corrupted\n"+
+						"  Fix: re-export or sanitize the trace before converting to JSON\n"+
+						"  Tip: use ExportWithResilience to auto-repair step indices",
+					i, i, state.Step)
+			}
+		}
+
+	case "text":
+		// Plain text format is permissive but may produce very large files
+		if len(trace.States) > 100000 {
+			return fmt.Errorf(
+				"trace has %d steps — plain text export will be extremely large (likely >5MB) and slow to generate\n"+
+					"  Fix: use --format json for very large traces or filter the trace verbosity",
+				len(trace.States))
+		}
+
+	default:
+		return fmt.Errorf(
+			"unsupported trace export format: %q\n"+
+				"  Supported formats: html, markdown, json, text\n"+
+				"  Fix: use --export-format with one of the supported values",
+			format)
+	}
+
+	return nil
+}
+
 func ExportExecutionTrace(trace *ExecutionTrace, format string, outputPath string) error {
 	return ExportExecutionTraceWithOptions(trace, format, outputPath, ExportOptions{})
 }
@@ -182,6 +440,16 @@ func ExportExecutionTraceWithOptions(trace *ExecutionTrace, format string, outpu
 	// Format compatibility check
 	if err := ValidateTraceFormatCompatibility(trace, format); err != nil {
 		return fmt.Errorf("trace format compatibility check failed: %w", err)
+	}
+
+	// Accuracy and context audit — surface warnings before writing the file
+	// so users can see degraded-accuracy conditions without the export failing.
+	if err := ValidateTraceAccuracy(trace); err != nil {
+		if te, ok := err.(*TraceInputError); ok {
+			for _, f := range te.Failures {
+				fmt.Fprintf(os.Stderr, "Warning: %s\n", f)
+			}
+		}
 	}
 
 	format = strings.ToLower(strings.TrimSpace(format))

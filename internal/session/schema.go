@@ -1,0 +1,149 @@
+// Copyright 2026 Glassbox Users
+// SPDX-License-Identifier: Apache-2.0
+
+package session
+
+import (
+	"fmt"
+	"strings"
+)
+
+// MinSupportedSchemaVersion is the oldest session schema version that can be
+// loaded without manual regeneration. Rows older than this must be re-debugged.
+const MinSupportedSchemaVersion = 1
+
+// SchemaUpgradeResult describes the outcome of a schema check or migration
+// attempt so callers can decide whether to abort, warn, or proceed silently.
+type SchemaUpgradeResult struct {
+	// StoredVersion is the schema version found in the session row.
+	StoredVersion int
+	// CurrentVersion is the version this binary expects.
+	CurrentVersion int
+	// NeedsUpgrade is true when StoredVersion < CurrentVersion and the row
+	// can be migrated automatically.
+	NeedsUpgrade bool
+	// Unsupported is true when StoredVersion is outside the supported range.
+	Unsupported bool
+	// FromFuture is true when StoredVersion > CurrentVersion (row was
+	// produced by a newer Glassbox binary).
+	FromFuture bool
+	// Message is a human-readable summary of the situation.
+	Message string
+}
+
+// classifySchemaVersion returns a SchemaUpgradeResult for the given stored
+// version relative to the current SchemaVersion constant.
+func classifySchemaVersion(stored int) *SchemaUpgradeResult {
+	r := &SchemaUpgradeResult{
+		StoredVersion:  stored,
+		CurrentVersion: SchemaVersion,
+	}
+
+	switch {
+	case stored == SchemaVersion:
+		r.Message = fmt.Sprintf("session schema version %d is current — no upgrade needed", stored)
+
+	case stored < MinSupportedSchemaVersion:
+		r.Unsupported = true
+		r.Message = fmt.Sprintf(
+			"session schema version %d is too old to load (minimum supported: %d, current: %d); "+
+				"re-run 'glassbox debug <tx-hash>' to recreate the session",
+			stored, MinSupportedSchemaVersion, SchemaVersion,
+		)
+
+	case stored < SchemaVersion:
+		r.NeedsUpgrade = true
+		r.Message = fmt.Sprintf(
+			"session schema version %d is outdated (current: %d); "+
+				"Glassbox will upgrade the session automatically on load",
+			stored, SchemaVersion,
+		)
+
+	case stored > SchemaVersion:
+		r.FromFuture = true
+		r.Unsupported = true
+		r.Message = fmt.Sprintf(
+			"session schema version %d was produced by a newer version of Glassbox (this binary supports up to %d); "+
+				"upgrade Glassbox to resume this session, or re-run 'glassbox debug <tx-hash>' with the current binary",
+			stored, SchemaVersion,
+		)
+	}
+
+	return r
+}
+
+// SchemaError is returned when a session's schema version is incompatible.
+// It carries structured information so callers can generate targeted
+// remediation messages.
+type SchemaError struct {
+	Result    *SchemaUpgradeResult
+	SessionID string
+}
+
+func (e *SchemaError) Error() string {
+	var sb strings.Builder
+	if e.SessionID != "" {
+		fmt.Fprintf(&sb, "session %q: %s", e.SessionID, e.Result.Message)
+	} else {
+		sb.WriteString(e.Result.Message)
+	}
+	return sb.String()
+}
+
+// IsSchemaError reports whether err is a *SchemaError.
+func IsSchemaError(err error) bool {
+	_, ok := err.(*SchemaError)
+	return ok
+}
+
+// AsSchemaError returns the *SchemaError if err is one, or nil.
+func AsSchemaError(err error) *SchemaError {
+	if se, ok := err.(*SchemaError); ok {
+		return se
+	}
+	return nil
+}
+
+// ValidateSchemaVersion returns a *SchemaError when the stored version cannot
+// be loaded or requires manual regeneration. It returns nil when the version
+// is current or can be upgraded automatically on load.
+func ValidateSchemaVersion(stored int, sessionID string) error {
+	r := classifySchemaVersion(stored)
+	if r.Unsupported {
+		return &SchemaError{Result: r, SessionID: sessionID}
+	}
+	return nil
+}
+
+// SchemaVersionSummary returns a one-line human-readable description of the
+// schema version situation, suitable for verbose output or diagnostic logs.
+func SchemaVersionSummary(stored int) string {
+	return classifySchemaVersion(stored).Message
+}
+
+// UpgradeSessionData migrates an in-memory session record from an older schema
+// version to the current SchemaVersion. It is safe to call on already-current
+// sessions and never modifies sessions from a newer binary.
+func UpgradeSessionData(data *Data) (upgraded bool, err error) {
+	if data == nil {
+		return false, fmt.Errorf("cannot upgrade nil session data")
+	}
+
+	r := classifySchemaVersion(data.SchemaVersion)
+	if r.Unsupported {
+		return false, &SchemaError{Result: r, SessionID: data.ID}
+	}
+	if !r.NeedsUpgrade {
+		return false, nil
+	}
+
+	// v0 → v1: legacy rows may lack env_fingerprint and pinned_endpoint.
+	if data.SchemaVersion < 1 {
+		if data.EnvFingerprint == "" {
+			data.EnvFingerprint = BuildEnvFingerprint()
+		}
+	}
+
+	data.SchemaVersion = SchemaVersion
+	return true, nil
+}

@@ -71,6 +71,7 @@ var (
 	noCacheFlag           bool
 	demoMode              bool
 	watchFlag             bool
+	watchFilesFlag        bool
 	watchTimeoutFlag      int
 	hotReloadFlag         bool
 	hotReloadInterval     time.Duration
@@ -827,8 +828,32 @@ Local WASM Replay Mode:
 			fmt.Printf("Comparing against Network: %s\n", compareNetworkFlag)
 		}
 
-		// Fetch transaction details
-		if watchFlag {
+		var watchEvents <-chan struct{}
+		if watchFilesFlag {
+			paths := []string{"."}
+			if contractSourceFlag != "" {
+				paths = append(paths, contractSourceFlag)
+			}
+			cfg := watch.FileWatcherConfig{
+				Paths:          paths,
+				PollInterval:   500 * time.Millisecond,
+				DebounceWindow: 500 * time.Millisecond,
+			}
+			events, errs := watch.StartFileWatcher(ctx, cfg)
+			watchEvents = events
+			go func() {
+				for err := range errs {
+					fmt.Fprintf(os.Stderr, "Watch error: %v\n", err)
+				}
+			}()
+			fmt.Println("Watching for file changes to rerun debug session...")
+		}
+
+	watchLoop:
+		for {
+			sessionErr := func() error {
+				// Fetch transaction details
+				if watchFlag {
 			spinner := watch.NewSpinner()
 			spinner.Start("Waiting for transaction to appear on-chain...")
 			watchCtx, cancelWatch := context.WithTimeout(ctx, time.Duration(watchTimeoutFlag)*time.Second)
@@ -1316,6 +1341,7 @@ Local WASM Replay Mode:
 			SimResponseJSON: string(simRespJSON),
 			ErstVersion:     version.Version,
 			SchemaVersion:   session.SchemaVersion,
+			EnvFingerprint:  session.BuildEnvFingerprint(),
 		}
 		SetCurrentSession(sessionData)
 		fmt.Printf("\nSession created: %s\n", sessionData.ID)
@@ -1501,7 +1527,29 @@ func runDemoMode(cmdArgs []string) error {
 	fmt.Printf("\nToken Flow Summary:\n")
 	fmt.Printf("  %s XLM transferred\n", visualizer.Symbol("arrow_r"))
 	fmt.Printf("\nSession ready. Use 'Glassbox session save' to persist.\n")
-	return nil
+				return nil
+			}()
+			
+			if sessionErr != nil {
+				if !watchFilesFlag {
+					return sessionErr
+				}
+				fmt.Printf("Debug session error: %v\n", sessionErr)
+			} else if !watchFilesFlag {
+				return nil
+			}
+
+			fmt.Println("Waiting for file changes...")
+			select {
+			case <-ctx.Done():
+				break watchLoop
+			case <-watchEvents:
+				fmt.Println("File change detected, rerunning...")
+				// Add a small separator
+				fmt.Println("==================================================")
+			}
+		}
+		return nil
 }
 
 func runLocalWasmReplay() error {
@@ -2710,6 +2758,7 @@ func init() {
 	debugCmd.Flags().StringVar(&jsonFileFlag, "json-file", "", "Load transaction envelope from a local JSON file containing envelope_xdr")
 	debugCmd.Flags().StringVar(&resultMetaFileFlag, "result-meta-file", "", "Load transaction result metadata from a local XDR or JSON file")
 	debugCmd.Flags().BoolVar(&demoMode, "demo", false, "Print sample output (no network) - for testing color detection")
+	debugCmd.Flags().BoolVar(&watchFilesFlag, "watch-files", false, "Watch for source/config file changes and rerun debug session")
 	debugCmd.Flags().BoolVar(&watchFlag, "watch", false, "Poll for transaction on-chain before debugging")
 	debugCmd.Flags().IntVar(&watchTimeoutFlag, "watch-timeout", 30, "Timeout in seconds for watch mode")
 	debugCmd.Flags().BoolVar(&hotReloadFlag, "hot-reload", false, "Hot reload local WASM changes during debug session (requires --wasm)")

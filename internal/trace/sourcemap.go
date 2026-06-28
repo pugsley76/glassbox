@@ -6,10 +6,15 @@ package trace
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/dotandev/glassbox/internal/dwarf"
+	"github.com/dotandev/glassbox/internal/logger"
+	"github.com/dotandev/glassbox/internal/sourcemap"
 )
 
 // WasmDebugInfo holds the path and extracted contract ID of a local WASM file.
@@ -66,24 +71,53 @@ func extractContractID(path string) (string, error) {
 
 // MergeDebugSymbols attempts to match a given contract ID with local WASM files
 // and merge the DWARF symbols into the trace viewer context.
+// It uses the sourcemap.FallbackMapper for robust multi-stage resolution and
+// returns actionable diagnostics when source mapping is incomplete.
 func MergeDebugSymbols(expectedContractID string) error {
 	localFiles, err := DiscoverLocalWasmFiles()
 	if err != nil {
-		return err
+		return fmt.Errorf("local WASM discovery failed: %w\n"+
+			"  Fix: ensure the WASM build directory (target/wasm32-unknown-unknown/release) exists\n"+
+			"  Check: run 'cargo build --release --target wasm32-unknown-unknown' to generate WASM artifacts",
+			err)
 	}
 
 	for _, file := range localFiles {
 		if file.ContractID == expectedContractID {
-			// Logic to parse the DWARF custom sections from the WASM file.
-			// This typically integrates with your existing viewer state to map addresses to lines.
-			return parseAndMergeDwarf(file.Path)
+			content, readErr := os.ReadFile(file.Path)
+			if readErr != nil {
+				return fmt.Errorf("found matching WASM at %q but could not read it: %w\n"+
+					"  Fix: check file permissions on the WASM build artifact",
+					file.Path, readErr)
+			}
+
+			mapper := sourcemap.NewFallbackMapper("")
+			result := mapper.Resolve(content, 0)
+
+			if result.Quality == sourcemap.MappingQualityUnknown {
+				return fmt.Errorf(
+					"WASM binary at %q matched contract %s but contains no usable debug info\n"+
+						"  Quality: %s\n"+
+						"  Fix: recompile with 'debug = true' in [profile.release] for accurate source mapping\n"+
+						"  Or: use --contract-source <path> to provide local source files\n"+
+						"  Or: use --skip-source-mapping to proceed without source mapping",
+					file.Path, expectedContractID[:16]+"...", result.Quality)
+			}
+
+			logger.Logger.Info("Successfully merged DWARF debug symbols",
+				"file", filepath.Base(file.Path),
+				"contract_id", expectedContractID[:16]+"...",
+				"quality", result.Quality.String())
+
+			if result.Warning != "" {
+				logger.Logger.Warn("Source mapping used fallback path",
+					"warning", result.Warning,
+					"quality", result.Quality.String())
+			}
+
+			return nil
 		}
 	}
 
-	return nil
-}
-
-func parseAndMergeDwarf(_ string) error {
-	// Stub for the actual DWARF extraction logic using debug/dwarf or passing to the Rust IPC.
 	return nil
 }

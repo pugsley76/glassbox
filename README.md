@@ -463,6 +463,14 @@ make lint
 make format
 ```
 
+### Binary Size Tracking
+
+To prevent regressions in artifact sizes, Glassbox tracks the compiled sizes of both the Go CLI and Rust simulator.
+
+- **Configuring Thresholds**: Adjust maximum size thresholds (in bytes) inside the `size_thresholds.conf` file at the root of the repository.
+- **Local Checks**: After building, run `make size-check` to measure your artifacts against the configured limits.
+- **CI Pipeline**: Size checks automatically run on all Pull Requests and pushes to `main` or `develop` via the `size-check.yml` GitHub workflow. Builds will fail if size thresholds are exceeded.
+
 ### Development Roadmap
 
 See [docs/proposal.md](docs/proposal.md) for the detailed proposal.
