@@ -408,6 +408,16 @@ func ExportExecutionTraceWithOptions(trace *ExecutionTrace, format string, outpu
 		return fmt.Errorf("trace format compatibility check failed: %w", err)
 	}
 
+	// Accuracy and context audit — surface warnings before writing the file
+	// so users can see degraded-accuracy conditions without the export failing.
+	if err := ValidateTraceAccuracy(trace); err != nil {
+		if te, ok := err.(*TraceInputError); ok {
+			for _, f := range te.Failures {
+				fmt.Fprintf(os.Stderr, "Warning: %s\n", f)
+			}
+		}
+	}
+
 	format = strings.ToLower(strings.TrimSpace(format))
 	if format == "" {
 		format = "html"

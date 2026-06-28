@@ -160,7 +160,12 @@ func ValidateEventTypeField(eventType string) string {
 //   - Trace is not nil.
 //   - States slice is not empty (empty trace → diagnostic warning).
 //   - Each state has a non-negative Step that matches its slice index.
+//   - Each state has a non-zero Timestamp (zero timestamp reduces accuracy).
+//   - Each state has at least one context field set (Operation or EventType).
+//   - States with a ContractID also have a Function (missing function reduces context).
 //   - Unrecognised EventType fields are noted with their step index.
+//   - Timestamps are monotonically non-decreasing across steps.
+//   - DiagnosticEvents count (when non-zero) matches States count.
 //
 // This is deliberately permissive: it returns all issues at once so callers can
 // choose whether to abort or merely warn.
@@ -181,21 +186,128 @@ func ValidateExecutionTrace(t *ExecutionTrace) []string {
 		return issues // nothing further to check on an empty trace
 	}
 
+	// DiagnosticEvents alignment: when events are present, count must match states.
+	if len(t.DiagnosticEvents) > 0 && len(t.DiagnosticEvents) != len(t.States) {
+		issues = append(issues, fmt.Sprintf(
+			"diagnostic event count (%d) does not match step count (%d) — "+
+				"trace accuracy may be reduced; event-to-step mapping will be approximate. "+
+				"This can happen when the simulator emits events outside of tracked steps",
+			len(t.DiagnosticEvents), len(t.States),
+		))
+	}
+
 	// Per-step checks.
 	for i, state := range t.States {
+		prefix := fmt.Sprintf("step %d", i)
+
+		// Step index integrity.
 		if state.Step != i {
 			issues = append(issues, fmt.Sprintf(
-				"step index mismatch at position %d: state.Step=%d "+
-					"(trace may have been modified after construction; trace accuracy may be affected)",
-				i, state.Step,
+				"%s: index mismatch (state.Step=%d) — "+
+					"trace may have been modified after construction; accuracy may be affected",
+				prefix, state.Step,
 			))
 		}
+
+		// Timestamp presence — zero timestamps break timeline rendering.
+		if state.Timestamp.IsZero() {
+			issues = append(issues, fmt.Sprintf(
+				"%s: timestamp is zero — temporal context is missing for this step. "+
+					"Timeline and duration calculations will be inaccurate. "+
+					"Check that the simulator is emitting timestamps for all events",
+				prefix,
+			))
+		}
+
+		// Monotonic timestamp check (only when both current and previous are non-zero).
+		if i > 0 && !state.Timestamp.IsZero() && !t.States[i-1].Timestamp.IsZero() {
+			if state.Timestamp.Before(t.States[i-1].Timestamp) {
+				issues = append(issues, fmt.Sprintf(
+					"%s: timestamp %s is before previous step timestamp %s — "+
+						"non-monotonic timestamps will corrupt timeline ordering in exports",
+					prefix,
+					state.Timestamp.Format("15:04:05.000"),
+					t.States[i-1].Timestamp.Format("15:04:05.000"),
+				))
+			}
+		}
+
+		// Context completeness: at least one of Operation or EventType must be set.
+		if strings.TrimSpace(state.Operation) == "" && strings.TrimSpace(state.EventType) == "" {
+			issues = append(issues, fmt.Sprintf(
+				"%s: neither Operation nor EventType is set — "+
+					"this step has no context and will appear as %q in exports. "+
+					"Verify the simulator is populating event type fields",
+				prefix, fmt.Sprintf("step %d", i),
+			))
+		}
+
+		// Contract call context: ContractID without Function reduces usefulness.
+		if strings.TrimSpace(state.ContractID) != "" && strings.TrimSpace(state.Function) == "" {
+			issues = append(issues, fmt.Sprintf(
+				"%s: ContractID %q is set but Function is empty — "+
+					"contract call context is incomplete; exports will not show the called function. "+
+					"Check that the ABI decoder is resolving function names",
+				prefix, state.ContractID,
+			))
+		}
+
+		// Event type recognition.
 		if diag := ValidateEventTypeField(state.EventType); diag != "" {
-			issues = append(issues, fmt.Sprintf("step %d: %s", i, diag))
+			issues = append(issues, fmt.Sprintf("%s: %s", prefix, diag))
 		}
 	}
 
 	return issues
+}
+
+// ValidateTraceAccuracy performs a higher-level accuracy audit on a complete
+// ExecutionTrace and returns a summary suitable for surfacing to users before
+// export. Unlike ValidateExecutionTrace (which checks structural correctness),
+// this function focuses on whether the trace is likely to produce an accurate
+// and useful export.
+//
+// Returns nil when the trace passes all accuracy checks.
+// Returns a *TraceInputError when one or more accuracy problems are found.
+func ValidateTraceAccuracy(t *ExecutionTrace) error {
+	if t == nil {
+		return &TraceInputError{Failures: []string{
+			"execution trace is nil — cannot assess accuracy of a nil trace",
+		}}
+	}
+
+	issues := ValidateExecutionTrace(t)
+	if len(issues) == 0 {
+		return nil
+	}
+
+	// Separate hard accuracy failures from soft warnings.
+	// Hard: index mismatch, non-monotonic timestamps, missing tx hash.
+	// Soft: missing context fields, zero timestamps (recoverable).
+	var hard, soft []string
+	for _, issue := range issues {
+		if strings.Contains(issue, "index mismatch") ||
+			strings.Contains(issue, "non-monotonic") ||
+			strings.Contains(issue, "diagnostic event count") {
+			hard = append(hard, issue)
+		} else {
+			soft = append(soft, issue)
+		}
+	}
+
+	if len(hard) == 0 && len(soft) == 0 {
+		return nil
+	}
+
+	var failures []string
+	for _, h := range hard {
+		failures = append(failures, fmt.Sprintf("[accuracy] %s", h))
+	}
+	for _, s := range soft {
+		failures = append(failures, fmt.Sprintf("[context] %s", s))
+	}
+
+	return &TraceInputError{Failures: failures}
 }
 
 // truncateForDiag trims a string for use in diagnostic messages.
