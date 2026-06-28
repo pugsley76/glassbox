@@ -30,6 +30,30 @@ type PreflightReport struct {
 	Issues []PreflightIssue
 }
 
+// Summary returns a human-readable description of all issues in the report,
+// suitable for diagnostic output. It returns an empty string when there are no
+// issues. Each issue is formatted as:
+//
+//	[severity] check: description
+//	  Hint: <actionable step>
+func (r *PreflightReport) Summary() string {
+	if len(r.Issues) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for i, issue := range r.Issues {
+		if i > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(fmt.Sprintf("[%s] %s: %s", issue.Severity, issue.Check, issue.Description))
+		if issue.Hint != "" {
+			sb.WriteString("\n  Hint: ")
+			sb.WriteString(issue.Hint)
+		}
+	}
+	return sb.String()
+}
+
 // RunSourceMapPreflight inspects the local environment for conditions that are
 // required (or strongly recommended) for accurate source mapping.
 //
