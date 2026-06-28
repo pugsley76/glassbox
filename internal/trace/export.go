@@ -172,6 +172,7 @@ const traceMarkdownTemplate = `# Glassbox Trace Export
 // ValidateTraceExportParams performs comprehensive validation of trace export parameters.
 // It checks the trace, format, output path, and export options for validity before export.
 // Returns an error if any validation check fails, with clear and actionable guidance.
+// All failures are collected and returned together so callers can fix them in one pass.
 func ValidateTraceExportParams(trace *ExecutionTrace, format string, outputPath string, opts ExportOptions) error {
 	var validationErrors []string
 
@@ -181,9 +182,13 @@ func ValidateTraceExportParams(trace *ExecutionTrace, format string, outputPath 
 			"  Fix: ensure a valid trace object is provided to the export function\n"+
 			"  This typically means the trace failed to load or deserialize correctly")
 	} else {
-		// 2. Validate trace has states
+		// 2. Validate trace has states (no steps recorded means nothing to export)
 		if len(trace.States) == 0 {
-			validationErrors = append(validationErrors, "trace has no execution states — empty trace cannot be exported\n"+
+			validationErrors = append(validationErrors, "trace has no execution states (no steps recorded) — empty trace cannot be exported\n"+
+				"  Possible causes:\n"+
+				"    - Simulation did not produce any diagnostic events\n"+
+				"    - Transaction envelope is invalid\n"+
+				"    - Simulator version is incompatible\n"+
 				"  Fix: verify that the trace was captured correctly and contains at least one step\n"+
 				"  Tip: check that the traced transaction actually executed any code")
 		}
@@ -213,7 +218,7 @@ func ValidateTraceExportParams(trace *ExecutionTrace, format string, outputPath 
 
 	// 5. Validate format string
 	if strings.TrimSpace(format) == "" {
-		validationErrors = append(validationErrors, "--export-format is empty — must specify a format\n"+
+		validationErrors = append(validationErrors, "--export-format is empty (format is empty) — must specify a format\n"+
 			"  Fix: use --export-format with one of: html, markdown, json, text\n"+
 			"  Default is html if not specified during export")
 	} else {
@@ -221,7 +226,7 @@ func ValidateTraceExportParams(trace *ExecutionTrace, format string, outputPath 
 		validFormats := map[string]bool{"html": true, "markdown": true, "md": true, "json": true, "text": true}
 		if !validFormats[normalizedFormat] {
 			validationErrors = append(validationErrors, fmt.Sprintf(
-				"invalid --export-format %q — must be one of: html, markdown, json, text\n"+
+				"invalid or unsupported --export-format %q — must be one of: html, markdown, json, text\n"+
 					"  Fix: use a supported format\n"+
 					"  html     — interactive HTML (best for browsers)\n"+
 					"  markdown — GitHub-friendly markdown report\n"+
@@ -233,39 +238,36 @@ func ValidateTraceExportParams(trace *ExecutionTrace, format string, outputPath 
 
 	// 6. Validate output path
 	if strings.TrimSpace(outputPath) == "" {
-		validationErrors = append(validationErrors, "--export output path is empty — must specify a target file\n"+
+		validationErrors = append(validationErrors, "output path is empty — must specify a target file\n"+
 			"  Fix: provide an output file path (e.g., ./trace.html or /tmp/report.md)\n"+
 			"  Example: glassbox trace --export ./output/trace.html --format html input.json")
 	} else {
 		// Check for directory-like paths (ending with / or \)
 		if strings.HasSuffix(outputPath, "/") || strings.HasSuffix(outputPath, "\\") {
 			validationErrors = append(validationErrors, fmt.Sprintf(
-				"--export path %q looks like a directory (ends with %q); provide a full file path\n"+
+				"output path %q looks like a directory path (ends with %q); provide a full file path\n"+
 					"  Fix: specify a complete filename\n"+
 					"  Example: --export ./output/trace.html instead of --export ./output/",
 				outputPath, string(outputPath[len(outputPath)-1])))
 		}
 
-		// Check for suspicious patterns
-		if strings.Contains(outputPath, "\x00") {
+		// Null bytes in paths are a shell-injection risk.
+		if strings.ContainsRune(outputPath, 0) {
 			validationErrors = append(validationErrors, "output path contains null bytes — invalid file path\n"+
 				"  Fix: remove any null bytes from the path")
 		}
 
-		// Check parent directory viability (can log permission issues early)
+		// Check parent directory viability (can surface permission issues early)
 		parentDir := filepath.Dir(outputPath)
 		if parentDir != "." && parentDir != "" {
-			// Try to stat the parent to check if it exists
 			if info, err := os.Stat(parentDir); err != nil {
-				if os.IsNotExist(err) {
-					// Directory doesn't exist yet — we'll create it at export time
-					// This is OK, just inform the user
-				} else if os.IsPermission(err) {
+				if os.IsPermission(err) {
 					validationErrors = append(validationErrors, fmt.Sprintf(
 						"output directory %q is not accessible — permission denied\n"+
 							"  Fix: ensure you have read and execute permissions on the parent directory\n"+
 							"  Check: ls -ld %s", parentDir, parentDir))
 				}
+				// Non-existent parent directory is OK — created at export time.
 			} else if !info.IsDir() {
 				validationErrors = append(validationErrors, fmt.Sprintf(
 					"output path parent %q exists but is not a directory — invalid path\n"+
@@ -275,9 +277,22 @@ func ValidateTraceExportParams(trace *ExecutionTrace, format string, outputPath 
 		}
 	}
 
-	// 7. Validate ExportOptions.Comments
+	// 7. Validate ExportOptions.Comments count and length
+	if len(opts.Comments) > 100 {
+		validationErrors = append(validationErrors, fmt.Sprintf(
+			"too many comments (%d) — maximum is 100 comments per trace export\n"+
+				"  Fix: reduce the number of comments or split into multiple exports",
+			len(opts.Comments),
+		))
+	}
 	for i, comment := range opts.Comments {
-		if strings.TrimSpace(comment) == "" {
+		if len(comment) > 10000 {
+			validationErrors = append(validationErrors, fmt.Sprintf(
+				"comment #%d exceeds maximum length of 10000 characters (got %d)\n"+
+					"  Fix: shorten the comment or split it into multiple shorter comments",
+				i+1, len(comment),
+			))
+		} else if strings.TrimSpace(comment) == "" {
 			validationErrors = append(validationErrors, fmt.Sprintf(
 				"--comment index %d is empty or whitespace-only\n"+
 					"  Fix: provide non-empty comments or omit empty ones", i))
@@ -300,7 +315,7 @@ func ValidateTraceExportParams(trace *ExecutionTrace, format string, outputPath 
 	// Return aggregated errors if any
 	if len(validationErrors) > 0 {
 		if len(validationErrors) == 1 {
-			return fmt.Errorf(validationErrors[0])
+			return fmt.Errorf("%s", validationErrors[0])
 		}
 		msg := fmt.Sprintf("%d trace export validation error(s):\n", len(validationErrors))
 		for i, err := range validationErrors {
