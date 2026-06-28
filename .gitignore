@@ -84,6 +84,7 @@ PR_278_hsm_signing_pkcs11_validation.md
 PR_275_trace_export_snapshot_reliability.md
 PR_276_trace_export_accuracy_context.md
 PR_277_trace_export_auth_debug.md
+PR_274_trace_export_health_readiness.md
 
 # --- Kiro IDE ---
 .kiro/
