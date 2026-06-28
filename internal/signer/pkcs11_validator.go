@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -219,6 +221,13 @@ func (v *Pkcs11Validator) checkModulePath(report *PreflightReport) bool {
 		report.fail("module_path",
 			fmt.Sprintf("%s is a directory, not a shared library", path),
 			"GLASSBOX_PKCS11_MODULE must point to a .so/.dylib/.dll file, not a directory")
+		return false
+	}
+
+	if extWarn := validateModuleExtension(path); extWarn != "" {
+		report.fail("module_path",
+			extWarn,
+			fmt.Sprintf("expected extension: .so on Linux, .dylib on macOS, .dll on Windows (current OS: %s)", runtime.GOOS))
 		return false
 	}
 
@@ -435,15 +444,41 @@ func (v *Pkcs11Validator) checkSignTest(report *PreflightReport, session, keyHan
 func platformModuleHint(path string) string {
 	hints := map[string]string{
 		"/usr/lib/softhsm/libsofthsm2.so":                    "install SoftHSM2: 'apt install softhsm2' (Debian/Ubuntu) or 'brew install softhsm' (macOS)",
-		"/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so":   "install SoftHSM2: 'apt install softhsm2' (Debian/Ubuntu)",
-		"/usr/local/lib/softhsm/libsofthsm2.so":               "install SoftHSM2: 'brew install softhsm' (macOS) or build from source",
+		"/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so":    "install SoftHSM2: 'apt install softhsm2' (Debian/Ubuntu) or 'brew install softhsm' (macOS)",
+		"/usr/lib/x86_64-linux-gnu/softhsm/libsofthsm2.so":    "install SoftHSM2: 'apt install softhsm2' (Debian/Ubuntu) or 'brew install softhsm' (macOS)",
+		"/usr/local/lib/softhsm/libsofthsm2.so":               "install SoftHSM2: 'apt install softhsm2' (Debian/Ubuntu) or 'brew install softhsm' (macOS)",
 		"/usr/lib/opensc-pkcs11.so":                           "install OpenSC: 'apt install opensc' (Debian/Ubuntu) or 'brew install opensc' (macOS)",
+		"/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so":          "install OpenSC: 'apt install opensc' (Debian/Ubuntu) or 'brew install opensc' (macOS)",
 		"/usr/local/lib/opensc-pkcs11.so":                     "install OpenSC: 'brew install opensc' (macOS)",
-		"/usr/lib/x86_64-linux-gnu/opensc-pkcs11.so":          "install OpenSC: 'apt install opensc' (Debian/Ubuntu)",
 		"/usr/lib/libykcs11.so":                               "install YubiKey PKCS#11: 'apt install ykcs11' (Debian/Ubuntu) or 'brew install yubico-piv-tool' (macOS)",
 		"/usr/local/lib/libykcs11.dylib":                      "install YubiKey PKCS#11: 'brew install yubico-piv-tool' (macOS)",
-		"/usr/lib/x86_64-linux-gnu/libykcs11.so":              "install YubiKey PKCS#11: 'apt install ykcs11' (Debian/Ubuntu)",
+		"/usr/lib/x86_64-linux-gnu/libykcs11.so":              "install YubiKey PKCS#11: 'apt install ykcs11' (Debian/Ubuntu) or 'brew install yubico-piv-tool' (macOS)",
 	}
+
+	if hint, ok := hints[path]; ok {
+		return hint
+	}
+	return fmt.Sprintf("verify the path %q is correct for your platform and HSM vendor; check vendor documentation for the module location", path)
+}
+
+// validateModuleExtension checks that the module file has an extension
+// appropriate for the current operating system.
+func validateModuleExtension(path string) string {
+	ext := filepath.Ext(path)
+	switch runtime.GOOS {
+	case "linux", "darwin":
+		if ext != ".so" && ext != ".dylib" {
+			return fmt.Sprintf("module %q has extension %q — expected .so (Linux) or .dylib (macOS); "+
+				"verify the path points to a valid PKCS#11 shared library for your platform", path, ext)
+		}
+	case "windows":
+		if ext != ".dll" {
+			return fmt.Sprintf("module %q has extension %q — expected .dll on Windows; "+
+				"verify the path points to a valid PKCS#11 shared library for your platform", path, ext)
+		}
+	}
+	return ""
+}
 
 	if hint, ok := hints[path]; ok {
 		return hint

@@ -173,6 +173,63 @@ func TestLoadFromFile_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestLoadFromFile_MissingTxHash_ReturnsError(t *testing.T) {
+	r := newTestRegistry(t)
+	r.TxHash = "" // empty tx hash
+
+	data, _ := json.MarshalIndent(r, "", "  ")
+	path := filepath.Join(t.TempDir(), "registry.json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadFromFile(path)
+	if err == nil {
+		t.Fatal("expected error for empty TxHash")
+	}
+	if !strings.Contains(err.Error(), "transaction hash") {
+		t.Errorf("error should mention 'transaction hash', got: %v", err)
+	}
+}
+
+func TestLoadFromFile_MissingNetwork_ReturnsError(t *testing.T) {
+	r := newTestRegistry(t)
+	r.Network = "" // empty network
+
+	data, _ := json.MarshalIndent(r, "", "  ")
+	path := filepath.Join(t.TempDir(), "registry.json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadFromFile(path)
+	if err == nil {
+		t.Fatal("expected error for empty Network")
+	}
+	if !strings.Contains(err.Error(), "network") {
+		t.Errorf("error should mention 'network', got: %v", err)
+	}
+}
+
+func TestLoadFromFile_MissingGlassboxVersion_Backfilled(t *testing.T) {
+	r := newTestRegistry(t)
+	r.GlassboxVersion = ""
+
+	data, _ := json.MarshalIndent(r, "", "  ")
+	path := filepath.Join(t.TempDir(), "registry.json")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if loaded.GlassboxVersion != "unknown" {
+		t.Errorf("expected GlassboxVersion to be back-filled to 'unknown', got %q", loaded.GlassboxVersion)
+	}
+}
+
 func TestLoadFromFile_WrongSchemaVersion(t *testing.T) {
 	r := newTestRegistry(t)
 	r.SchemaVersion = 999

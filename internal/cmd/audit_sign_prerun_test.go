@@ -146,3 +146,84 @@ func TestAuditSignPreRunE_ValidProvenancePasses(t *testing.T) {
 		t.Fatalf("expected no error for valid provenance flags, got: %v", err)
 	}
 }
+
+// ── Enhanced PKCS#11 input validation ─────────────────────────────────────
+
+func TestValidatePKCS11SignInputs_MutuallyExclusiveKeySelectors(t *testing.T) {
+	cfg := Pkcs11Config{
+		ModulePath: "/usr/lib/softhsm/libsofthsm2.so",
+		PIN:        "1234",
+		KeyLabel:   "mykey",
+		KeyIDHex:   "a1b2c3",
+	}
+	err := validatePKCS11SignInputs(cfg)
+	if err == nil {
+		t.Fatal("expected error when both key-label and key-id are provided")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error should mention mutual exclusivity, got: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "--pkcs11-key-label") {
+		t.Errorf("error should mention --pkcs11-key-label, got: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "--pkcs11-key-id") {
+		t.Errorf("error should mention --pkcs11-key-id, got: %q", err.Error())
+	}
+}
+
+func TestValidatePKCS11SignInputs_MissingBothKeySelectors(t *testing.T) {
+	cfg := Pkcs11Config{
+		ModulePath: "/usr/lib/softhsm/libsofthsm2.so",
+		PIN:        "1234",
+	}
+	err := validatePKCS11SignInputs(cfg)
+	if err == nil {
+		t.Fatal("expected error when neither key-label nor key-id is provided")
+	}
+	if !strings.Contains(err.Error(), "--pkcs11-key-label") {
+		t.Errorf("error should mention --pkcs11-key-label, got: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "--pkcs11-key-id") {
+		t.Errorf("error should mention --pkcs11-key-id, got: %q", err.Error())
+	}
+}
+
+func TestValidatePKCS11SignInputs_KeyLabelOnly_Accepts(t *testing.T) {
+	cfg := Pkcs11Config{
+		ModulePath: "/usr/lib/softhsm/libsofthsm2.so",
+		PIN:        "1234",
+		KeyLabel:   "mykey",
+	}
+	if err := validatePKCS11SignInputs(cfg); err != nil {
+		t.Fatalf("expected no error with key-label only, got: %v", err)
+	}
+}
+
+func TestValidatePKCS11SignInputs_KeyIDOnly_Accepts(t *testing.T) {
+	cfg := Pkcs11Config{
+		ModulePath: "/usr/lib/softhsm/libsofthsm2.so",
+		PIN:        "1234",
+		KeyIDHex:   "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+	}
+	if err := validatePKCS11SignInputs(cfg); err != nil {
+		t.Fatalf("expected no error with key-id only, got: %v", err)
+	}
+}
+
+func TestValidatePKCS11SignInputs_InvalidKeyIDHex_Rejects(t *testing.T) {
+	cfg := Pkcs11Config{
+		ModulePath: "/usr/lib/softhsm/libsofthsm2.so",
+		PIN:        "1234",
+		KeyIDHex:   "not-valid-hex!!!",
+	}
+	err := validatePKCS11SignInputs(cfg)
+	if err == nil {
+		t.Fatal("expected error for non-hex key-id")
+	}
+	if !strings.Contains(err.Error(), "--pkcs11-key-id") {
+		t.Errorf("error should mention --pkcs11-key-id, got: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "hex-encoded") {
+		t.Errorf("error should mention hex-encoded, got: %q", err.Error())
+	}
+}

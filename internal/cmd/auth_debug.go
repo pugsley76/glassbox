@@ -161,12 +161,22 @@ func authDebugRunE(cmd *cobra.Command, args []string) error {
 	trace := tracker.GenerateTrace()
 	reporter := authtrace.NewDetailedReporter(trace)
 
-	// When no authorization events were extracted, the report's "SUCCEEDED"
-	// status only means "no failures were recorded" — not that authorization was
-	// verified. Make that explicit so the output is not misread as a pass.
-	if !authTraceHasData(trace) {
-		fmt.Fprintln(os.Stderr, emptyAuthTraceNote(txHash))
+// When no authorization events were extracted, the report's "SUCCEEDED"
+// status only means "no failures were recorded" — not that authorization was
+// verified. Make that explicit so the output is not misread as a pass.
+// Also surface diagnostic hints from the trace, including source mapping guidance.
+if !authTraceHasData(trace) {
+	fmt.Fprintln(os.Stderr, emptyAuthTraceNote(txHash))
+	if trace.Diagnostics != nil && trace.Diagnostics.EmptyTraceReason != "" {
+		fmt.Fprintf(os.Stderr, "  Detail: %s\n", trace.Diagnostics.EmptyTraceReason)
 	}
+}
+
+// When some events were recorded but source mapping is missing, provide
+// a targeted hint so users can improve trace-to-source correlation.
+if trace.Diagnostics != nil && !trace.Diagnostics.SourceMappingAvailable && len(trace.AuthEvents) > 0 {
+	fmt.Fprintf(os.Stderr, "  Hint: %s\n", trace.Diagnostics.SourceMappingHint)
+}
 
 	if authJSONOutputFlag {
 		jsonStr, err := reporter.GenerateJSONString()

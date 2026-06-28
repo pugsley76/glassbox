@@ -232,3 +232,81 @@ func TestAuditVerify_PreRunRejectsBadPublicKey(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "public-key")
 }
+
+func TestValidateProvenance_IdentityWithoutCertChain_Warns(t *testing.T) {
+	prov := &SignatureProvenance{
+		SignerIdentity:        "ci@example.com",
+		Algorithm:             "Ed25519",
+		PreviousSignatureHash: validChainHash,
+	}
+	valid, err := validateProvenance(prov)
+	if valid {
+		t.Error("expected provenance to be invalid when identity is set without cert chain")
+	}
+	if err == nil {
+		t.Fatal("expected error for identity without cert chain")
+	}
+	if !strings.Contains(err.Error(), "certificate chain") {
+		t.Errorf("error should mention certificate chain, got: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "chain-of-trust") {
+		t.Errorf("error should mention chain-of-trust, got: %q", err.Error())
+	}
+}
+
+func TestValidateProvenance_ValidChain_Passes(t *testing.T) {
+	chain := []string{
+		strings.TrimSpace(testCertPEM),
+		strings.TrimSpace(testIntermediatePEM),
+	}
+	prov := &SignatureProvenance{
+		CertificateChain:  chain,
+		SignerIdentity:    "ci@example.com",
+		PreviousSignatureHash: validChainHash,
+	}
+	valid, err := validateProvenance(prov)
+	if !valid {
+		t.Fatalf("expected valid provenance with correct cert chain, got error: %v", err)
+	}
+}
+
+func TestValidateAuditLogFields_RequiresProvider(t *testing.T) {
+	data := []byte(`{
+		"version": "1.0.0",
+		"timestamp": "2026-01-01T00:00:00Z",
+		"trace_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"signature": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"public_key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		"payload": {}
+	}`)
+	var log SignedAuditLog
+	if err := json.Unmarshal(data, &log); err != nil {
+		t.Fatal(err)
+	}
+	err := validateAuditLogFields(&log, false)
+	if err == nil {
+		t.Fatal("expected error when provider field is missing")
+	}
+	if !strings.Contains(err.Error(), "provider") {
+		t.Errorf("error should mention provider, got: %q", err.Error())
+	}
+}
+
+func TestValidateAuditLogFields_AllFieldsPresent_Passes(t *testing.T) {
+	data := []byte(`{
+		"version": "1.0.0",
+		"timestamp": "2026-01-01T00:00:00Z",
+		"trace_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"signature": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		"public_key": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		"provider": "software",
+		"payload": {}
+	}`)
+	var log SignedAuditLog
+	if err := json.Unmarshal(data, &log); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateAuditLogFields(&log, false); err != nil {
+		t.Fatalf("expected no error when all fields present, got: %v", err)
+	}
+}

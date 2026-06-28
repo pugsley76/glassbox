@@ -29,17 +29,26 @@ func (t *ExecutionTrace) SaveToFile(path string) error {
 	return nil
 }
 
-// LoadExecutionTrace loads an ExecutionTrace from a JSON file
+// LoadExecutionTrace loads an ExecutionTrace from a JSON file.
+// It understands all three on-disk shapes that Glassbox can produce:
+//   - ExportJSON envelope (schema_version string key) — written by --output-json
+//   - VersionedTrace envelope (version semver object) — written by --export --format json
+//   - Legacy plain ExecutionTrace JSON — written by SaveToFile / older CLI versions
+//
+// Using LoadVersionedTrace here ensures that a file produced by any CLI export
+// path can be loaded correctly, rather than the previous behaviour where only
+// the plain-JSON shape was accepted and the other two would unmarshal silently
+// into a structurally broken ExecutionTrace.
 func LoadExecutionTrace(path string) (*ExecutionTrace, error) {
-	data, err := os.ReadFile(path)
+	tr, err := LoadVersionedTrace(path, DefaultCompatibilityOptions())
 	if err != nil {
-		return nil, errors.WrapValidationError(fmt.Sprintf("failed to read trace file: %v", err))
+		return nil, errors.WrapValidationError(fmt.Sprintf(
+			"failed to load trace file %q: %v\n"+
+				"  The file must be a valid Glassbox JSON trace (produced by\n"+
+				"  'glassbox debug --trace-output', 'glassbox trace --output-json', or\n"+
+				"  'glassbox trace --export --format json')",
+			path, err,
+		))
 	}
-
-	var trace ExecutionTrace
-	if err := json.Unmarshal(data, &trace); err != nil {
-		return nil, errors.WrapUnmarshalFailed(err, "execution trace file")
-	}
-
-	return &trace, nil
+	return tr, nil
 }

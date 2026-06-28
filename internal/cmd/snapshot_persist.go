@@ -64,7 +64,12 @@ var snapshotSaveCmd = &cobra.Command{
 it as a persisted snapshot with full metadata and integrity fingerprints.
 
 The output file can later be loaded with 'glassbox snapshot load' or passed
-to 'glassbox debug --snapshot' to replay without network access.`,
+to 'glassbox debug --snapshot' to replay without network access.
+
+Validation:
+  The metadata (transaction hash, network) is validated before writing.
+  The network must be one of: testnet, mainnet, futurenet.
+  If validation fails an actionable error is printed with a remediation hint.`,
 	RunE: runSnapshotSave,
 }
 
@@ -105,6 +110,16 @@ func runSnapshotSave(cmd *cobra.Command, args []string) error {
 	}
 	if snapSaveInputFlag == "" {
 		return errors.WrapCliArgumentRequired("input")
+	}
+
+	// Validate network before doing any I/O.
+	validNetworks := map[string]bool{"testnet": true, "mainnet": true, "futurenet": true}
+	if !validNetworks[snapSaveNetworkFlag] {
+		return fmt.Errorf(
+			"unsupported network %q — must be one of: testnet, mainnet, futurenet\n"+
+				"  Fix: re-run with --network testnet (or mainnet, futurenet)",
+			snapSaveNetworkFlag,
+		)
 	}
 
 	// Load the input ledger-state snapshot.

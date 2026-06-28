@@ -244,6 +244,120 @@ func TestSnapshotLoadDiagnostic_ContainsExpectedSections(t *testing.T) {
 	}
 }
 
+// ── SavePersisted validation ──────────────────────────────────────────────────
+
+func TestSavePersisted_NilMeta_ReturnsError(t *testing.T) {
+	err := snapshot.SavePersisted("/tmp/test.json", nil, snapshot.FromMap(nil))
+	if err == nil {
+		t.Fatal("expected error for nil metadata")
+	}
+}
+
+func TestSavePersisted_EmptyTxHash_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.json")
+	meta := &snapshot.ReplayMetadata{
+		TxHash:  "",
+		Network: "testnet",
+	}
+	err := snapshot.SavePersisted(path, meta, snapshot.FromMap(nil))
+	if err == nil {
+		t.Fatal("expected error for empty TxHash")
+	}
+	if !strings.Contains(err.Error(), "transaction hash") {
+		t.Errorf("error should mention 'transaction hash', got: %v", err)
+	}
+}
+
+func TestSavePersisted_EmptyNetwork_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.json")
+	meta := &snapshot.ReplayMetadata{
+		TxHash:  "abc123",
+		Network: "",
+	}
+	err := snapshot.SavePersisted(path, meta, snapshot.FromMap(nil))
+	if err == nil {
+		t.Fatal("expected error for empty Network")
+	}
+	if !strings.Contains(err.Error(), "network") {
+		t.Errorf("error should mention 'network', got: %v", err)
+	}
+}
+
+func TestSavePersisted_InvalidNetwork_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.json")
+	meta := &snapshot.ReplayMetadata{
+		TxHash:  "abc123",
+		Network: "devnet",
+	}
+	err := snapshot.SavePersisted(path, meta, snapshot.FromMap(nil))
+	if err == nil {
+		t.Fatal("expected error for invalid Network")
+	}
+	if !strings.Contains(err.Error(), "devnet") {
+		t.Errorf("error should name the invalid network, got: %v", err)
+	}
+}
+
+// ── LoadPersisted validation ──────────────────────────────────────────────────
+
+func TestLoadPersisted_MissingTxHashInMetadata_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.json")
+
+	// Build a file with a PersistedSnapshot but no TxHash in metadata.
+	raw := `{
+  "metadata": {
+    "schema_version": 1,
+    "glassbox_version": "v1.0.0",
+    "saved_at": "2026-01-01T00:00:00Z",
+    "tx_hash": "",
+    "network": "testnet"
+  },
+  "snapshot": {
+    "ledgerEntries": [],
+    "fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}`
+	if err := os.WriteFile(path, []byte(raw), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := snapshot.LoadPersisted(path)
+	if err == nil {
+		t.Fatal("expected error for snapshot with empty TxHash in metadata")
+	}
+}
+
+func TestLoadPersisted_MissingNetworkInMetadata_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snap.json")
+
+	raw := `{
+  "metadata": {
+    "schema_version": 1,
+    "glassbox_version": "v1.0.0",
+    "saved_at": "2026-01-01T00:00:00Z",
+    "tx_hash": "abc123",
+    "network": ""
+  },
+  "snapshot": {
+    "ledgerEntries": [],
+    "fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}`
+	if err := os.WriteFile(path, []byte(raw), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := snapshot.LoadPersisted(path)
+	if err == nil {
+		t.Fatal("expected error for snapshot with empty Network in metadata")
+	}
+}
+
 // ── snapshot_persist.go CLI integration tests ─────────────────────────────────
 
 func TestRunSnapshotLoad_MissingPath_ClearError(t *testing.T) {

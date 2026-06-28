@@ -96,3 +96,58 @@ func TestRelToSlash(t *testing.T) {
 		t.Errorf("RelToSlash = %q, want %q", rel, "contracts/token/src/lib.rs")
 	}
 }
+
+// ── ValidateSourcePath ─────────────────────────────────────────────────────
+
+func TestValidateSourcePath_EmptyPath(t *testing.T) {
+	err := ValidateSourcePath("")
+	if err == nil {
+		t.Fatal("expected error for empty path")
+	}
+}
+
+func TestValidateSourcePath_NullByte(t *testing.T) {
+	err := ValidateSourcePath("src/lib.rs\x00")
+	if err == nil {
+		t.Fatal("expected error for path with null byte")
+	}
+}
+
+func TestValidateSourcePath_Traversal(t *testing.T) {
+	for _, p := range []string{"../src/lib.rs", "src/../../etc/passwd"} {
+		err := ValidateSourcePath(p)
+		if err == nil {
+			t.Errorf("expected error for traversal path %q", p)
+		}
+	}
+}
+
+func TestValidateSourcePath_ValidRelative(t *testing.T) {
+	if err := ValidateSourcePath("src/lib.rs"); err != nil {
+		t.Errorf("expected no error for valid relative path, got: %v", err)
+	}
+}
+
+func TestValidateSourcePath_ValidAbsolute(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		if err := ValidateSourcePath(`C:\project\src\lib.rs`); err != nil {
+			t.Errorf("expected no error for valid Windows path, got: %v", err)
+		}
+	} else {
+		if err := ValidateSourcePath("/home/user/project/src/lib.rs"); err != nil {
+			t.Errorf("expected no error for valid POSIX path, got: %v", err)
+		}
+	}
+}
+
+func TestIsPathSafe(t *testing.T) {
+	if !IsPathSafe("src/lib.rs") {
+		t.Error("expected src/lib.rs to be safe")
+	}
+	if IsPathSafe("") {
+		t.Error("expected empty path to be unsafe")
+	}
+	if IsPathSafe("../etc/passwd") {
+		t.Error("expected traversal path to be unsafe")
+	}
+}

@@ -20,8 +20,10 @@ import (
 	"github.com/dotandev/glassbox/internal/protocolreg"
 	"github.com/dotandev/glassbox/internal/shutdown"
 	"github.com/dotandev/glassbox/internal/telemetry"
+	"github.com/dotandev/glassbox/internal/trace"
 	"github.com/dotandev/glassbox/internal/updater"
 	"github.com/dotandev/glassbox/internal/version"
+	"github.com/dotandev/glassbox/internal/visualizer"
 	"github.com/spf13/cobra"
 )
 
@@ -35,6 +37,7 @@ var (
 	VersionFlag bool
 	LogLevelFlag string
 	VerboseFlag  bool
+	NoColorFlag  bool
 
 	AuditLogPathFlag string
 	AuditLogProviderFlag string
@@ -78,6 +81,15 @@ Get started with 'Glassbox debug --help' or visit the documentation.`,
 		if VersionFlag {
 			fmt.Println(version.Version)
 			os.Exit(0)
+		}
+
+		// Disable ANSI colours when --no-color is set or GLASSBOX_NO_COLOR is in the
+		// environment. NO_COLOR (https://no-color.org) is also honoured by each
+		// subsystem individually; this block provides the global CLI-flag path.
+		if NoColorFlag || os.Getenv("GLASSBOX_NO_COLOR") != "" {
+			_ = os.Setenv("NO_COLOR", "1") // propagate to child processes
+			visualizer.SetNoColor(true)
+			trace.SetNoColor(true)
 		}
 
 		// Apply log verbosity from CLI flags before any subsystem initialises.
@@ -333,6 +345,13 @@ func init() {
 		"verbose",
 		false,
 		"Enable verbose output (equivalent to --log-level=debug)",
+	)
+
+	rootCmd.PersistentFlags().BoolVar(
+		&NoColorFlag,
+		"no-color",
+		false,
+		"Disable ANSI color output (also honoured via NO_COLOR or GLASSBOX_NO_COLOR env vars)",
 	)
 
 	rootCmd.PersistentFlags().BoolVar(

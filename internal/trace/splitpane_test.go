@@ -83,7 +83,10 @@ func TestSplitPane_Render_NoSource(t *testing.T) {
 	out := buf.String()
 	assert.Contains(t, out, "Trace Node")
 	assert.Contains(t, out, "transfer")
-	assert.Contains(t, out, "No source mapping available")
+	assert.Contains(t, out, "Source mapping unavailable.")
+	assert.Contains(t, out, "Suggestions:")
+	assert.Contains(t, out, "--contract-source")
+	assert.Contains(t, out, "--skip-source-mapping")
 }
 
 func TestSplitPane_Render_WithSource(t *testing.T) {
