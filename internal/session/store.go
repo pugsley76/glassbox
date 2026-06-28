@@ -221,8 +221,8 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 	INSERT INTO sessions (
 		id, name, created_at, last_access_at, status, network, horizon_url, tx_hash,
 		envelope_xdr, result_xdr, result_meta_xdr,
-		sim_request_json, sim_response_json, GLASSBOX_version, schema_version
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		pinned_endpoint, sim_request_json, sim_response_json, env_fingerprint, GLASSBOX_version, schema_version
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		name = excluded.name,
 		last_access_at = excluded.last_access_at,
@@ -245,7 +245,7 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 		data.ID, data.Name, data.CreatedAt, data.LastAccessAt, data.Status,
 		data.Network, data.HorizonURL, data.TxHash,
 		data.EnvelopeXdr, data.ResultXdr, data.ResultMetaXdr,
-		data.SimRequestJSON, data.SimResponseJSON, data.EnvFingerprint, data.ErstVersion, data.SchemaVersion,
+		data.PinnedEndpoint, data.SimRequestJSON, data.SimResponseJSON, data.EnvFingerprint, data.ErstVersion, data.SchemaVersion,
 	)
 
 	if err != nil {
@@ -261,7 +261,7 @@ func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 	query := `
 	SELECT id, name, created_at, last_access_at, status, network, horizon_url, tx_hash,
 	       envelope_xdr, result_xdr, result_meta_xdr,
-	       sim_request_json, sim_response_json, env_fingerprint, GLASSBOX_version, schema_version
+	       pinned_endpoint, sim_request_json, sim_response_json, env_fingerprint, GLASSBOX_version, schema_version
 	FROM sessions
 	WHERE id = ?
 	`
@@ -275,7 +275,7 @@ func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 		&data.ID, &data.Name, &createdAt, &lastAccessAt, &data.Status,
 		&data.Network, &data.HorizonURL, &data.TxHash,
 		&data.EnvelopeXdr, &data.ResultXdr, &data.ResultMetaXdr,
-		&data.SimRequestJSON, &data.SimResponseJSON, &envFP, &data.ErstVersion, &data.SchemaVersion,
+		&pinnedEndpoint, &data.SimRequestJSON, &data.SimResponseJSON, &envFP, &data.ErstVersion, &data.SchemaVersion,
 	)
 	if envFP.Valid {
 		data.EnvFingerprint = envFP.String
@@ -343,16 +343,22 @@ func (s *Store) List(ctx context.Context, limit int) ([]*Data, error) {
 		limit = 50
 	}
 
-	query := `
+	queryBase := `
 	SELECT id, name, created_at, last_access_at, status, network, horizon_url, tx_hash,
 	       envelope_xdr, result_xdr, result_meta_xdr,
-	       sim_request_json, sim_response_json, env_fingerprint, GLASSBOX_version, schema_version
+	       pinned_endpoint, sim_request_json, sim_response_json, env_fingerprint, GLASSBOX_version, schema_version
 	FROM sessions
 	ORDER BY last_access_at DESC
-	LIMIT ?
 	`
 
-	rows, err := s.db.QueryContext(ctx, query, limit)
+	var rows *sql.Rows
+	var err error
+	if limit > 0 {
+		query := queryBase + "LIMIT ?"
+		rows, err = s.db.QueryContext(ctx, query, limit)
+	} else {
+		rows, err = s.db.QueryContext(ctx, queryBase)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to list sessions: %w", err)
 	}

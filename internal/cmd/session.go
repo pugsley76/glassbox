@@ -124,8 +124,9 @@ The session ID can be auto-generated or specified with --id flag.`,
 			fmt.Fprintf(os.Stderr, "Warning: cleanup failed: %v\n", err)
 		}
 
-		// Save session
-		if err := store.Save(ctx, data); err != nil {
+		// Validate and save session data early so missing or malformed fields
+		// are rejected with explicit diagnostics.
+		if err := store.SaveWithValidation(ctx, data); err != nil {
 			return errors.WrapValidationError(fmt.Sprintf("failed to save session: %v", err))
 		}
 
