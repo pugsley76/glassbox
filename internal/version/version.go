@@ -3,7 +3,10 @@
 
 package version
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 var (
 	// Version is the SDK version, populated by ldflags during build.
@@ -33,4 +36,57 @@ func ShortSHA() string {
 // and diagnostic output: "glassbox/<version> (<commit>)".
 func UserAgent() string {
 	return fmt.Sprintf("glassbox/%s (%s)", Version, ShortSHA())
+}
+
+// VersionValidationError describes a version string format or value problem.
+type VersionValidationError struct {
+	Value    string
+	Reason   string
+	Expected string
+}
+
+func (e *VersionValidationError) Error() string {
+	return fmt.Sprintf("invalid version %q: %s (expected: %s)", e.Value, e.Reason, e.Expected)
+}
+
+// ValidateVersionString checks that v looks like a valid semver version string.
+// Accepted format: MAJOR.MINOR.PATCH where each component is a non-negative integer.
+func ValidateVersionString(v string) error {
+	if v == "" {
+		return &VersionValidationError{
+			Value:    v,
+			Reason:   "version string is empty",
+			Expected: "MAJOR.MINOR.PATCH (e.g. 1.0.0)",
+		}
+	}
+
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return &VersionValidationError{
+			Value:    v,
+			Reason:   fmt.Sprintf("expected 3 components, got %d", len(parts)),
+			Expected: "MAJOR.MINOR.PATCH (e.g. 1.0.0)",
+		}
+	}
+
+	for i, p := range parts {
+		if p == "" {
+			return &VersionValidationError{
+				Value:    v,
+				Reason:   fmt.Sprintf("component %d is empty", i+1),
+				Expected: "MAJOR.MINOR.PATCH with all numeric components",
+			}
+		}
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return &VersionValidationError{
+					Value:    v,
+					Reason:   fmt.Sprintf("component %d contains non-digit %q", i+1, c),
+					Expected: "MAJOR.MINOR.PATCH with all numeric components",
+				}
+			}
+		}
+	}
+
+	return nil
 }

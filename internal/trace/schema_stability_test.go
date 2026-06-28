@@ -340,3 +340,321 @@ func TestIsJSONSchemaVersionSupported_KnownVersions(t *testing.T) {
 		t.Error("version \"99.9\" should not be supported")
 	}
 }
+
+// ── SchemaCompatibilityReport ──────────────────────────────────────────────
+
+func TestCheckSchemaCompatibility_SameVersion(t *testing.T) {
+	r := CheckSchemaCompatibility(
+		TraceFormatVersion{Major: 1, Minor: 0, Patch: 0},
+		TraceFormatVersion{Major: 1, Minor: 0, Patch: 0},
+	)
+	if !r.Compatible {
+		t.Error("expected same version to be compatible")
+	}
+	if r.RequiresMigration {
+		t.Error("expected same version to not require migration")
+	}
+	if len(r.Warnings) != 0 {
+		t.Errorf("expected no warnings for same version, got: %v", r.Warnings)
+	}
+}
+
+func TestCheckSchemaCompatibility_MajorMismatch(t *testing.T) {
+	r := CheckSchemaCompatibility(
+		TraceFormatVersion{Major: 2, Minor: 0, Patch: 0},
+		TraceFormatVersion{Major: 1, Minor: 0, Patch: 0},
+	)
+	if r.Compatible {
+		t.Error("expected major mismatch to be incompatible")
+	}
+	if !r.RequiresMigration {
+		t.Error("expected major mismatch to require migration")
+	}
+	if len(r.Actions) == 0 {
+		t.Error("expected at least one action for major mismatch")
+	}
+	if !strings.Contains(r.Actions[0], "v2.x.x") {
+		t.Errorf("action should reference major version 2, got: %s", r.Actions[0])
+	}
+}
+
+func TestCheckSchemaCompatibility_OlderMinorCompatible(t *testing.T) {
+	r := CheckSchemaCompatibility(
+		TraceFormatVersion{Major: 1, Minor: 0, Patch: 0},
+		TraceFormatVersion{Major: 1, Minor: 1, Patch: 0},
+	)
+	if !r.Compatible {
+		t.Error("expected older minor to be compatible")
+	}
+	if !r.RequiresMigration {
+		t.Error("expected older minor to require migration")
+	}
+	if len(r.Actions) == 0 {
+		t.Error("expected at least one action")
+	}
+}
+
+func TestCheckSchemaCompatibility_NewerMinorIncompatible(t *testing.T) {
+	r := CheckSchemaCompatibility(
+		TraceFormatVersion{Major: 1, Minor: 2, Patch: 0},
+		TraceFormatVersion{Major: 1, Minor: 1, Patch: 0},
+	)
+	if r.Compatible {
+		t.Error("expected newer minor to be incompatible without AllowNewerMinor")
+	}
+	if !r.RequiresMigration {
+		t.Error("expected newer minor to require migration")
+	}
+	if len(r.Actions) == 0 {
+		t.Error("expected at least one action for newer minor")
+	}
+}
+
+func TestCheckSchemaCompatibility_PatchIgnored(t *testing.T) {
+	r := CheckSchemaCompatibility(
+		TraceFormatVersion{Major: 1, Minor: 0, Patch: 5},
+		TraceFormatVersion{Major: 1, Minor: 0, Patch: 0},
+	)
+	if !r.Compatible {
+		t.Error("patch differences should not affect compatibility")
+	}
+	if r.RequiresMigration {
+		t.Error("patch differences should not require migration")
+	}
+}
+
+
+// ── ExportMetadata.Version wired to CurrentJSONSchemaVersion ─────────────────
+
+// TestExportMetadataVersion_MatchesCurrentSchemaVersion verifies that the
+// companion .meta.json file written by ExportWithResilience carries the same
+// schema version string as CurrentJSONSchemaVersion, not a hardcoded literal.
+// This catches drift if CurrentJSONSchemaVersion is bumped but the call site
+// is left pointing at a stale string.
+func TestExportMetadataVersion_MatchesCurrentSchemaVersion(t *testing.T) {
+	tr := NewExecutionTrace("meta-version-test", 10)
+	tr.AddState(ExecutionState{Operation: "op", Timestamp: time.Now()})
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "trace.json")
+
+	opts := ExportOptions{}
+	recoveryOpts := DefaultRecoveryOptions()
+	recoveryOpts.EnableMetadata = true
+
+	if err := ExportWithResilience(tr, "json", outputPath, opts, recoveryOpts); err != nil {
+		t.Fatalf("ExportWithResilience failed: %v", err)
+	}
+
+	// Read the companion metadata file.
+	metaPath := outputPath + ".meta.json"
+	metaData, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("failed to read metadata file: %v", err)
+	}
+
+	var meta ExportMetadata
+	if err := json.Unmarshal(metaData, &meta); err != nil {
+		t.Fatalf("failed to parse metadata file: %v", err)
+	}
+
+	if meta.Version != CurrentJSONSchemaVersion {
+		t.Errorf("ExportMetadata.Version = %q, want CurrentJSONSchemaVersion %q\n"+
+			"  The metadata version should always match the schema version constant\n"+
+			"  so they stay in sync when the schema evolves",
+			meta.Version, CurrentJSONSchemaVersion)
+	}
+}
+
+// ── LoadExecutionTrace — multi-envelope support ───────────────────────────────
+
+// TestLoadExecutionTrace_PlainJSON loads a plain ExecutionTrace JSON file
+// (the legacy shape produced by SaveToFile) and verifies it round-trips.
+func TestLoadExecutionTrace_PlainJSON(t *testing.T) {
+	tr := NewExecutionTrace("plain-json-load", 10)
+	tr.AddState(ExecutionState{Operation: "test", Timestamp: time.Now()})
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "plain.json")
+
+	// SaveToFile writes plain ExecutionTrace JSON (no version envelope).
+	if err := tr.SaveToFile(path); err != nil {
+		t.Fatalf("SaveToFile failed: %v", err)
+	}
+
+	loaded, err := LoadExecutionTrace(path)
+	if err != nil {
+		t.Fatalf("LoadExecutionTrace failed on plain JSON: %v", err)
+	}
+	if loaded.TransactionHash != tr.TransactionHash {
+		t.Errorf("transaction hash mismatch: got %q, want %q",
+			loaded.TransactionHash, tr.TransactionHash)
+	}
+}
+
+// TestLoadExecutionTrace_VersionedTrace loads a VersionedTrace-envelope file
+// (produced by --export --format json) and verifies it decodes correctly.
+func TestLoadExecutionTrace_VersionedTraceEnvelope(t *testing.T) {
+	tr := NewExecutionTrace("versioned-envelope-load", 10)
+	tr.AddState(ExecutionState{Operation: "test", Timestamp: time.Now()})
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "versioned.json")
+
+	if err := ExportVersionedTrace(tr, "json", path, ExportOptions{}, DefaultCompatibilityOptions()); err != nil {
+		t.Fatalf("ExportVersionedTrace failed: %v", err)
+	}
+
+	loaded, err := LoadExecutionTrace(path)
+	if err != nil {
+		t.Fatalf("LoadExecutionTrace failed on VersionedTrace envelope: %v", err)
+	}
+	if loaded.TransactionHash != tr.TransactionHash {
+		t.Errorf("transaction hash mismatch: got %q, want %q",
+			loaded.TransactionHash, tr.TransactionHash)
+	}
+}
+
+// TestLoadExecutionTrace_ExportJSONEnvelope loads an ExportJSON-envelope file
+// (produced by --output-json / ExportJSON) — the shape that the old blind
+// json.Unmarshal implementation would silently corrupt.
+func TestLoadExecutionTrace_ExportJSONEnvelope(t *testing.T) {
+	tr := NewExecutionTrace("export-json-envelope-load", 10)
+	tr.AddState(ExecutionState{Operation: "test", Timestamp: time.Now()})
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "export-json.json")
+
+	jsonData, err := tr.ExportJSON(CurrentJSONSchemaVersion, time.Now())
+	if err != nil {
+		t.Fatalf("ExportJSON failed: %v", err)
+	}
+	if err := os.WriteFile(path, jsonData, 0o644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	loaded, err := LoadExecutionTrace(path)
+	if err != nil {
+		t.Fatalf("LoadExecutionTrace failed on ExportJSON envelope: %v", err)
+	}
+	if loaded == nil {
+		t.Fatal("loaded trace is nil")
+	}
+	// ExportJSON fingerprints the tx hash, so we can't compare it directly.
+	// Verify the states count round-trips correctly.
+	if len(loaded.States) != len(tr.States) {
+		t.Errorf("states count mismatch: got %d, want %d",
+			len(loaded.States), len(tr.States))
+	}
+}
+
+// TestLoadExecutionTrace_ErrorContainsFlagName verifies that a failed load
+// produces an error message that includes the file path, making it
+// actionable for the operator.
+func TestLoadExecutionTrace_ErrorContainsFlagName(t *testing.T) {
+	_, err := LoadExecutionTrace("/nonexistent/path/trace.json")
+	if err == nil {
+		t.Fatal("expected error for nonexistent file")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "/nonexistent/path/trace.json") {
+		t.Errorf("error should include the file path, got: %q", msg)
+	}
+	// Must tell user how to produce valid trace files.
+	if !strings.Contains(msg, "glassbox") {
+		t.Errorf("error should mention glassbox commands, got: %q", msg)
+	}
+}
+
+// ── ValidateTraceFormatCompatibility — JSON step-mismatch detection ───────────
+
+// TestValidateTraceFormatCompatibility_JSON_StepMismatch verifies that the JSON
+// format checker now catches step-index mismatches before serialisation, so
+// loading the file back won't produce a structurally broken trace.
+func TestValidateTraceFormatCompatibility_JSON_StepMismatch(t *testing.T) {
+	tr := &ExecutionTrace{
+		TransactionHash: "step-mismatch-test",
+		StartTime:       time.Now(),
+		EndTime:         time.Now().Add(time.Second),
+		States: []ExecutionState{
+			{Step: 0, Operation: "ok"},
+			{Step: 99, Operation: "wrong-index"}, // intentional mismatch
+		},
+	}
+
+	err := ValidateTraceFormatCompatibility(tr, "json")
+	if err == nil {
+		t.Fatal("expected error for JSON export with step mismatch")
+	}
+	if !strings.Contains(err.Error(), "step mismatch") {
+		t.Errorf("error should mention 'step mismatch', got: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "Fix:") {
+		t.Errorf("error should include a Fix hint, got: %q", err.Error())
+	}
+}
+
+// TestValidateTraceFormatCompatibility_JSON_ValidSequential verifies that a
+// correctly-indexed trace passes JSON format validation.
+func TestValidateTraceFormatCompatibility_JSON_ValidSequential(t *testing.T) {
+	tr := &ExecutionTrace{
+		TransactionHash: "valid-json",
+		StartTime:       time.Now(),
+		EndTime:         time.Now().Add(time.Second),
+		States: []ExecutionState{
+			{Step: 0, Operation: "a"},
+			{Step: 1, Operation: "b"},
+			{Step: 2, Operation: "c"},
+		},
+	}
+	if err := ValidateTraceFormatCompatibility(tr, "json"); err != nil {
+		t.Errorf("valid sequential trace should pass JSON check, got: %v", err)
+	}
+}
+
+// ── ValidateTraceFormatCompatibility — HTML large-arguments detection ─────────
+
+// TestValidateTraceFormatCompatibility_HTML_LargeArguments verifies that the
+// HTML format checker now catches steps with very large argument payloads
+// before the browser would receive a multi-megabyte HTML file.
+func TestValidateTraceFormatCompatibility_HTML_LargeArguments(t *testing.T) {
+	tr := &ExecutionTrace{
+		TransactionHash: "large-args-test",
+		StartTime:       time.Now(),
+		EndTime:         time.Now().Add(time.Second),
+		States: []ExecutionState{
+			{
+				Step:      0,
+				Operation: "invoke",
+				Arguments: []interface{}{strings.Repeat("x", 60000)}, // > 50k threshold
+			},
+		},
+	}
+
+	err := ValidateTraceFormatCompatibility(tr, "html")
+	if err == nil {
+		t.Fatal("expected error for HTML export with very large arguments")
+	}
+	if !strings.Contains(err.Error(), "very large arguments") {
+		t.Errorf("error should mention 'very large arguments', got: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "Fix:") {
+		t.Errorf("error should include a Fix hint, got: %q", err.Error())
+	}
+}
+
+// TestValidateTraceFormatCompatibility_HTML_SmallArguments verifies that
+// reasonably-sized arguments do not trigger the check.
+func TestValidateTraceFormatCompatibility_HTML_SmallArguments(t *testing.T) {
+	tr := &ExecutionTrace{
+		TransactionHash: "small-args",
+		StartTime:       time.Now(),
+		EndTime:         time.Now().Add(time.Second),
+		States: []ExecutionState{
+			{Step: 0, Operation: "call", Arguments: []interface{}{"small", "args"}},
+		},
+	}
+	if err := ValidateTraceFormatCompatibility(tr, "html"); err != nil {
+		t.Errorf("small-argument trace should pass HTML check, got: %v", err)
+	}
+}

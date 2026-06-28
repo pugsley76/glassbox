@@ -7,9 +7,21 @@
 package pathutil
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 )
+
+// PathValidationError describes a path safety or normalization failure.
+type PathValidationError struct {
+	Path    string
+	Reason  string
+	FixHint string
+}
+
+func (e *PathValidationError) Error() string {
+	return fmt.Sprintf("invalid path %q: %s\n  Fix: %s", e.Path, e.Reason, e.FixHint)
+}
 
 // Normalize converts sep to the OS-native separator and cleans the path.
 // It is safe to call on both POSIX and Windows paths regardless of the
@@ -76,4 +88,51 @@ func RelToSlash(basepath, targpath string) (string, error) {
 		return "", err
 	}
 	return filepath.ToSlash(rel), nil
+}
+
+// ValidateSourcePath validates a source file path for use in source mapping.
+// It checks for null bytes, directory traversal, and ensures the path is
+// a well-formed relative or absolute path without suspicious patterns.
+func ValidateSourcePath(path string) error {
+	if path == "" {
+		return &PathValidationError{
+			Path:    path,
+			Reason:  "path is empty",
+			FixHint: "provide a valid source file path",
+		}
+	}
+
+	if strings.ContainsRune(path, 0) {
+		return &PathValidationError{
+			Path:    path,
+			Reason:  "path contains null bytes",
+			FixHint: "remove any null bytes from the path specification",
+		}
+	}
+
+	cleaned := filepath.Clean(path)
+
+	if strings.Contains(cleaned, "..") {
+		return &PathValidationError{
+			Path:    path,
+			Reason:  "path contains directory traversal (..)",
+			FixHint: "use a relative path within the project or an absolute path without traversal",
+		}
+	}
+
+	if IsWindowsAbs(path) && !filepath.IsAbs(cleaned) {
+		return &PathValidationError{
+			Path:    path,
+			Reason:  "Windows absolute path could not be resolved",
+			FixHint: "ensure the path uses a valid Windows drive letter format (e.g. C:\\project\\src\\lib.rs)",
+		}
+	}
+
+	return nil
+}
+
+// IsPathSafe performs a comprehensive safety check on a file path.
+// It returns true if the path is safe to use in source mapping operations.
+func IsPathSafe(path string) bool {
+	return ValidateSourcePath(path) == nil
 }

@@ -130,6 +130,27 @@ func LoadFromFile(path string) (*Registry, error) {
 		)
 	}
 
+	// Validate metadata fields so a truncated or corrupted registry file is
+	// detected immediately with a clear diagnostic.
+	if reg.TxHash == "" {
+		return nil, fmt.Errorf(
+			"registry file %s is missing the transaction hash — the file may be truncated or corrupted; "+
+				"re-run the debug command to regenerate the registry",
+			path,
+		)
+	}
+	if reg.Network == "" {
+		return nil, fmt.Errorf(
+			"registry file %s is missing the network — the file may be truncated or corrupted; "+
+				"re-run the debug command to regenerate the registry",
+			path,
+		)
+	}
+	if reg.GlassboxVersion == "" {
+		// Back-fill for registries saved before this field was recorded.
+		reg.GlassboxVersion = "unknown"
+	}
+
 	return &reg, nil
 }
 

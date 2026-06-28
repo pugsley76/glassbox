@@ -83,13 +83,14 @@ func MergeLedgerOverrides(base map[string]string, overrides map[string]string) m
 		return base
 	}
 
-	if base == nil {
-		base = make(map[string]string)
+	// Always allocate a new map so the caller's base is never mutated.
+	merged := make(map[string]string, len(base)+len(overrides))
+	for key, value := range base {
+		merged[key] = value
 	}
-
 	for key, value := range overrides {
-		base[key] = value
+		merged[key] = value
 	}
 
-	return base
+	return merged
 }

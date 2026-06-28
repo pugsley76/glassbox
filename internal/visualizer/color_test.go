@@ -111,6 +111,56 @@ func TestContractBoundaryPlainText(t *testing.T) {
 	}
 }
 
+func TestGlassboxNoColorEnvDisablesColors(t *testing.T) {
+	_ = os.Setenv("GLASSBOX_NO_COLOR", "1")
+	defer func() { _ = os.Unsetenv("GLASSBOX_NO_COLOR") }()
+	_ = os.Unsetenv("NO_COLOR")
+
+	if ColorEnabled() {
+		t.Error("ColorEnabled() should be false when GLASSBOX_NO_COLOR is set")
+	}
+
+	out := Colorize("hello", "green")
+	if strings.Contains(out, "\033") {
+		t.Errorf("Colorize should not emit ANSI when GLASSBOX_NO_COLOR set, got: %q", out)
+	}
+	if out != "hello" {
+		t.Errorf("Colorize should return plain text, got: %q", out)
+	}
+}
+
+func TestSetNoColorOverride(t *testing.T) {
+	_ = os.Unsetenv("NO_COLOR")
+	_ = os.Unsetenv("GLASSBOX_NO_COLOR")
+	SetNoColor(true)
+	defer SetNoColor(false)
+
+	if ColorEnabled() {
+		t.Error("ColorEnabled() should be false after SetNoColor(true)")
+	}
+	out := Colorize("world", "blue")
+	if out != "world" {
+		t.Errorf("SetNoColor(true): expected plain text, got %q", out)
+	}
+}
+
+func TestSetNoColorFalseRestoresDefault(t *testing.T) {
+	_ = os.Unsetenv("NO_COLOR")
+	_ = os.Unsetenv("GLASSBOX_NO_COLOR")
+	SetNoColor(true)
+	SetNoColor(false)
+
+	// Without NO_COLOR set and not a TTY, ColorEnabled is false — but we can
+	// at least verify SetNoColor(false) doesn't force it to true.
+	// The important assertion is that Colorize no longer forcibly strips codes.
+	_ = os.Setenv("FORCE_COLOR", "1")
+	defer func() { _ = os.Unsetenv("FORCE_COLOR") }()
+
+	if !ColorEnabled() {
+		t.Error("ColorEnabled() should be true with FORCE_COLOR=1 and SetNoColor(false)")
+	}
+}
+
 func TestContractBoundaryWithColor(t *testing.T) {
 	_ = os.Unsetenv("NO_COLOR")
 	_ = os.Setenv("FORCE_COLOR", "1")

@@ -24,7 +24,12 @@ The archive contains all replay inputs, simulation results, and metadata
 required to reproduce the session on another machine. Load the archive with
 'Glassbox session load <archive>'.
 
-If no session-id is provided, the currently active session is archived.`,
+If no session-id is provided, the currently active session is archived.
+
+Validation:
+  The session data is validated before export so that corrupt or incomplete
+  sessions are rejected early with a clear diagnostic rather than silently
+  producing an archive that cannot be imported on the other side.`,
 	Example: `  # Export the active session
   Glassbox session share
 
@@ -117,6 +122,28 @@ the archive are available immediately without re-fetching from the network.`,
 		data, err := session.ImportArchive(archivePath)
 		if err != nil {
 			return fmt.Errorf("failed to load session archive: %w", err)
+		}
+
+		if schemaErr := session.ValidateSchemaVersion(data.SchemaVersion, data.ID); schemaErr != nil {
+			return schemaErr
+		}
+		if upgraded, upgradeErr := session.UpgradeSessionData(data); upgradeErr != nil {
+			return upgradeErr
+		} else if upgraded {
+			fmt.Fprintf(os.Stderr, "Session schema upgraded to version %d.\n", session.SchemaVersion)
+		}
+
+		report := session.ValidateIntegrity(data)
+		if !report.OK {
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("loaded session failed integrity validation (%d issue(s)):\n", len(report.Issues)))
+			for i, issue := range report.Issues {
+				sb.WriteString(fmt.Sprintf("  %d. [%s] %s\n", i+1, issue.Field, issue.Description))
+				if issue.Hint != "" {
+					sb.WriteString(fmt.Sprintf("     Hint: %s\n", issue.Hint))
+				}
+			}
+			return fmt.Errorf("%s", sb.String())
 		}
 
 		// Mark as active session.
