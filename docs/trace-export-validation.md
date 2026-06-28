@@ -636,6 +636,61 @@ This correctly:
 
 ---
 
+## Snapshot Reliability Validation
+
+Before exporting traces that depend on snapshot data (sandboxed replay, step
+navigation), Glassbox validates snapshot coverage using
+`ValidateSnapshotForExport`. This surfaces snapshot problems early — before
+the expensive export operation begins — so users get a clear, actionable error
+rather than a partial or silently broken export.
+
+### Validation checks
+
+| Condition | Error produced |
+|-----------|---------------|
+| Simulation hit an OOM condition | Snapshot capture failed due to memory pressure |
+| Steps executed but zero snapshots captured | No snapshots were captured |
+| Snapshot count far below expected coverage | Sparse snapshot coverage warning |
+
+### OOM error
+
+```
+snapshot capture failed due to memory pressure (OOM) — trace export may be incomplete
+  The simulation ran out of memory before all snapshots could be saved.
+  Fix: re-run with a smaller transaction or increase the simulator memory limit
+  Tip: use --trace-verbosity summary to reduce memory usage during capture
+```
+
+### No snapshots captured
+
+```
+no snapshots were captured during simulation (250 steps executed, 0 snapshots) —
+sandboxed replay and step-navigation will be unavailable
+  Possible causes:
+    - Snapshot interval is set too high (no step hit the interval)
+    - Simulator version does not support snapshot capture
+  Fix: lower --snapshot-interval or re-run with a simulator that supports snapshots
+  Tip: run 'glassbox doctor' to check simulator snapshot support
+```
+
+### Sparse snapshot coverage
+
+```
+sparse snapshot coverage: 2 snapshot(s) for 1000 steps (expected at least 5) —
+step-navigation may jump large gaps
+  Fix: lower --snapshot-interval to capture more frequent snapshots
+  Current coverage: 1 snapshot per ~500 steps
+```
+
+### Coverage threshold
+
+The validator expects at minimum **1 snapshot per 200 steps**. This matches the
+default snapshot interval. If you use a higher `--snapshot-interval`, the sparse
+coverage warning may trigger for long-running transactions — lower the interval
+or acknowledge the reduced navigation granularity.
+
+---
+
 ## See Also
 
 - [Debug Command Reference](./debug-command.md)
@@ -643,3 +698,5 @@ This correctly:
 - [Trace Profiling and Performance](./trace-profiling.md)
 - [Event Schemas](./event-schemas.md)
 - [JSON Output Format](./json-output.md)
+- [Snapshot Deduplication](./snapshot-deduplication.md)
+- [Sandboxed Replay](./sandboxed-replay.md)

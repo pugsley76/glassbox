@@ -81,6 +81,10 @@ PR_279_trace_export_audit_chain_integrity.md
 PR_280_trace_export_schema_stability.md
 PR_281_trace_export_path_normalization_safety.md
 PR_278_hsm_signing_pkcs11_validation.md
+PR_275_trace_export_snapshot_reliability.md
+
+# --- Kiro IDE ---
+.kiro/
 commit_309*.next
 *.py
 !emojis.py
