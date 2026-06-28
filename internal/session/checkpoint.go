@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -42,7 +41,44 @@ func checkpointPath() (string, error) {
 
 // WriteCheckpoint persists an active-session checkpoint for crash recovery.
 // Call this when a debug session starts and ClearCheckpoint when it ends cleanly.
+//
+// The checkpoint fields are validated before writing so that incomplete or
+// inconsistent checkpoints are rejected early with a clear diagnostic instead
+// of silently creating a corrupt recovery file.
 func WriteCheckpoint(cp *Checkpoint) error {
+	if cp == nil {
+		return fmt.Errorf("checkpoint must not be nil")
+	}
+	if cp.SessionID == "" {
+		return fmt.Errorf(
+			"checkpoint requires a session ID\n" +
+				"  Fix: ensure the session is created before writing the checkpoint",
+		)
+	}
+	if cp.TxHash == "" {
+		return fmt.Errorf(
+			"checkpoint requires a transaction hash\n" +
+				"  Fix: provide the transaction hash when starting the debug session",
+		)
+	}
+	if cp.Network == "" {
+		return fmt.Errorf(
+			"checkpoint requires a network\n" +
+				"  Fix: provide the network when starting the debug session",
+		)
+	}
+	validNetworks := map[string]bool{"testnet": true, "mainnet": true, "futurenet": true}
+	if !validNetworks[cp.Network] {
+		return fmt.Errorf(
+			"unsupported network %q in checkpoint — must be one of: testnet, mainnet, futurenet\n"+
+				"  Fix: use a valid network when starting the debug session",
+			cp.Network,
+		)
+	}
+	if cp.StartedAt.IsZero() {
+		cp.StartedAt = time.Now()
+	}
+
 	path, err := checkpointPath()
 	if err != nil {
 		return err
@@ -99,10 +135,5 @@ func (c *Checkpoint) IsOrphaned() bool {
 	if c.PID <= 0 {
 		return true
 	}
-	// syscall.Kill(pid, 0) probes process existence on POSIX systems:
-	//   nil   → process exists and is accessible
-	//   ESRCH → no such process (orphaned)
-	//   EPERM → process exists but we lack permission (not orphaned)
-	err := syscall.Kill(c.PID, 0)
-	return err == syscall.ESRCH
+	return !processAlive(c.PID)
 }

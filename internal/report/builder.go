@@ -44,6 +44,16 @@ func (b *Builder) AddExecutionStep(index int, op string, status string, details 
 	return b
 }
 
+func (b *Builder) AddExecutionStepWithSource(index int, op, status, details, sourceFile string, sourceLine int) *Builder {
+	step := b.AddExecutionStep(index, op, status, details)
+	last := len(b.report.Execution.Steps) - 1
+	if last >= 0 {
+		b.report.Execution.Steps[last].SourceFile = sourceFile
+		b.report.Execution.Steps[last].SourceLine = sourceLine
+	}
+	return step
+}
+
 func (b *Builder) AddContractCall(contractID, function, status string) *Builder {
 	if b.report.Execution == nil {
 		b.report.Execution = &ExecutionLog{}

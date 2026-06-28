@@ -95,31 +95,42 @@ func DefaultCompatibilityOptions() CompatibilityOptions {
 
 // ExportVersionedTrace exports a trace with version information
 func ExportVersionedTrace(trace *ExecutionTrace, format, outputPath string, opts ExportOptions, compatOpts CompatibilityOptions) error {
-	// Wrap trace with version
+	if err := ValidateTraceExportParams(trace, format, outputPath, opts); err != nil {
+		return fmt.Errorf("pre-export validation failed: %w", err)
+	}
+
+	if err := ValidateTraceFormatCompatibility(trace, format); err != nil {
+		return fmt.Errorf("format compatibility check failed: %w", err)
+	}
+
 	versioned := VersionedTrace{
 		Version: CurrentFormatVersion,
 		Trace:   trace,
 	}
-	
-	// For JSON format, export with version envelope
+
 	if strings.ToLower(format) == "json" {
 		data, err := json.MarshalIndent(versioned, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal versioned trace: %w", err)
 		}
-		
+
 		if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-			return fmt.Errorf("failed to create directory: %w", err)
+			return fmt.Errorf("failed to create output directory: %w\n"+
+				"  Path: %s\n"+
+				"  Fix: ensure the parent directory exists and is writable",
+				err, filepath.Dir(outputPath))
 		}
-		
+
 		if err := os.WriteFile(outputPath, data, 0o644); err != nil {
-			return fmt.Errorf("failed to write file: %w", err)
+			return fmt.Errorf("failed to write versioned trace file: %w\n"+
+				"  Path: %s\n"+
+				"  Fix: check disk space and file permissions",
+				err, outputPath)
 		}
-		
+
 		return nil
 	}
-	
-	// For other formats, use standard export (HTML/Markdown don't need versioning in content)
+
 	return ExportExecutionTraceWithOptions(trace, format, outputPath, opts)
 }
 
@@ -254,6 +265,58 @@ func joinVersions(versions []string) string {
 		result += o
 	}
 	return result
+}
+
+// SchemaCompatibilityReport describes the compatibility between two trace versions.
+type SchemaCompatibilityReport struct {
+	FromVersion       TraceFormatVersion
+	ToVersion         TraceFormatVersion
+	Compatible        bool
+	RequiresMigration bool
+	Warnings          []string
+	Actions           []string
+}
+
+// CheckSchemaCompatibility produces a detailed compatibility report between
+// two trace format versions, including actionable migration guidance.
+func CheckSchemaCompatibility(from, to TraceFormatVersion) SchemaCompatibilityReport {
+	r := SchemaCompatibilityReport{
+		FromVersion: from,
+		ToVersion:   to,
+	}
+
+	if from.Major != to.Major {
+		r.Compatible = false
+		r.RequiresMigration = true
+		r.Warnings = append(r.Warnings,
+			fmt.Sprintf("major version mismatch: %s → %s", from.String(), to.String()))
+		r.Actions = append(r.Actions,
+			fmt.Sprintf("use Glassbox CLI v%d.x.x to work with this trace", from.Major))
+		return r
+	}
+
+	if from.Minor > to.Minor {
+		r.Compatible = false
+		r.RequiresMigration = true
+		r.Warnings = append(r.Warnings,
+			fmt.Sprintf("trace is newer minor (%s) than CLI (%s)", from.String(), to.String()))
+		r.Actions = append(r.Actions,
+			"upgrade Glassbox CLI to match the trace version")
+		return r
+	}
+
+	if from.Minor < to.Minor {
+		r.Compatible = true
+		r.RequiresMigration = true
+		r.Warnings = append(r.Warnings,
+			fmt.Sprintf("trace uses older minor version (%s); migration to %s required", from.String(), to.String()))
+		r.Actions = append(r.Actions,
+			fmt.Sprintf("re-export trace with current CLI (%s) for best results", to.String()))
+		return r
+	}
+
+	r.Compatible = true
+	return r
 }
 
 // migrateTrace migrates a trace from one version to another

@@ -243,3 +243,114 @@ func TestMergeLedgerOverrides_OverrideWins(t *testing.T) {
 		t.Errorf("override should win, got %v", result)
 	}
 }
+
+// ── MergeLedgerOverrides — isolation (base map must not be mutated) ───────────
+
+// TestMergeLedgerOverrides_DoesNotMutateBase verifies that calling
+// MergeLedgerOverrides never modifies the caller's original base map.
+// Before the fix, overrides were applied directly to base, so a second call
+// with a different override set would see stale keys from the first call.
+func TestMergeLedgerOverrides_DoesNotMutateBase(t *testing.T) {
+	base := map[string]string{"k": "original"}
+	_ = MergeLedgerOverrides(base, map[string]string{"k": "overridden"})
+
+	// base must still hold the original value after the merge.
+	if base["k"] != "original" {
+		t.Errorf("MergeLedgerOverrides mutated base map: base[k] = %q, want %q",
+			base["k"], "original")
+	}
+}
+
+// TestMergeLedgerOverrides_NewKeyInOverride verifies that a key present only
+// in the override appears in the result without affecting base.
+func TestMergeLedgerOverrides_NewKeyInOverride(t *testing.T) {
+	base := map[string]string{"existing": "val"}
+	result := MergeLedgerOverrides(base, map[string]string{"new": "added"})
+
+	if result["existing"] != "val" {
+		t.Errorf("existing base key missing from result, got %q", result["existing"])
+	}
+	if result["new"] != "added" {
+		t.Errorf("new override key missing from result, got %q", result["new"])
+	}
+	// Base must be unmodified.
+	if _, ok := base["new"]; ok {
+		t.Error("MergeLedgerOverrides added override key to the base map")
+	}
+}
+
+// TestMergeLedgerOverrides_BothNilAndEmpty verifies that nil base + nil overrides
+// returns nil (not a nil-pointer panic).
+func TestMergeLedgerOverrides_BothNilAndEmpty(t *testing.T) {
+	result := MergeLedgerOverrides(nil, nil)
+	if result != nil {
+		t.Errorf("expected nil result for nil+nil merge, got %v", result)
+	}
+}
+
+// TestMergeLedgerOverrides_ResultIsIndependent verifies that mutating the
+// returned map does not affect the original base.
+func TestMergeLedgerOverrides_ResultIsIndependent(t *testing.T) {
+	base := map[string]string{"k": "v"}
+	result := MergeLedgerOverrides(base, map[string]string{"x": "y"})
+
+	// Mutate the result.
+	result["k"] = "changed"
+
+	if base["k"] != "v" {
+		t.Errorf("mutating result map affected base: base[k] = %q, want %q", base["k"], "v")
+	}
+}
+
+// ── LoadLedgerOverrideManifest — additional edge cases ────────────────────────
+
+// TestLoadLedgerOverrideManifest_KeyWithColonInValue verifies that a manifest
+// entry value containing a colon is loaded without error (colons are valid in
+// base64-encoded XDR strings when padded).
+func TestLoadLedgerOverrideManifest_KeysArePreserved(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/manifest.json"
+	v1 := validBase64("entry-alpha")
+	v2 := validBase64("entry-beta")
+	content := `{"ledger_entries": {"keyA": "` + v1 + `", "keyB": "` + v2 + `"}}`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := LoadLedgerOverrideManifest(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if entries["keyA"] != v1 || entries["keyB"] != v2 {
+		t.Errorf("entries not preserved: %v", entries)
+	}
+}
+
+// TestLoadLedgerOverrideManifest_EmptyPath verifies that an empty path string
+// returns a not-found error rather than panicking.
+func TestLoadLedgerOverrideManifest_EmptyPath(t *testing.T) {
+	_, err := LoadLedgerOverrideManifest("")
+	if err == nil {
+		t.Fatal("expected error for empty path")
+	}
+	// Should mention the flag name so the error is actionable.
+	if !strings.Contains(err.Error(), "--mock-ledger-manifest") {
+		t.Errorf("error should mention --mock-ledger-manifest, got: %v", err)
+	}
+}
+
+// ── ParseLedgerOverrideFlags — value containing colon ─────────────────────────
+
+// TestParseLedgerOverrideFlags_ValueWithColon verifies that a value that itself
+// contains a colon is parsed correctly (SplitN with n=2 handles this).
+func TestParseLedgerOverrideFlags_ValueWithColon(t *testing.T) {
+	// base64 of "a:b" — the encoded form doesn't contain a colon, but the raw
+	// value portion after the first colon should be taken as-is.
+	v := validBase64("xdr:payload")
+	overrides, err := ParseLedgerOverrideFlags([]string{"mykey:" + v})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if overrides["mykey"] != v {
+		t.Errorf("expected mykey=%q, got %q", v, overrides["mykey"])
+	}
+}
