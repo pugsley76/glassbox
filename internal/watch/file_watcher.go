@@ -65,7 +65,6 @@ func StartFileWatcher(ctx context.Context, cfg FileWatcherConfig) (<-chan struct
 		}
 
 		var debounceTimer *time.Timer
-		var pendingEvent bool
 
 		for {
 			select {
@@ -105,7 +104,6 @@ func StartFileWatcher(ctx context.Context, cfg FileWatcherConfig) (<-chan struct
 					if debounceTimer != nil {
 						debounceTimer.Stop()
 					}
-					pendingEvent = true
 					debounceTimer = time.AfterFunc(cfg.DebounceWindow, func() {
 						select {
 						case events <- struct{}{}:
