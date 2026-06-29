@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 const (
@@ -34,6 +35,8 @@ type VerificationReport struct {
 	Scheme   string
 	Checks   []string
 	Issues   []string
+	// ElapsedMs is how long the verification took in milliseconds.
+	ElapsedMs int64
 }
 
 func NewRegistrar() (*Registrar, error) {
@@ -47,6 +50,12 @@ func NewRegistrar() (*Registrar, error) {
 		return nil, fmt.Errorf("resolve absolute executable path: %w", err)
 	}
 
+	// Reject paths containing null bytes — these cannot represent real files and
+	// indicate a hostile environment or misconfigured OS.
+	if strings.ContainsRune(executablePath, 0) {
+		return nil, fmt.Errorf("executable path contains a null byte and cannot be trusted")
+	}
+
 	if _, err := os.Stat(executablePath); err != nil {
 		return nil, fmt.Errorf(
 			"executable not found at %s: %w\n"+
@@ -54,6 +63,18 @@ func NewRegistrar() (*Registrar, error) {
 			executablePath, err,
 		)
 	}
+
+	// Resolve symlinks so the registered handler always points to the real binary,
+	// not a link that could be replaced silently.
+	resolved, err := filepath.EvalSymlinks(executablePath)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"resolve symlink for executable %s: %w\n"+
+				"  Fix: ensure the binary is not a dangling symlink",
+			executablePath, err,
+		)
+	}
+	executablePath = resolved
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -67,16 +88,22 @@ func NewRegistrar() (*Registrar, error) {
 }
 
 func (r *Registrar) Register() error {
+	start := time.Now()
+	var err error
 	switch runtime.GOOS {
 	case "windows":
-		return r.registerWindows()
+		err = r.registerWindows()
 	case "darwin":
-		return r.registerDarwin()
+		err = r.registerDarwin()
 	case "linux":
-		return r.registerLinux()
+		err = r.registerLinux()
 	default:
-		return fmt.Errorf("protocol registration is not supported on %s", runtime.GOOS)
+		err = fmt.Errorf("protocol registration is not supported on %s", runtime.GOOS)
 	}
+	if err != nil {
+		return fmt.Errorf("%w (elapsed: %dms)", err, time.Since(start).Milliseconds())
+	}
+	return nil
 }
 
 func (r *Registrar) Unregister() error {
@@ -98,6 +125,7 @@ func (r *Registrar) IsRegistered() bool {
 }
 
 func (r *Registrar) Verify() (*VerificationReport, error) {
+	start := time.Now()
 	report := &VerificationReport{
 		Platform: runtime.GOOS,
 		Scheme:   Scheme,
@@ -113,6 +141,8 @@ func (r *Registrar) Verify() (*VerificationReport, error) {
 	default:
 		report.Issues = append(report.Issues, fmt.Sprintf("protocol verification is not supported on %s", runtime.GOOS))
 	}
+
+	report.ElapsedMs = time.Since(start).Milliseconds()
 
 	if len(report.Issues) > 0 {
 		return report, verificationError(report.Issues)
