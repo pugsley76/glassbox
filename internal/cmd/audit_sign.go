@@ -287,7 +287,7 @@ func runAuditSign(cmd *cobra.Command, args []string) error {
 	}
 
 	// Attach provenance metadata when any provenance flag is set.
-	prov, err := buildProvenance(providerName)
+	prov, err := buildProvenance(providerName, hex.EncodeToString(publicKey), signerImpl.Algorithm())
 	if err != nil {
 		return err
 	}
@@ -447,7 +447,7 @@ func effectivePKCS11Config() signer.Pkcs11Config {
 // validatePKCS11SignInputs rejects an incomplete PKCS#11 configuration before any
 // module is loaded, so the user gets an explicit message instead of a low-level
 // failure mid-signing. The module path and PIN are required; the key CKA_ID,
-// when supplied, must be valid hex.
+// when supplied, must be valid hex. Key-label and key-id are mutually exclusive.
 func validatePKCS11SignInputs(cfg signer.Pkcs11Config) error {
 	var missing []string
 	if cfg.ModulePath == "" {
@@ -464,11 +464,45 @@ func validatePKCS11SignInputs(cfg signer.Pkcs11Config) error {
 			strings.Join(missing, " and ")))
 	}
 
+	// Check module file exists before attempting to load it.
+	if info, err := os.Stat(cfg.ModulePath); err != nil {
+		if os.IsNotExist(err) {
+			return errors.WrapValidationError(fmt.Sprintf(
+				"--pkcs11-module: module file not found: %q\n"+
+					"  Fix: verify the path is correct for your OS and architecture\n"+
+					"  Tip: run 'glassbox audit:sign --validate-only --signing-provider pkcs11' for a full preflight report",
+				cfg.ModulePath,
+			))
+		}
+		return errors.WrapValidationError(fmt.Sprintf(
+			"--pkcs11-module: cannot access %q: %v", cfg.ModulePath, err,
+		))
+	} else if info.IsDir() {
+		return errors.WrapValidationError(fmt.Sprintf(
+			"--pkcs11-module: %q is a directory, not a shared library\n"+
+				"  Fix: provide the full path to the .so/.dylib/.dll file",
+			cfg.ModulePath,
+		))
+	}
+
 	if cfg.KeyIDHex != "" {
 		if _, err := hex.DecodeString(cfg.KeyIDHex); err != nil {
 			return errors.WrapValidationError(fmt.Sprintf(
 				"--pkcs11-key-id must be a hex-encoded CKA_ID (e.g. a1b2c3): %v", err))
 		}
+	}
+
+	if cfg.KeyLabel != "" && cfg.KeyIDHex != "" {
+		return errors.WrapValidationError(
+			"--pkcs11-key-label and --pkcs11-key-id are mutually exclusive; provide only one identifier for the signing key\n" +
+				"  Fix: use --pkcs11-key-label <CKA_LABEL> OR --pkcs11-key-id <hex CKA_ID>, not both")
+	}
+
+	if cfg.KeyLabel == "" && cfg.KeyIDHex == "" {
+		return errors.WrapValidationError(
+			"pkcs11 signing requires one of --pkcs11-key-label (CKA_LABEL) or --pkcs11-key-id (hex CKA_ID)\n" +
+				"  Fix: set GLASSBOX_PKCS11_KEY_LABEL or GLASSBOX_PKCS11_KEY_ID, or use the corresponding --pkcs11-* flag")
+	}
 	}
 
 	return nil
@@ -515,8 +549,11 @@ func validateAuditSignProvenanceFlags(previousHash, certChainFile string) error 
 }
 
 // buildProvenance constructs a SignatureProvenance from CLI flags.
+// algorithm is the signing algorithm string reported by the Signer implementation
+// (e.g. "ed25519") — using the live value instead of a provider-name guess
+// ensures the field is always accurate regardless of which key type the HSM uses.
 // Returns nil when no provenance flags are set (backward-compatible behaviour).
-func buildProvenance(providerName string) (*SignatureProvenance, error) {
+func buildProvenance(providerName, publicKeyHex, algorithm string) (*SignatureProvenance, error) {
 	hasAny := auditSignSignerIdentity != "" ||
 		auditSignKeyID != "" ||
 		auditSignCertChainFile != "" ||
@@ -530,14 +567,7 @@ func buildProvenance(providerName string) (*SignatureProvenance, error) {
 		SignerIdentity:        auditSignSignerIdentity,
 		KeyID:                 auditSignKeyID,
 		PreviousSignatureHash: auditSignPreviousSignatureHash,
-	}
-
-	// Derive algorithm from provider name.
-	switch providerName {
-	case "pkcs11":
-		prov.Algorithm = "ECDSA-P256"
-	default:
-		prov.Algorithm = "Ed25519"
+		Algorithm:             algorithm,
 	}
 
 	// Load certificate chain from file when provided.

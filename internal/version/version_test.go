@@ -97,3 +97,48 @@ func TestUserAgent_DevBuild(t *testing.T) {
 		t.Errorf("UserAgent() = %q; expected dev version", ua)
 	}
 }
+
+// ── ValidateVersionString ──────────────────────────────────────────────────
+
+func TestValidateVersionString_Valid(t *testing.T) {
+	tests := []string{"0.0.0", "1.0.0", "10.20.30", "0.0.1"}
+	for _, v := range tests {
+		if err := ValidateVersionString(v); err != nil {
+			t.Errorf("ValidateVersionString(%q) returned error: %v", v, err)
+		}
+	}
+}
+
+func TestValidateVersionString_Empty(t *testing.T) {
+	err := ValidateVersionString("")
+	if err == nil {
+		t.Fatal("expected error for empty version string")
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Errorf("error should mention 'empty', got: %q", err.Error())
+	}
+}
+
+func TestValidateVersionString_TooFewComponents(t *testing.T) {
+	err := ValidateVersionString("1.0")
+	if err == nil {
+		t.Fatal("expected error for two-component version")
+	}
+}
+
+func TestValidateVersionString_TooManyComponents(t *testing.T) {
+	err := ValidateVersionString("1.0.0.1")
+	if err == nil {
+		t.Fatal("expected error for four-component version")
+	}
+}
+
+func TestValidateVersionString_NonNumeric(t *testing.T) {
+	err := ValidateVersionString("1.0.beta")
+	if err == nil {
+		t.Fatal("expected error for non-numeric patch component")
+	}
+	if !strings.Contains(err.Error(), "non-digit") {
+		t.Errorf("error should mention non-digit, got: %q", err.Error())
+	}
+}

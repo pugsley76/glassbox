@@ -4,10 +4,13 @@
 package signer
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strings"
 )
 
 // wellKnownPKCS11Modules lists common PKCS#11 shared library paths per OS.
@@ -113,7 +116,8 @@ func (p *PKCS11Provider) EnvVars() []EnvVarDoc {
 }
 
 // Validate checks that the module path and PIN are present and that the
-// module file exists on disk.
+// module file exists on disk. It also validates KeyIDHex format and the
+// SlotIndex range so failures surface before any module is loaded.
 func (p *PKCS11Provider) Validate(cfg ProviderConfig) error {
 	module := p.resolveModule(cfg)
 	if module == "" {
@@ -124,10 +128,19 @@ func (p *PKCS11Provider) Validate(cfg ProviderConfig) error {
 		}
 	}
 
-	if _, err := os.Stat(module); err != nil {
+	info, err := os.Stat(module)
+	if err != nil {
 		return &Error{
 			Op:  "pkcs11",
-			Msg: fmt.Sprintf("PKCS#11 module not found at %q: %v", module, err),
+			Msg: fmt.Sprintf("PKCS#11 module not found at %q: %v\n"+
+				"  Fix: verify the path is correct for your OS/architecture; run --validate-only for a full preflight report", module, err),
+		}
+	}
+	if info.IsDir() {
+		return &Error{
+			Op:  "pkcs11",
+			Msg: fmt.Sprintf("PKCS#11 module path %q is a directory, not a shared library\n"+
+				"  Fix: provide the full path to the .so/.dylib/.dll file, not its parent directory", module),
 		}
 	}
 
@@ -135,6 +148,27 @@ func (p *PKCS11Provider) Validate(cfg ProviderConfig) error {
 		return &Error{
 			Op:  "pkcs11",
 			Msg: "PKCS#11 PIN is required; set --pkcs11-pin or GLASSBOX_PKCS11_PIN",
+		}
+	}
+
+	// Validate KeyIDHex format when provided so a typo is caught before
+	// any module is loaded (mirrors the check in validatePKCS11SignInputs).
+	keyIDHex := p.resolveKeyIDHex(cfg)
+	if keyIDHex != "" {
+		if _, hexErr := hex.DecodeString(keyIDHex); hexErr != nil {
+			return &Error{
+				Op:  "pkcs11",
+				Msg: fmt.Sprintf("--pkcs11-key-id (or GLASSBOX_PKCS11_KEY_ID) must be a hex-encoded CKA_ID: %v\n"+
+					"  Fix: provide a valid hex string, e.g. 'a1b2c3' (use pkcs11-tool --list-objects to find the CKA_ID)", hexErr),
+			}
+		}
+	}
+
+	// Validate slot index is non-negative.
+	if cfg.PKCS11SlotIndex < 0 {
+		return &Error{
+			Op:  "pkcs11",
+			Msg: fmt.Sprintf("PKCS#11 slot index must be >= 0, got %d; set GLASSBOX_PKCS11_SLOT to a valid non-negative integer", cfg.PKCS11SlotIndex),
 		}
 	}
 
@@ -194,15 +228,21 @@ func (p *PKCS11Provider) resolveKeyIDHex(cfg ProviderConfig) string {
 	return os.Getenv("GLASSBOX_PKCS11_KEY_ID")
 }
 
-// discoveryHint returns a hint string listing discovered modules, if any.
+// discoveryHint returns a hint string listing discovered modules on this system,
+// so callers can copy-paste the correct path instead of guessing.
 func (p *PKCS11Provider) discoveryHint() string {
 	discovered := DiscoverPKCS11Modules()
 	if len(discovered) == 0 {
 		return ""
 	}
-	hint := "; discovered modules on this system:"
+	var paths []string
 	for _, m := range discovered {
-		hint += "\n  " + filepath.ToSlash(m)
+		paths = append(paths, filepath.ToSlash(m))
 	}
-	return hint
+	sortPaths := func() {
+		sort.Slice(paths, func(i, j int) bool {
+			return strings.ToLower(paths[i]) < strings.ToLower(paths[j])
+		})
+	}
+	return "; discovered modules available on this system:\n  " + strings.Join(paths, "\n  ")
 }

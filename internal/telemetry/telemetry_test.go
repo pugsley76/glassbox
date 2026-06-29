@@ -186,3 +186,88 @@ func TestGetFeatureFlags(t *testing.T) {
 		t.Error("Expected non-nil feature flags slice")
 	}
 }
+
+// ── sanitizeCommandName ───────────────────────────────────────────────────────
+
+func TestSanitizeCommandName_SafeName_Preserved(t *testing.T) {
+	for _, name := range []string{"debug", "audit:sign", "protocol:diagnose", "session_save"} {
+		got := sanitizeCommandName(name)
+		if got != name {
+			t.Errorf("sanitizeCommandName(%q) = %q, want unchanged", name, got)
+		}
+	}
+}
+
+func TestSanitizeCommandName_UnsafeChars_Replaced(t *testing.T) {
+	got := sanitizeCommandName("debug<script>alert(1)</script>")
+	if strings.Contains(got, "<") || strings.Contains(got, ">") || strings.Contains(got, "(") {
+		t.Errorf("sanitizeCommandName should replace unsafe chars, got: %q", got)
+	}
+}
+
+func TestSanitizeCommandName_TooLong_Truncated(t *testing.T) {
+	long := strings.Repeat("a", 200)
+	got := sanitizeCommandName(long)
+	if len(got) > 64 {
+		t.Errorf("sanitizeCommandName should truncate at 64 chars, got len=%d", len(got))
+	}
+}
+
+func TestSanitizeCommandName_Empty_ReturnsEmpty(t *testing.T) {
+	if got := sanitizeCommandName(""); got != "" {
+		t.Errorf("sanitizeCommandName(\"\") = %q, want \"\"", got)
+	}
+}
+
+func TestSanitizeCommandName_NullBytes_Replaced(t *testing.T) {
+	got := sanitizeCommandName("cmd\x00injected")
+	if strings.ContainsRune(got, 0) {
+		t.Error("sanitizeCommandName should not allow null bytes in output")
+	}
+}
+
+// ── SanitizeValue — path and truncation coverage ──────────────────────────────
+
+func TestSanitizeValue_PathValue_ReducedToBasename(t *testing.T) {
+	got := SanitizeValue("output", "/home/user/projects/myapp/trace.json")
+	if strings.Contains(got, "/home") {
+		t.Errorf("SanitizeValue should reduce path to basename, got: %q", got)
+	}
+	if got != "trace.json" {
+		t.Errorf("expected basename 'trace.json', got: %q", got)
+	}
+}
+
+func TestSanitizeValue_LongString_Truncated(t *testing.T) {
+	long := strings.Repeat("x", 200)
+	got := SanitizeValue("description", long)
+	if len(got) > 132 { // 128 + "..." = 131
+		t.Errorf("SanitizeValue should truncate long strings, got len=%d", len(got))
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Errorf("truncated value should end with '...', got: %q", got)
+	}
+}
+
+func TestSanitizeValue_EmptyString_ReturnsEmpty(t *testing.T) {
+	if got := SanitizeValue("key", ""); got != "" {
+		t.Errorf("SanitizeValue(\"\") = %q, want \"\"", got)
+	}
+}
+
+func TestSanitizeValue_HashKey_FingerprintNotFullHash(t *testing.T) {
+	raw := "5c0a1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"
+	got := SanitizeValue("transaction.hash", raw)
+	// Must not contain the raw value.
+	if strings.Contains(got, raw) {
+		t.Errorf("SanitizeValue should not emit the raw hash, got: %q", got)
+	}
+	// Must start with fingerprint prefix.
+	if !strings.HasPrefix(got, "sha256:") {
+		t.Errorf("fingerprint must start with 'sha256:', got: %q", got)
+	}
+	// Fingerprint length is exactly 32 chars (7 prefix + 25 hex).
+	if len(got) != 32 {
+		t.Errorf("fingerprint length = %d, want 32", len(got))
+	}
+}

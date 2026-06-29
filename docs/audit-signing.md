@@ -47,6 +47,50 @@ openssl genpkey -algorithm ed25519 -out ed25519-private-key.pem
 openssl pkey -in ed25519-private-key.pem -pubout -out ed25519-public-key.pem
 ```
 
+### Software provider input validation
+
+The key is validated at configuration time (before signing begins) so format
+errors surface immediately with actionable remediation:
+
+**Wrong PEM format — OpenSSH:**
+```
+the key is in OpenSSH format; Glassbox requires PKCS#8 PEM format
+  Fix: convert with: openssl pkey -in key.pem -out key_pkcs8.pem
+  Or generate a new key: openssl genpkey -algorithm ed25519 -out key.pem
+```
+
+**Wrong PEM format — SEC1 (EC PRIVATE KEY):**
+```
+the key is in SEC1 (EC PRIVATE KEY) format; Glassbox requires PKCS#8 PEM format
+  Fix: convert with: openssl pkcs8 -topk8 -nocrypt -in key.pem -out key_pkcs8.pem
+```
+
+**RSA key:**
+```
+the key is an RSA key; Glassbox requires an Ed25519 PKCS#8 PEM private key
+  Fix: generate a new Ed25519 key: openssl genpkey -algorithm ed25519 -out key.pem
+```
+
+**Garbled PEM:**
+```
+invalid Ed25519 private key: ...
+  Expected: a PKCS#8 PEM file starting with '-----BEGIN PRIVATE KEY-----'
+  Generate: openssl genpkey -algorithm ed25519 -out key.pem
+```
+
+**Hex key — wrong length:**
+```
+GLASSBOX_SOFTWARE_PRIVATE_KEY_HEX has wrong key length: got 10 bytes, expected 32 (seed) or 64 (full key)
+  A 32-byte seed = 64 hex characters; a 64-byte full key = 128 hex characters
+```
+
+**Hex key — non-hex characters:**
+```
+GLASSBOX_SOFTWARE_PRIVATE_KEY_HEX is not valid hexadecimal: ...
+  Expected: a 64-character hex string (32-byte seed) or 128-character hex string (64-byte full key)
+  Fix: re-export the key or set GLASSBOX_AUDIT_PRIVATE_KEY_PEM with a PEM file instead
+```
+
 ---
 
 ## PKCS#11 HSM signing
@@ -95,7 +139,38 @@ message instead of a low-level error mid-signing:
     Provide the missing value(s), or run 'glassbox audit:sign --validate-only --signing-provider pkcs11' for a full PKCS#11 preflight report.
   ```
 
-- `--pkcs11-key-id`, when provided, must be valid hex (`CKA_ID`).
+- **Module file existence** is checked before any signing work begins. A missing
+  or inaccessible file is reported with a `Fix:` hint:
+
+  ```
+  --pkcs11-module: module file not found: "/usr/lib/nonexistent.so"
+    Fix: verify the path is correct for your OS and architecture
+    Tip: run 'glassbox audit:sign --validate-only --signing-provider pkcs11' for a full preflight report
+  ```
+
+  If the path points to a directory instead of a `.so`/`.dylib`/`.dll` file:
+
+  ```
+  --pkcs11-module: "/usr/lib/softhsm" is a directory, not a shared library
+    Fix: provide the full path to the .so/.dylib/.dll file, not its parent directory
+  ```
+
+- **Key selector required** — at least one of `--pkcs11-key-label` (or
+  `GLASSBOX_PKCS11_KEY_LABEL`) or `--pkcs11-key-id` (or `GLASSBOX_PKCS11_KEY_ID`)
+  must be provided. Without a selector the signing attempt would fail at the
+  key-lookup step; this check surfaces the issue before any module is loaded:
+
+  ```
+  no PKCS#11 key selector provided — set --pkcs11-key-label (or GLASSBOX_PKCS11_KEY_LABEL) or --pkcs11-key-id (or GLASSBOX_PKCS11_KEY_ID)
+    Tip: run 'pkcs11-tool --list-objects --type privkey' to list available key labels
+  ```
+
+- `--pkcs11-key-id`, when provided, must be valid hex (`CKA_ID`):
+
+  ```
+  --pkcs11-key-id must be a hex-encoded CKA_ID (e.g. a1b2c3): encoding/hex: invalid byte ...
+    Fix: provide a valid hex string, e.g. 'a1b2c3' (use pkcs11-tool --list-objects to find the CKA_ID)
+  ```
 
 ### Preflight (`--validate-only`)
 

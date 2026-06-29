@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/dotandev/glassbox/internal/errors"
+	"github.com/dotandev/glassbox/internal/signer"
 )
 
 // validNetworkValues lists all accepted --network flag values across commands.
@@ -200,6 +201,8 @@ func validateCheckBindingsFlags(args []string, outputDir, specFile, specFormat s
 
 // validateAuditSignArgs validates all flags for the audit:sign command at
 // parse time, catching mutually exclusive inputs and missing required options.
+// The supported provider list is derived dynamically from the registry so
+// newly registered providers are accepted without updating this function.
 func validateAuditSignArgs(payload, payloadFile, provider string) error {
 	if payload != "" && payloadFile != "" {
 		return errors.WrapValidationError(
@@ -207,7 +210,7 @@ func validateAuditSignArgs(payload, payloadFile, provider string) error {
 		)
 	}
 	if provider != "" {
-		supported := []string{"software", "pkcs11"}
+		supported := signer.DefaultRegistry.Names()
 		found := false
 		for _, s := range supported {
 			if strings.EqualFold(provider, s) {

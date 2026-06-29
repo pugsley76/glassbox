@@ -160,33 +160,40 @@ func (r *Resolver) Resolve(ctx context.Context, contractID string) (*SourceCode,
 	//    Validate it here so callers get actionable errors rather than a
 	//    silent no-op if the path is wrong.
 	if source == nil && r.contractSourceOverride != "" {
-		info, statErr := os.Stat(r.contractSourceOverride)
+		overridePath := strings.TrimSpace(r.contractSourceOverride)
+		if overridePath == "" {
+			return nil, fmt.Errorf(
+				"--contract-source: value must not be empty or whitespace\n" +
+					"  Provide the path to your contract's source directory (the one containing src/).",
+			)
+		}
+		info, statErr := os.Stat(overridePath)
 		if statErr != nil {
 			if os.IsNotExist(statErr) {
 				return nil, fmt.Errorf(
 					"--contract-source: directory not found: %q\n"+
 						"  Provide the path to your contract's source directory (the one containing src/).\n"+
 						"  Source mapping will be unavailable without a valid path.",
-					r.contractSourceOverride,
+					overridePath,
 				)
 			}
 			return nil, fmt.Errorf(
-				"--contract-source: cannot access %q: %w", r.contractSourceOverride, statErr)
+				"--contract-source: cannot access %q: %w", overridePath, statErr)
 		}
 		if !info.IsDir() {
 			return nil, fmt.Errorf(
 				"--contract-source: %q is a file, not a directory\n"+
 					"  Provide the path to your contract's source directory, not a file.",
-				r.contractSourceOverride,
+				overridePath,
 			)
 		}
 		logger.Logger.Info("Using --contract-source override for source mapping",
 			"contract_id", contractID,
-			"path", r.contractSourceOverride,
+			"path", overridePath,
 		)
 		return &SourceCode{
 			ContractID: contractID,
-			Repository: r.contractSourceOverride,
+			Repository: overridePath,
 			Files:      map[string]string{},
 			FetchedAt:  time.Now(),
 		}, nil
@@ -217,9 +224,30 @@ func (r *Resolver) Resolve(ctx context.Context, contractID string) (*SourceCode,
 				promptErr,
 			)
 		}
-		if manualPath != "" {
-			logger.Logger.Info("Manual WASM path provided by user", "path", manualPath)
+		manualPath = strings.TrimSpace(manualPath)
+		if manualPath == "" {
+			logger.Logger.Info("User chose to skip manual WASM path entry")
+			return nil, nil
 		}
+		info, statErr := os.Stat(manualPath)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				return nil, fmt.Errorf(
+					"manual WASM path %q does not exist\n"+
+						"  Provide a valid path to the contract WASM file or use --contract-source <path> or --skip-source-mapping.",
+					manualPath,
+				)
+			}
+			return nil, fmt.Errorf("manual WASM path %q is not accessible: %w", manualPath, statErr)
+		}
+		if info.IsDir() {
+			return nil, fmt.Errorf(
+				"manual WASM path %q is a directory, not a file\n"+
+					"  Provide the path to the compiled .wasm artifact.",
+				manualPath,
+			)
+		}
+		logger.Logger.Info("Manual WASM path provided by user", "path", manualPath)
 		return nil, nil
 	}
 

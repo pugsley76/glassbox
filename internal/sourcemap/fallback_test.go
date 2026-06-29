@@ -427,3 +427,90 @@ func contains(s, sub string) bool {
 			return false
 		}())
 }
+
+// ── FallbackMapper.Resolve — nil / too-small WASM data guard ─────────────────
+
+// TestFallbackMapper_Resolve_NilData_ReturnsUnknownWithWarning verifies that
+// passing nil wasmData returns a non-nil MappingQualityUnknown result with a
+// clear warning instead of panicking or returning a silent no-op.
+func TestFallbackMapper_Resolve_NilData_ReturnsUnknownWithWarning(t *testing.T) {
+	m := NewFallbackMapper(t.TempDir())
+	result := m.Resolve(nil, 0x100)
+
+	require.NotNil(t, result)
+	assert.Equal(t, MappingQualityUnknown, result.Quality)
+	assert.NotEmpty(t, result.Warning, "nil WASM data should produce a warning")
+	assert.True(t,
+		contains(result.Warning, "nil") || contains(result.Warning, "too small") || contains(result.Warning, "0 bytes"),
+		"warning should describe the data problem, got: %s", result.Warning)
+	assert.Contains(t, result.Warning, "cargo build",
+		"warning should include a remediation hint")
+}
+
+// TestFallbackMapper_Resolve_SmallData_ReturnsUnknownWithWarning verifies that
+// WASM data shorter than 8 bytes (magic + version) returns MappingQualityUnknown
+// with an actionable warning rather than crashing.
+func TestFallbackMapper_Resolve_SmallData_ReturnsUnknownWithWarning(t *testing.T) {
+	m := NewFallbackMapper(t.TempDir())
+
+	for _, size := range []int{0, 1, 3, 7} {
+		data := make([]byte, size)
+		result := m.Resolve(data, 0x42)
+
+		require.NotNil(t, result, "Resolve should never return nil (size=%d)", size)
+		assert.Equal(t, MappingQualityUnknown, result.Quality,
+			"short data (size=%d) should produce MappingQualityUnknown", size)
+		assert.NotEmpty(t, result.Warning,
+			"short data (size=%d) should produce a warning", size)
+	}
+}
+
+// TestFallbackMapper_Resolve_ExactlyEightBytes_DoesNotCrash verifies that
+// a minimal 8-byte WASM (magic + version only, no sections) does not crash and
+// returns a result.
+func TestFallbackMapper_Resolve_ExactlyEightBytes_DoesNotCrash(t *testing.T) {
+	m := NewFallbackMapper(t.TempDir())
+	result := m.Resolve(minimalWASM(), 0x00)
+	require.NotNil(t, result)
+	// A bare magic+version WASM has no debug info — should be Unknown.
+	assert.Equal(t, MappingQualityUnknown, result.Quality)
+}
+
+// ── FallbackMapper — warning message quality ──────────────────────────────────
+
+// TestFallbackMapper_UnknownResult_WarningMentionsAddress verifies that the
+// stage-5 "nothing found" warning includes the address being resolved so
+// users can cross-reference it with disassembly output.
+func TestFallbackMapper_UnknownResult_WarningMentionsAddress(t *testing.T) {
+	m := NewFallbackMapper(t.TempDir())
+	const addr = uint64(0xdeadbeef)
+	result := m.Resolve(minimalWASM(), addr)
+
+	require.NotNil(t, result)
+	if result.Quality == MappingQualityUnknown {
+		assert.Contains(t, result.Warning, fmt.Sprintf("0x%x", addr),
+			"unknown-quality warning should include the hex address")
+	}
+}
+
+// TestFallbackMapper_HeuristicResult_WarningMentionsRemediation verifies that
+// every heuristic-quality result carries a warning that mentions how to get
+// better mappings (recompile with debug = true).
+func TestFallbackMapper_HeuristicResult_WarningMentionsRemediation(t *testing.T) {
+	dir := t.TempDir()
+	// Create a Cargo.toml so the Cargo-discovery stage fires.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Cargo.toml"),
+		[]byte("[package]\nname=\"warn_test\""), 0600))
+
+	m := NewFallbackMapper(dir)
+	result := m.Resolve(minimalWASM(), 0x10)
+
+	require.NotNil(t, result)
+	if result.Quality == MappingQualityHeuristic {
+		assert.True(t,
+			contains(result.Warning, "debug = true") ||
+				contains(result.Warning, "Recompile") ||
+				contains(result.Warning, "recompile"),
+			"heuristic warning should mention how to improve accuracy, got: %s", result.Warning)
+	}
+}

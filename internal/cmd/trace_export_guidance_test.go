@@ -477,3 +477,152 @@ func resetTraceFlags() {
 	traceForceFlag = false
 	traceShowTimingFlag = false
 }
+
+// ── PreRunE: --meta pre-flight validation ────────────────────────────────────
+
+// TestTracePreRunE_MetaNoEquals verifies that a --meta value without an '='
+// separator is caught in PreRunE, before any trace file I/O.
+func TestTracePreRunE_MetaNoEquals(t *testing.T) {
+	t.Cleanup(resetTraceFlags)
+	traceExportPath = "./output.html"
+	traceExportFormat = "html"
+	traceMetadata = []string{"no-equals-sign"}
+
+	err := traceCmd.PreRunE(traceCmd, []string{})
+	if err == nil {
+		t.Fatal("expected error for --meta value without '='")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "no-equals-sign") {
+		t.Errorf("error should echo the bad --meta value, got: %q", msg)
+	}
+	if !strings.Contains(msg, "key=value") {
+		t.Errorf("error should explain key=value format, got: %q", msg)
+	}
+	if !strings.Contains(msg, "Fix:") {
+		t.Errorf("error should include a Fix hint, got: %q", msg)
+	}
+}
+
+// TestTracePreRunE_MetaEmptyKey verifies that a --meta value with an empty
+// key (starts with '=') is rejected in PreRunE.
+func TestTracePreRunE_MetaEmptyKey(t *testing.T) {
+	t.Cleanup(resetTraceFlags)
+	traceExportPath = "./output.html"
+	traceExportFormat = "html"
+	traceMetadata = []string{"=value-no-key"}
+
+	err := traceCmd.PreRunE(traceCmd, []string{})
+	if err == nil {
+		t.Fatal("expected error for --meta with empty key")
+	}
+	if !strings.Contains(err.Error(), "key=value") {
+		t.Errorf("error should explain key=value format, got: %q", err.Error())
+	}
+}
+
+// TestTracePreRunE_MetaValid verifies that well-formed --meta values pass PreRunE.
+func TestTracePreRunE_MetaValid(t *testing.T) {
+	t.Cleanup(resetTraceFlags)
+	traceExportPath = "./output.html"
+	traceExportFormat = "html"
+	traceMetadata = []string{"env=testnet", "version=1.2", "filter=type=contract_call"}
+
+	err := traceCmd.PreRunE(traceCmd, []string{})
+	if err != nil {
+		t.Errorf("valid --meta values should pass PreRunE, got: %v", err)
+	}
+}
+
+// TestTracePreRunE_MetaValueWithEquals verifies that a value containing '='
+// is handled correctly (only the first '=' is used as the separator).
+func TestTracePreRunE_MetaValueWithEquals(t *testing.T) {
+	t.Cleanup(resetTraceFlags)
+	traceExportPath = "./output.html"
+	traceExportFormat = "html"
+	// "filter=type=contract_call" — key="filter", value="type=contract_call"
+	traceMetadata = []string{"filter=type=contract_call"}
+
+	err := traceCmd.PreRunE(traceCmd, []string{})
+	if err != nil {
+		t.Errorf("--meta with '=' in value should be accepted, got: %v", err)
+	}
+}
+
+// ── PreRunE: --comment pre-flight validation ──────────────────────────────────
+
+// TestTracePreRunE_EmptyComment verifies that an empty --comment string is
+// rejected in PreRunE with a clear message naming the position.
+func TestTracePreRunE_EmptyComment(t *testing.T) {
+	t.Cleanup(resetTraceFlags)
+	traceExportPath = "./output.html"
+	traceExportFormat = "html"
+	traceComments = []string{""}
+
+	err := traceCmd.PreRunE(traceCmd, []string{})
+	if err == nil {
+		t.Fatal("expected error for empty --comment value")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "empty") && !strings.Contains(msg, "whitespace") {
+		t.Errorf("error should mention empty/whitespace, got: %q", msg)
+	}
+	if !strings.Contains(msg, "Fix:") {
+		t.Errorf("error should include a Fix hint, got: %q", msg)
+	}
+}
+
+// TestTracePreRunE_WhitespaceComment verifies that a whitespace-only --comment
+// is also rejected.
+func TestTracePreRunE_WhitespaceComment(t *testing.T) {
+	t.Cleanup(resetTraceFlags)
+	traceExportPath = "./output.html"
+	traceExportFormat = "html"
+	traceComments = []string{"   "}
+
+	err := traceCmd.PreRunE(traceCmd, []string{})
+	if err == nil {
+		t.Fatal("expected error for whitespace-only --comment")
+	}
+}
+
+// TestTracePreRunE_ValidComment verifies that a non-empty --comment passes
+// PreRunE without error.
+func TestTracePreRunE_ValidComment(t *testing.T) {
+	t.Cleanup(resetTraceFlags)
+	traceExportPath = "./output.html"
+	traceExportFormat = "html"
+	traceComments = []string{"Reviewed by Alice", "Approved for deploy"}
+
+	err := traceCmd.PreRunE(traceCmd, []string{})
+	if err != nil {
+		t.Errorf("valid --comment values should pass PreRunE, got: %v", err)
+	}
+}
+
+// TestTracePreRunE_MetaAndCommentBothFailTogether verifies that --meta and
+// --comment failures are collected into a single numbered error list.
+func TestTracePreRunE_MetaAndCommentBothFailTogether(t *testing.T) {
+	t.Cleanup(resetTraceFlags)
+	traceExportPath = "./output.html"
+	traceExportFormat = "html"
+	traceMetadata = []string{"bad-meta"}
+	traceComments = []string{""}
+
+	err := traceCmd.PreRunE(traceCmd, []string{})
+	if err == nil {
+		t.Fatal("expected errors for both bad --meta and empty --comment")
+	}
+	msg := err.Error()
+	// Both failures must appear.
+	if !strings.Contains(msg, "bad-meta") {
+		t.Errorf("error should mention the bad --meta value, got: %q", msg)
+	}
+	if !strings.Contains(msg, "empty") && !strings.Contains(msg, "whitespace") {
+		t.Errorf("error should mention the empty --comment, got: %q", msg)
+	}
+	// Multiple errors are numbered.
+	if !strings.Contains(msg, "1.") || !strings.Contains(msg, "2.") {
+		t.Errorf("multiple errors should be numbered, got: %q", msg)
+	}
+}

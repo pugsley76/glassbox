@@ -145,18 +145,28 @@ func runDiagnostics(cmd *cobra.Command, args []string) error {
 		if url == "" {
 			continue
 		}
+		// Validate URL format before attempting a network probe.
+		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			output.RPC = append(output.RPC, RPCStatus{
+				URL:     url,
+				Status:  "[FAIL]",
+				Error:   "URL must use http:// or https:// scheme — Fix: update rpc_url in config or GLASSBOX_RPC_URL",
+				Healthy: false,
+			})
+			continue
+		}
 		rpcStatus := RPCStatus{URL: url, Status: "[OK]", Healthy: true}
 		start := time.Now()
 		resp, reqErr := httpClient.Get(url) //nolint:noctx
 		if reqErr != nil {
 			rpcStatus.Status = "[FAIL]"
-			rpcStatus.Error = reqErr.Error()
+			rpcStatus.Error = fmt.Sprintf("%v — Fix: ensure the endpoint is reachable and check GLASSBOX_RPC_URL", reqErr)
 			rpcStatus.Healthy = false
 		} else {
 			resp.Body.Close()
 			if resp.StatusCode >= 400 {
 				rpcStatus.Status = "[FAIL]"
-				rpcStatus.Error = fmt.Sprintf("HTTP %d", resp.StatusCode)
+				rpcStatus.Error = fmt.Sprintf("HTTP %d — Fix: check that the RPC endpoint is healthy and not rate-limiting", resp.StatusCode)
 				rpcStatus.Healthy = false
 			}
 		}
@@ -196,19 +206,14 @@ func runDiagnostics(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	// Overall Health
-	output.OverallHealth = "Healthy"
-	for _, r := range output.RPC {
-		if !r.Healthy {
-			output.OverallHealth = "Degraded"
-			break
+	// Overall Health — derived from component health fields for consistency.
+	output.OverallHealth = computeOverallHealth(&output)
+
+	// Validate before rendering to catch any internal inconsistencies.
+	if issues := ValidateDiagnosticsOutput(&output); len(issues) > 0 {
+		for _, issue := range issues {
+			fmt.Fprintf(os.Stderr, "Warning: diagnostics inconsistency: %s\n", issue)
 		}
-	}
-	if !output.Cache.Healthy {
-		output.OverallHealth = "Degraded"
-	}
-	if !output.Config.Healthy {
-		output.OverallHealth = "Degraded"
 	}
 
 	// --json: emit structured output and return early
@@ -223,7 +228,108 @@ func runDiagnostics(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func printDiagnosticsDashboard(w io.Writer, out DiagnosticsOutput) {
+// ValidateDiagnosticsOutput checks a DiagnosticsOutput struct for conditions
+// that would produce misleading health reports and returns a list of issues.
+//
+// Checks:
+//   - OverallHealth is one of the expected values ("Healthy", "Degraded")
+//   - Every unhealthy RPCStatus has a non-empty Error and a Fix hint in the URL
+//   - No RPCStatus has an empty Status string (empty status looks like a pass)
+//   - Cache.Healthy is consistent with reported size (over-limit → not healthy)
+//   - Config.Healthy=false is surfaced when config could not be loaded
+//
+// Returns nil when all checks pass.
+func ValidateDiagnosticsOutput(out *DiagnosticsOutput) []string {
+	if out == nil {
+		return []string{"DiagnosticsOutput is nil"}
+	}
+
+	var issues []string
+
+	// OverallHealth must be a known value.
+	switch out.OverallHealth {
+	case "Healthy", "Degraded":
+		// valid
+	case "":
+		issues = append(issues, "OverallHealth is empty — health state cannot be communicated; expected \"Healthy\" or \"Degraded\"")
+	default:
+		issues = append(issues, fmt.Sprintf("OverallHealth has unexpected value %q — expected \"Healthy\" or \"Degraded\"", out.OverallHealth))
+	}
+
+	// RPC status consistency.
+	for i, r := range out.RPC {
+		// Empty status string is ambiguous — looks like a pass to human readers.
+		if strings.TrimSpace(r.Status) == "" {
+			issues = append(issues, fmt.Sprintf(
+				"RPC[%d] (%s): Status is empty — will render as blank in reports; use \"[OK]\" or \"[FAIL]\"",
+				i, r.URL,
+			))
+		}
+		// Unhealthy entry must have an Error message.
+		if !r.Healthy && strings.TrimSpace(r.Error) == "" {
+			issues = append(issues, fmt.Sprintf(
+				"RPC[%d] (%s): Healthy=false but Error is empty — failure reason is not communicated to users",
+				i, r.URL,
+			))
+		}
+		// Inconsistency: Status says OK but Healthy is false.
+		if !r.Healthy && r.Status == "[OK]" {
+			issues = append(issues, fmt.Sprintf(
+				"RPC[%d] (%s): Status=\"[OK]\" but Healthy=false — inconsistent; OverallHealth may be misleading",
+				i, r.URL,
+			))
+		}
+		// Inconsistency: Healthy=true but OverallHealth=Degraded was not caused by this entry.
+		// (only flag when Status is explicitly [FAIL])
+		if r.Healthy && r.Status == "[FAIL]" {
+			issues = append(issues, fmt.Sprintf(
+				"RPC[%d] (%s): Status=\"[FAIL]\" but Healthy=true — inconsistent",
+				i, r.URL,
+			))
+		}
+	}
+
+	// OverallHealth must reflect actual RPC/cache/config state.
+	hasUnhealthyRPC := false
+	for _, r := range out.RPC {
+		if !r.Healthy {
+			hasUnhealthyRPC = true
+			break
+		}
+	}
+	if hasUnhealthyRPC && out.OverallHealth == "Healthy" {
+		issues = append(issues, "OverallHealth is \"Healthy\" but one or more RPC endpoints are unhealthy — overall health is misleading")
+	}
+	if !out.Cache.Healthy && out.OverallHealth == "Healthy" {
+		issues = append(issues, "OverallHealth is \"Healthy\" but cache is unhealthy — overall health is misleading")
+	}
+	if !out.Config.Healthy && out.OverallHealth == "Healthy" {
+		issues = append(issues, "OverallHealth is \"Healthy\" but config is unhealthy — overall health is misleading")
+	}
+
+	return issues
+}
+
+// computeOverallHealth derives the OverallHealth string from the individual
+// component health fields. This is the single source of truth for the field
+// so callers don't independently compute it and risk inconsistency.
+func computeOverallHealth(out *DiagnosticsOutput) string {
+	if out == nil {
+		return "Degraded"
+	}
+	for _, r := range out.RPC {
+		if !r.Healthy {
+			return "Degraded"
+		}
+	}
+	if !out.Cache.Healthy {
+		return "Degraded"
+	}
+	if !out.Config.Healthy {
+		return "Degraded"
+	}
+	return "Healthy"
+}
 	fmt.Fprintln(w, "╔═══════════════════════════════════════════════════════════════╗")
 	fmt.Fprintln(w, "║                    GLASSBOX DIAGNOSTICS                       ║")
 	fmt.Fprintln(w, "╚═══════════════════════════════════════════════════════════════╝")

@@ -13,6 +13,14 @@ import (
 	"github.com/fatih/color"
 )
 
+// SetNoColor globally disables ANSI colour output for the fatih/color library
+// used by the trace printer. Call this once during startup when --no-color is
+// requested so that all palette instances emit plain text regardless of how
+// PrintOptions.NoColor is set on individual calls.
+func SetNoColor(v bool) {
+	color.NoColor = v
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Options
 // ─────────────────────────────────────────────────────────────────────────────
@@ -276,7 +284,7 @@ func PrintExecutionTrace(t *ExecutionTrace, opts PrintOptions) {
 	if len(t.DecodedEvents) > 0 || len(t.DiagnosticEvents) > 0 {
 		events := t.DecodedEvents
 		if len(events) == 0 {
-			events = DecodeDiagnosticEventsWithSchemas(t.DiagnosticEvents, opts.EventSchemas)
+			events = DecodeDiagnosticEventsWithSchemas(toLocalDiagnosticEvents(t.DiagnosticEvents), opts.EventSchemas)
 		}
 		CorrelateEvents(events, t)
 		_, _ = p.separator.Fprintln(out, sep)

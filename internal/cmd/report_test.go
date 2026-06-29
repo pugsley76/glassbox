@@ -269,3 +269,131 @@ func TestCalculateRiskScore_AllErrors(t *testing.T) {
 		t.Errorf("calculateRiskScore() = %v; want 100.0", got)
 	}
 }
+
+// ── output directory behavior ────────────────────────────────────────────────
+
+// TestReportExec_OutputDirAutoCreated verifies that a non-existent --output
+// directory is created automatically and the report is written successfully.
+func TestReportExec_OutputDirAutoCreated(t *testing.T) {
+	// Build a minimal valid trace file.
+	tmpBase := t.TempDir()
+	traceFile := tmpBase + "/trace.json"
+	traceJSON := `{"transaction_hash":"abc","states":[{"step":0,"operation":"test"}]}`
+	if err := os.WriteFile(traceFile, []byte(traceJSON), 0644); err != nil {
+		t.Fatalf("failed to create trace file: %v", err)
+	}
+
+	newOutputDir := tmpBase + "/auto-created-reports"
+
+	prevFile := reportFile
+	prevFmt := reportFormat
+	prevOut := reportOutput
+	t.Cleanup(func() {
+		reportFile = prevFile
+		reportFormat = prevFmt
+		reportOutput = prevOut
+	})
+	reportFile = traceFile
+	reportFormat = "text"
+	reportOutput = newOutputDir
+
+	err := reportExec(reportCmd, []string{})
+	if err != nil {
+		t.Fatalf("reportExec should succeed with auto-created output dir, got: %v", err)
+	}
+
+	// Verify directory was created.
+	if info, statErr := os.Stat(newOutputDir); statErr != nil || !info.IsDir() {
+		t.Errorf("expected output directory to be created at %q", newOutputDir)
+	}
+
+	// Verify the report file exists inside the directory.
+	reportPath := newOutputDir + "/report.txt"
+	if _, statErr := os.Stat(reportPath); statErr != nil {
+		t.Errorf("expected report file at %q, got: %v", reportPath, statErr)
+	}
+}
+
+// TestReportExec_OutputIsFile_Error verifies that --output pointing to an
+// existing regular file (not a directory) produces a clear error.
+func TestReportExec_OutputIsFile_Error(t *testing.T) {
+	tmpBase := t.TempDir()
+	traceFile := tmpBase + "/trace.json"
+	traceJSON := `{"transaction_hash":"abc","states":[{"step":0,"operation":"test"}]}`
+	if err := os.WriteFile(traceFile, []byte(traceJSON), 0644); err != nil {
+		t.Fatalf("failed to create trace file: %v", err)
+	}
+
+	// Create a regular file where the output directory is expected.
+	existingFile := tmpBase + "/not-a-dir"
+	if err := os.WriteFile(existingFile, []byte("file"), 0644); err != nil {
+		t.Fatalf("failed to create placeholder file: %v", err)
+	}
+
+	prevFile := reportFile
+	prevFmt := reportFormat
+	prevOut := reportOutput
+	t.Cleanup(func() {
+		reportFile = prevFile
+		reportFormat = prevFmt
+		reportOutput = prevOut
+	})
+	reportFile = traceFile
+	reportFormat = "text"
+	reportOutput = existingFile
+
+	err := reportExec(reportCmd, []string{})
+	if err == nil {
+		t.Fatal("expected error when --output points to an existing file")
+	}
+	if !strings.Contains(err.Error(), "not a directory") && !strings.Contains(err.Error(), "directory") {
+		t.Errorf("error should mention the path is not a directory, got: %q", err.Error())
+	}
+}
+
+// TestReportExec_TextReport_OutputFileCreated verifies that the text report
+// file is created inside the output directory with the expected name.
+func TestReportExec_TextReport_OutputFileCreated(t *testing.T) {
+	tmpBase := t.TempDir()
+	traceFilePath := tmpBase + "/trace.json"
+	traceJSON := `{"transaction_hash":"abc","states":[{"step":0,"operation":"test"}]}`
+	if err := os.WriteFile(traceFilePath, []byte(traceJSON), 0644); err != nil {
+		t.Fatalf("failed to create trace file: %v", err)
+	}
+
+	prevFile := reportFile
+	prevFmt := reportFormat
+	prevOut := reportOutput
+	t.Cleanup(func() {
+		reportFile = prevFile
+		reportFormat = prevFmt
+		reportOutput = prevOut
+	})
+	reportFile = traceFilePath
+	reportFormat = "text"
+	reportOutput = tmpBase
+
+	var out strings.Builder
+	reportCmd.SetOut(&out)
+	t.Cleanup(func() { reportCmd.SetOut(nil) })
+
+	if err := reportExec(reportCmd, []string{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// report.txt must be present in the output directory.
+	entries, readErr := os.ReadDir(tmpBase)
+	if readErr != nil {
+		t.Fatalf("failed to read output directory: %v", readErr)
+	}
+	found := false
+	for _, e := range entries {
+		if e.Name() == "report.txt" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected report.txt inside %q", tmpBase)
+	}
+}
