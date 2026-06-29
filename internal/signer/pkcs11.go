@@ -60,11 +60,11 @@ type Pkcs11Config struct {
 func Pkcs11ConfigFromEnv() (*Pkcs11Config, error) {
 	modulePath := os.Getenv("GLASSBOX_PKCS11_MODULE")
 	if modulePath == "" {
-		return nil, &Error{Op: "pkcs11", Msg: "GLASSBOX_PKCS11_MODULE is required"}
+		return nil, &Error{Op: "pkcs11", Msg: "GLASSBOX_PKCS11_MODULE is required — remediation: set GLASSBOX_PKCS11_MODULE to the path of your PKCS#11 shared library (e.g. /usr/lib/softhsm/libsofthsm2.so)"}
 	}
 	pin := os.Getenv("GLASSBOX_PKCS11_PIN")
 	if pin == "" {
-		return nil, &Error{Op: "pkcs11", Msg: "GLASSBOX_PKCS11_PIN is required"}
+		return nil, &Error{Op: "pkcs11", Msg: "GLASSBOX_PKCS11_PIN is required — remediation: set GLASSBOX_PKCS11_PIN to your token PIN"}
 	}
 
 	return &Pkcs11Config{
@@ -126,9 +126,13 @@ type Pkcs11Signer struct {
 // linux/arm64, darwin/amd64, and darwin/arm64. On unsupported
 // platforms this constructor will return an error.
 func NewPkcs11Signer(cfg Pkcs11Config) (*Pkcs11Signer, error) {
+	if cfg.ModulePath == "" {
+		return nil, &Error{Op: "pkcs11", Msg: "module path is required — remediation: set --pkcs11-module or GLASSBOX_PKCS11_MODULE to the path of your PKCS#11 shared library"}
+	}
+
 	lib, err := plugin.Open(cfg.ModulePath)
 	if err != nil {
-		return nil, &Error{Op: "pkcs11", Msg: "failed to load PKCS#11 module", Err: err}
+		return nil, &Error{Op: "pkcs11", Msg: fmt.Sprintf("failed to load PKCS#11 module %q: %v — remediation: verify the path exists, has correct permissions, and is a valid shared library for your platform", cfg.ModulePath, err)}
 	}
 
 	s := &Pkcs11Signer{
@@ -154,7 +158,7 @@ func (s *Pkcs11Signer) resolveFunctions() error {
 	lookup := func(name string) (plugin.Symbol, error) {
 		sym, err := s.lib.Lookup(name)
 		if err != nil {
-			return nil, &Error{Op: "pkcs11", Msg: fmt.Sprintf("symbol %s not found", name), Err: err}
+			return nil, &Error{Op: "pkcs11", Msg: fmt.Sprintf("symbol %s not found in module %q — remediation: verify the module exports the required function symbols (C_Initialize, C_Login, C_Sign, etc.) or use a different PKCS#11 library", name, s.config.ModulePath), Err: err}
 		}
 		return sym, nil
 	}
@@ -192,19 +196,21 @@ func (s *Pkcs11Signer) initialize() error {
 
 // Sign delegates the signing operation to the HSM. The private key
 // material never enters the SDK process; the data is sent to the device,
-// which returns the signature.
+// which returns the signature. Errors are mapped to actionable messages
+// using the PKCS#11 error table.
 func (s *Pkcs11Signer) Sign(data []byte) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.fnSignInit == nil || s.fnSign == nil {
-		return nil, &Error{Op: "pkcs11", Msg: "PKCS#11 session not initialized"}
+		return nil, &Error{Op: "pkcs11", Msg: "PKCS#11 session not initialized — remediation: ensure the module is loaded and try reinitializing the signer"}
 	}
 
 	mech := pkcs11Mechanism{mechanism: ckmEDDSA}
 	rv := s.fnSignInit(s.session, unsafe.Pointer(&mech), s.keyHandle)
 	if rv != ckrOK {
-		return nil, &Error{Op: "pkcs11", Msg: fmt.Sprintf("C_SignInit failed: 0x%x", rv)}
+		pkcs11Err := MapPkcs11Error("C_SignInit", rv)
+		return nil, &Error{Op: "pkcs11", Msg: fmt.Sprintf("signing initialization failed: %s — remediation: %s", pkcs11Err.Message, pkcs11Err.Remediation)}
 	}
 
 	sigLen := uint64(64) // Ed25519 signatures are 64 bytes
@@ -215,17 +221,19 @@ func (s *Pkcs11Signer) Sign(data []byte) ([]byte, error) {
 		unsafe.Pointer(&sig[0]), &sigLen,
 	)
 	if rv != ckrOK {
-		return nil, &Error{Op: "pkcs11", Msg: fmt.Sprintf("C_Sign failed: 0x%x", rv)}
+		pkcs11Err := MapPkcs11Error("C_Sign", rv)
+		return nil, &Error{Op: "pkcs11", Msg: fmt.Sprintf("signing operation failed: %s — remediation: %s", pkcs11Err.Message, pkcs11Err.Remediation)}
 	}
 
 	return sig[:sigLen], nil
 }
 
 // PublicKey returns the Ed25519 public key retrieved from the HSM during
-// initialization.
+// initialization. Returns a descriptive error explaining that the key handle
+// may be invalid or initialization incomplete.
 func (s *Pkcs11Signer) PublicKey() ([]byte, error) {
 	if len(s.pubKey) == 0 {
-		return nil, &Error{Op: "pkcs11", Msg: "public key not available"}
+		return nil, &Error{Op: "pkcs11", Msg: "public key not available — remediation: ensure the key was properly initialized and has CKA_EXTRACTABLE or use a different signing key"}
 	}
 	out := make([]byte, len(s.pubKey))
 	copy(out, s.pubKey)
@@ -253,6 +261,7 @@ func (s *Pkcs11Signer) Close() error {
 }
 
 // buildKeyTemplate constructs PKCS#11 search attributes from the config.
+// Returns a descriptive error when key ID hex decoding fails.
 func (s *Pkcs11Signer) buildKeyTemplate() ([]pkcs11Attribute, error) { //nolint:unused // Reserved for future PKCS#11 implementation
 	classVal := uint64(ckoPrivateKey)
 	keyTypeVal := uint64(ckkEDDSA)
@@ -274,7 +283,7 @@ func (s *Pkcs11Signer) buildKeyTemplate() ([]pkcs11Attribute, error) { //nolint:
 	if s.config.KeyIDHex != "" {
 		idBytes, err := hex.DecodeString(s.config.KeyIDHex)
 		if err != nil {
-			return nil, &Error{Op: "pkcs11", Msg: "invalid key ID hex", Err: err}
+			return nil, &Error{Op: "pkcs11", Msg: fmt.Sprintf("invalid key ID hex %q: %v — remediation: ensure GLASSBOX_PKCS11_KEY_ID is a valid hex string (e.g. a1b2c3)", s.config.KeyIDHex, err), Err: err}
 		}
 		attrs = append(attrs, pkcs11Attribute{
 			typ:    ckaID,

@@ -73,6 +73,11 @@ commit_309*.next
 !tsconfig*.json
 !perf_baseline.json
 
+# --- Test snapshots and artifacts ---
+*.snap
+**/*_test_snap*
+testdata/*.snap
+
 .gocache
 
 ishus.py
