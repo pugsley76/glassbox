@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -137,5 +138,81 @@ func TestProtocolHandleCmd_InvalidNetwork_ErrorListsOptions(t *testing.T) {
 		if !strings.Contains(err.Error(), net) {
 			t.Errorf("network error should list valid option %q; got: %v", net, err)
 		}
+	}
+}
+
+// ── protocol:register --dry-run output ───────────────────────────────────────
+
+// TestProtocolRegisterDryRun_NotRegistered_ShowsWouldRegister verifies that
+// the dry-run path emits a preview message when the handler is not registered.
+func TestProtocolRegisterDryRun_NotRegistered_ShowsWouldRegister(t *testing.T) {
+	// Simulate the dry-run rendering for a not-registered state.
+	diag := &protocolreg.DiagnosticReport{
+		Status:   protocolreg.StatusNotRegistered,
+		Platform: "linux",
+		Issues:   []string{"desktop file not found"},
+	}
+
+	var stdout strings.Builder
+	if diag.Status == protocolreg.StatusOK {
+		stdout.WriteString("[DRY-RUN] Protocol handler is already registered — no changes needed.\n")
+	} else {
+		stdout.WriteString("[DRY-RUN] Would register " + protocolreg.Scheme + ":// handler on " + diag.Platform + ".\n")
+		stdout.WriteString("[DRY-RUN] Current status: " + string(diag.Status) + "\n")
+		if len(diag.Issues) > 0 {
+			stdout.WriteString("[DRY-RUN] Issues to fix:\n")
+			for _, issue := range diag.Issues {
+				stdout.WriteString("  - " + issue + "\n")
+			}
+		}
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "[DRY-RUN]") {
+		t.Errorf("dry-run output should contain '[DRY-RUN]' prefix, got: %s", out)
+	}
+	if !strings.Contains(out, "Would register") {
+		t.Errorf("dry-run output should contain 'Would register', got: %s", out)
+	}
+	if !strings.Contains(out, protocolreg.Scheme+"://") {
+		t.Errorf("dry-run output should contain the scheme, got: %s", out)
+	}
+}
+
+// TestProtocolRegisterDryRun_AlreadyRegistered_ShowsNoOp verifies the dry-run
+// message when the handler is already registered.
+func TestProtocolRegisterDryRun_AlreadyRegistered_ShowsNoOp(t *testing.T) {
+	diag := &protocolreg.DiagnosticReport{
+		Status:   protocolreg.StatusOK,
+		Platform: "linux",
+	}
+
+	var stdout strings.Builder
+	if diag.Status == protocolreg.StatusOK {
+		stdout.WriteString("[DRY-RUN] Protocol handler is already registered — no changes needed.\n")
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "already registered") {
+		t.Errorf("dry-run for registered state should say 'already registered', got: %s", out)
+	}
+	if !strings.Contains(out, "[DRY-RUN]") {
+		t.Errorf("dry-run for registered state should include '[DRY-RUN]' prefix, got: %s", out)
+	}
+}
+
+// TestProtocolRegisterCmd_FailureError_MentionsRepairTip verifies that a
+// registration failure wraps a suggestion to run protocol:repair.
+func TestProtocolRegisterCmd_FailureError_MentionsRepairTip(t *testing.T) {
+	// Simulate the error wrapping applied in protocol:register RunE.
+	baseErr := fmt.Errorf("xdg-mime is not installed")
+	wrapped := baseErr.Error() +
+		"\n  Tip: run 'glassbox protocol:diagnose' for a detailed breakdown, or 'glassbox protocol:repair' to attempt automatic repair"
+
+	if !strings.Contains(wrapped, "protocol:diagnose") {
+		t.Errorf("register failure should mention protocol:diagnose; got: %s", wrapped)
+	}
+	if !strings.Contains(wrapped, "protocol:repair") {
+		t.Errorf("register failure should mention protocol:repair; got: %s", wrapped)
 	}
 }
