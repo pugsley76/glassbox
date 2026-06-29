@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/dotandev/glassbox/internal/version"
 )
 
 // ExportMetadata contains metadata about an exported trace for recovery and validation
@@ -137,6 +139,7 @@ func ExportWithResilience(trace *ExecutionTrace, format, outputPath string, opts
 	
 	// Write metadata file if enabled
 	if recoveryOpts.EnableMetadata {
+		hostname, _ := os.Hostname()
 		metadata := ExportMetadata{
 			// Use the canonical schema version constant so the metadata version
 			// stays in sync automatically when the schema evolves.
@@ -146,6 +149,8 @@ func ExportWithResilience(trace *ExecutionTrace, format, outputPath string, opts
 			ExportedAt:      time.Now(),
 			StepCount:       len(trace.States),
 			Checksum:        checksum,
+			CLIVersion:      version.Version,
+			Hostname:        hostname,
 		}
 		
 		if err := writeMetadata(outputPath, metadata); err != nil {
@@ -437,6 +442,30 @@ func VerifyExport(tracePath string) error {
 		}
 	}
 	
+	// For JSON exports, verify the recorded step count matches what's in the file
+	if strings.ToLower(strings.TrimSpace(metadata.Format)) == "json" && metadata.StepCount > 0 {
+		var parsed struct {
+			States []json.RawMessage `json:"states"`
+			Trace  *struct {
+				States []json.RawMessage `json:"states"`
+			} `json:"trace"`
+		}
+		if parseErr := json.Unmarshal(traceData, &parsed); parseErr == nil {
+			actualStates := len(parsed.States)
+			// Handle versioned/schema envelope where trace is nested
+			if actualStates == 0 && parsed.Trace != nil {
+				actualStates = len(parsed.Trace.States)
+			}
+			if actualStates > 0 && actualStates != metadata.StepCount {
+				return fmt.Errorf("step count mismatch\n"+
+					"  Metadata records %d steps, trace file contains %d steps\n"+
+					"  The trace file may have been truncated, appended to, or partially overwritten\n"+
+					"  Fix: re-export the trace with glassbox debug --trace-output",
+					metadata.StepCount, actualStates)
+			}
+		}
+	}
+	
 	// Verify format matches file extension
 	ext := strings.ToLower(filepath.Ext(tracePath))
 	expectedExt := ""
@@ -464,10 +493,23 @@ func VerifyExport(tracePath string) error {
 func RecoverTrace(tracePath string) (*ExecutionTrace, []error) {
 	var recoveryErrors []error
 	
+	// Attempt integrity verification first — surface any checksum or step-count
+	// mismatch as a recovery warning so the caller knows the file was modified.
+	if verifyErr := VerifyExport(tracePath); verifyErr != nil {
+		// Missing metadata is acceptable (older exports didn't have it).
+		// Any other verification failure is reported as a warning, not a fatal error,
+		// because we still attempt content-level recovery below.
+		if !strings.Contains(verifyErr.Error(), "metadata file not found") {
+			recoveryErrors = append(recoveryErrors,
+				fmt.Errorf("pre-recovery integrity check failed: %w\n"+
+					"  Continuing with best-effort content recovery", verifyErr))
+		}
+	}
+	
 	// Try to read the file
 	data, err := os.ReadFile(tracePath)
 	if err != nil {
-		return nil, []error{fmt.Errorf("failed to read trace file: %w", err)}
+		return nil, append(recoveryErrors, fmt.Errorf("failed to read trace file: %w", err))
 	}
 	
 	// Determine format from extension

@@ -416,3 +416,292 @@ func TestRecoverFromJSON(t *testing.T) {
 		t.Error("recoverFromJSON should fail on invalid JSON")
 	}
 }
+
+func TestRecoverFromJSON_InvalidJSON(t *testing.T) {
+	invalidData := []byte("{invalid json")
+	_, err := recoverFromJSON(invalidData)
+	if err == nil {
+		t.Error("recoverFromJSON should fail on invalid JSON")
+	}
+	if !strings.Contains(err.Error(), "JSON") && !strings.Contains(err.Error(), "parse") && !strings.Contains(err.Error(), "malformed") {
+		t.Errorf("error should describe the JSON parsing failure, got: %v", err)
+	}
+}
+
+// ── VerifyExport — step count mismatch ───────────────────────────────────────
+
+func TestVerifyExport_StepCountMismatch_ReturnsError(t *testing.T) {
+	trace := NewExecutionTrace("verify-step-count", 10)
+	trace.AddState(ExecutionState{Operation: "step0"})
+	trace.AddState(ExecutionState{Operation: "step1"})
+	trace.AddState(ExecutionState{Operation: "step2"})
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "trace.json")
+
+	// Export normally — creates trace file + .meta.json
+	if err := ExportWithResilience(trace, "json", outputPath, ExportOptions{}, DefaultRecoveryOptions()); err != nil {
+		t.Fatalf("export failed: %v", err)
+	}
+
+	// Now truncate the trace file to remove two states, simulating corruption/truncation.
+	// We do this by loading the JSON, removing states, and re-writing raw bytes.
+	rawData, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read trace: %v", err)
+	}
+	var full ExecutionTrace
+	if err := json.Unmarshal(rawData, &full); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Keep only the first state to create a mismatch against StepCount=3 in metadata
+	full.States = full.States[:1]
+	truncated, _ := json.MarshalIndent(full, "", "  ")
+	if err := os.WriteFile(outputPath, truncated, 0o644); err != nil {
+		t.Fatalf("write truncated: %v", err)
+	}
+
+	err = VerifyExport(outputPath)
+	if err == nil {
+		t.Fatal("VerifyExport should detect step count mismatch")
+	}
+	if !strings.Contains(err.Error(), "step count mismatch") {
+		t.Errorf("expected 'step count mismatch' in error, got: %v", err)
+	}
+}
+
+func TestVerifyExport_StepCountMatch_NoError(t *testing.T) {
+	trace := NewExecutionTrace("verify-step-match", 10)
+	trace.AddState(ExecutionState{Operation: "step0"})
+	trace.AddState(ExecutionState{Operation: "step1"})
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "trace.json")
+
+	if err := ExportWithResilience(trace, "json", outputPath, ExportOptions{}, DefaultRecoveryOptions()); err != nil {
+		t.Fatalf("export failed: %v", err)
+	}
+
+	if err := VerifyExport(outputPath); err != nil {
+		t.Errorf("VerifyExport should pass for unmodified export, got: %v", err)
+	}
+}
+
+func TestVerifyExport_NoMetadata_ReturnsDescriptiveError(t *testing.T) {
+	tmpDir := t.TempDir()
+	tracePath := filepath.Join(tmpDir, "no-meta.json")
+	if err := os.WriteFile(tracePath, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	err := VerifyExport(tracePath)
+	if err == nil {
+		t.Fatal("expected error when metadata file is absent")
+	}
+	if !strings.Contains(err.Error(), "metadata file not found") {
+		t.Errorf("error should say 'metadata file not found', got: %v", err)
+	}
+	// Must also hint that the file can still be used
+	if !strings.Contains(err.Error(), "can still be used") {
+		t.Errorf("error should mention file can still be used, got: %v", err)
+	}
+}
+
+func TestVerifyExport_CorruptMetadata_ReturnsDescriptiveError(t *testing.T) {
+	tmpDir := t.TempDir()
+	tracePath := filepath.Join(tmpDir, "trace.json")
+	metaPath := tracePath + ".meta.json"
+
+	if err := os.WriteFile(tracePath, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write trace: %v", err)
+	}
+	if err := os.WriteFile(metaPath, []byte("{not valid json"), 0o644); err != nil {
+		t.Fatalf("write meta: %v", err)
+	}
+
+	err := VerifyExport(tracePath)
+	if err == nil {
+		t.Fatal("expected error for corrupt metadata")
+	}
+	if !strings.Contains(err.Error(), "parse") && !strings.Contains(err.Error(), "metadata") {
+		t.Errorf("error should describe metadata parse failure, got: %v", err)
+	}
+}
+
+func TestVerifyExport_FormatMismatch_ReturnsDescriptiveError(t *testing.T) {
+	trace := NewExecutionTrace("format-mismatch-test", 10)
+	trace.AddState(ExecutionState{Operation: "step0"})
+
+	tmpDir := t.TempDir()
+	// Export as JSON but save to a .html file name
+	outputPath := filepath.Join(tmpDir, "trace.html")
+
+	if err := ExportWithResilience(trace, "json", outputPath, ExportOptions{}, DefaultRecoveryOptions()); err != nil {
+		t.Fatalf("export failed: %v", err)
+	}
+
+	err := VerifyExport(outputPath)
+	if err == nil {
+		t.Fatal("expected error for format/extension mismatch")
+	}
+	if !strings.Contains(err.Error(), "format mismatch") {
+		t.Errorf("expected 'format mismatch' in error, got: %v", err)
+	}
+}
+
+// ── RecoverTrace — pre-recovery integrity check ───────────────────────────────
+
+func TestRecoverTrace_WithIntegrityViolation_WarnsAndContinues(t *testing.T) {
+	trace := NewExecutionTrace("recover-integrity-test", 10)
+	trace.AddState(ExecutionState{Operation: "step0"})
+	trace.AddState(ExecutionState{Operation: "step1"})
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "trace.json")
+
+	// Export to create both trace and metadata files
+	if err := ExportWithResilience(trace, "json", outputPath, ExportOptions{}, DefaultRecoveryOptions()); err != nil {
+		t.Fatalf("export failed: %v", err)
+	}
+
+	// Tamper with the trace file to trigger checksum mismatch
+	rawData, _ := os.ReadFile(outputPath)
+	tampered := append(rawData, []byte("\n// tampered")...)
+	if err := os.WriteFile(outputPath, tampered, 0o644); err != nil {
+		t.Fatalf("tamper write: %v", err)
+	}
+
+	// RecoverTrace should detect the integrity violation but still return the trace
+	recovered, errs := RecoverTrace(outputPath)
+	if recovered == nil {
+		t.Fatal("RecoverTrace should return a trace despite integrity violation")
+	}
+	if len(errs) == 0 {
+		t.Fatal("RecoverTrace should report errors when integrity check failed")
+	}
+	// One of the errors should mention the integrity/checksum issue
+	foundIntegrityErr := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "integrity") || strings.Contains(e.Error(), "checksum") {
+			foundIntegrityErr = true
+			break
+		}
+	}
+	if !foundIntegrityErr {
+		t.Errorf("expected an integrity/checksum error in recovery errors, got: %v", errs)
+	}
+}
+
+func TestRecoverTrace_NoMetadata_NoIntegrityError(t *testing.T) {
+	trace := &ExecutionTrace{
+		TransactionHash: "no-meta-recover",
+		StartTime:       time.Now(),
+		EndTime:         time.Now().Add(time.Minute),
+		States: []ExecutionState{
+			{Step: 0, Operation: "op", Timestamp: time.Now()},
+		},
+	}
+
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "trace.json")
+	data, _ := json.MarshalIndent(trace, "", "  ")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// Deliberately NO .meta.json file
+
+	recovered, errs := RecoverTrace(path)
+	if recovered == nil {
+		t.Fatal("RecoverTrace should succeed without a metadata file")
+	}
+	// Must not report a spurious "metadata not found" error — that's an expected condition
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "metadata file not found") {
+			t.Errorf("RecoverTrace should not surface 'metadata file not found' as an error: %v", e)
+		}
+	}
+}
+
+func TestRecoverTrace_NonJSONFormat_ReturnsActionableError(t *testing.T) {
+	tmpDir := t.TempDir()
+	htmlPath := filepath.Join(tmpDir, "trace.html")
+	if err := os.WriteFile(htmlPath, []byte("<html><body>trace</body></html>"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	recovered, errs := RecoverTrace(htmlPath)
+	if recovered != nil {
+		t.Error("RecoverTrace should not return a trace from HTML format")
+	}
+	if len(errs) == 0 {
+		t.Fatal("RecoverTrace should return an error for non-JSON format")
+	}
+	msg := errs[len(errs)-1].Error()
+	if !strings.Contains(msg, "JSON") {
+		t.Errorf("error should mention JSON format requirement, got: %v", msg)
+	}
+	if !strings.Contains(msg, "Recommendation") {
+		t.Errorf("error should include a Recommendation, got: %v", msg)
+	}
+}
+
+// ── ExportWithResilience — CLIVersion and Hostname in metadata ────────────────
+
+func TestExportWithResilience_MetadataIncludesCLIVersion(t *testing.T) {
+	trace := NewExecutionTrace("cli-version-test", 10)
+	trace.AddState(ExecutionState{Operation: "step0"})
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "trace.json")
+
+	opts := ExportOptions{}
+	recoveryOpts := DefaultRecoveryOptions()
+	recoveryOpts.EnableMetadata = true
+
+	if err := ExportWithResilience(trace, "json", outputPath, opts, recoveryOpts); err != nil {
+		t.Fatalf("ExportWithResilience failed: %v", err)
+	}
+
+	metaPath := outputPath + ".meta.json"
+	metaData, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+
+	var meta ExportMetadata
+	if err := json.Unmarshal(metaData, &meta); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+
+	// CLIVersion should be set (it's from version.Version which defaults to "0.0.0-dev")
+	if meta.CLIVersion == "" {
+		t.Error("metadata.CLIVersion should be set")
+	}
+	// Version should match CurrentJSONSchemaVersion
+	if meta.Version != CurrentJSONSchemaVersion {
+		t.Errorf("metadata.Version = %q, want %q", meta.Version, CurrentJSONSchemaVersion)
+	}
+}
+
+func TestExportWithResilience_MetadataStepCountMatchesTrace(t *testing.T) {
+	trace := NewExecutionTrace("step-count-meta", 10)
+	trace.AddState(ExecutionState{Operation: "step0"})
+	trace.AddState(ExecutionState{Operation: "step1"})
+	trace.AddState(ExecutionState{Operation: "step2"})
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "trace.json")
+
+	if err := ExportWithResilience(trace, "json", outputPath, ExportOptions{}, DefaultRecoveryOptions()); err != nil {
+		t.Fatalf("ExportWithResilience failed: %v", err)
+	}
+
+	metaPath := outputPath + ".meta.json"
+	metaData, _ := os.ReadFile(metaPath)
+	var meta ExportMetadata
+	json.Unmarshal(metaData, &meta)
+
+	if meta.StepCount != 3 {
+		t.Errorf("metadata.StepCount = %d, want 3", meta.StepCount)
+	}
+}
