@@ -399,3 +399,24 @@ will retry up to 2 times and then fail with a clear message. Check:
   systemctl status pcscd
   systemctl start pcscd
   ```
+
+### Signing error diagnostics
+
+When a signing operation fails, Glassbox maps the raw PKCS#11 return code to a
+human-readable message with actionable remediation. For example:
+
+```
+pkcs11 C_SignInit failed (0x00000070): the CKM_EDDSA mechanism is not supported
+  — verify the module supports Ed25519 signing; SoftHSM2 requires version 2.5.0+;
+  YubiKey requires firmware 5.2.3+
+```
+
+Common signing errors and their meanings:
+
+| Error | Meaning | Action |
+|-------|---------|--------|
+| `CKR_MECHANISM_INVALID` | Ed25519 not supported | Update SoftHSM2 or check firmware |
+| `CKR_PIN_LOCKED` | Token PIN locked | Unlock with SO PIN |
+| `CKR_KEY_FUNCTION_NOT_PERMITTED` | Key lacks sign permission | Recreate key with `CKA_SIGN=true` |
+| `CKR_SESSION_CLOSED` | Session expired | Reinitialize session |
+| `CKR_DEVICE_REMOVED` | Token unplugged | Reinsert token and retry |
