@@ -691,6 +691,76 @@ or acknowledge the reduced navigation granularity.
 
 ---
 
+---
+
+## Export Integrity Verification (`VerifyExport`)
+
+When a trace is exported with resilience options enabled (`ExportWithResilience`), a companion `.meta.json` file is written alongside the trace. This file records:
+
+- `version` — the schema version of the export envelope
+- `format` — the export format (`html`, `json`, `markdown`, `text`)
+- `transaction_hash` — the transaction the trace belongs to
+- `exported_at` — wall-clock time of the export
+- `step_count` — number of execution steps in the trace at export time
+- `checksum` — SHA-256 hex digest of the trace file content
+- `cli_version` — Glassbox CLI version that produced the export
+- `hostname` — machine that produced the export (omitted if unavailable)
+
+### Verifying an export
+
+Use `VerifyExport(tracePath)` (or the equivalent API call) to verify a previously exported trace:
+
+```go
+if err := trace.VerifyExport("./output/trace.json"); err != nil {
+    fmt.Fprintf(os.Stderr, "Trace integrity check failed: %v\n", err)
+}
+```
+
+**Checks performed:**
+
+| Check | Error produced |
+|-------|----------------|
+| Metadata file missing | Descriptive note that the file can still be used but integrity cannot be verified |
+| Metadata file corrupt | `failed to parse metadata file` with corruption hint |
+| Checksum mismatch | `checksum mismatch` with expected/actual values and re-export hint |
+| Step count mismatch (JSON only) | `step count mismatch` with recorded vs actual count and truncation hint |
+| Format/extension mismatch | `format mismatch` with re-export hint |
+
+**Step count mismatch error example:**
+
+```
+step count mismatch
+  Metadata records 50 steps, trace file contains 12 steps
+  The trace file may have been truncated, appended to, or partially overwritten
+  Fix: re-export the trace with glassbox debug --trace-output
+```
+
+### Recovering a trace (`RecoverTrace`)
+
+`RecoverTrace(tracePath)` performs best-effort recovery of a JSON trace export that may be partially corrupted or have mismatched metadata. It:
+
+1. **Runs `VerifyExport` first** — surfaces any checksum or step-count mismatch as a warning before attempting content recovery. Missing metadata is silently accepted.
+2. **Parses the JSON** with progressive tolerance (strict → lenient → unknown-fields allowed).
+3. **Sanitizes** the recovered trace — fixes zero timestamps, step index mismatches, missing transaction hashes, and truncates excessively long error strings.
+4. **Validates** the sanitized trace for structural correctness.
+
+All warnings and repairs are returned as a slice of errors alongside the recovered trace object, so callers can surface the information at the appropriate severity level.
+
+```go
+recovered, warnings := trace.RecoverTrace("./corrupted/trace.json")
+if recovered == nil {
+    log.Fatalf("unrecoverable: %v", warnings)
+}
+for _, w := range warnings {
+    fmt.Fprintf(os.Stderr, "Warning: %v\n", w)
+}
+// use recovered trace...
+```
+
+**Only JSON format exports can be recovered.** HTML, Markdown, and Text are presentation-only formats and cannot be parsed back to an `ExecutionTrace`. Always export in JSON format when recovery capability is required.
+
+---
+
 ## See Also
 
 - [Debug Command Reference](./debug-command.md)
