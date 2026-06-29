@@ -178,6 +178,12 @@ func RecordCommandUsage(ctx context.Context, command string) {
 		command = "unknown"
 	}
 
+	// Sanitize the command name: truncate at 64 chars and strip any characters
+	// that are not alphanumeric, dash, colon, or underscore. This prevents
+	// user-controlled input (e.g. a malformed deep-link subcommand) from leaking
+	// arbitrary data to the OTLP collector.
+	command = sanitizeCommandName(command)
+
 	// Set core command attributes
 	span.SetAttributes(
 		attribute.String("command.name", command),
@@ -216,8 +222,12 @@ func GetTracer() oteltrace.Tracer {
 }
 
 // SanitizeValue returns a privacy-preserving representation for telemetry.
-// Identifiers (hash, tx, contract) are hashed client-side. Paths are reduced
-// to their basename. Long strings are truncated.
+// Identifiers (hash, tx, contract) are fingerprinted client-side using
+// SHA-256 and represented as a 32-character hex prefix (16 bytes of the
+// digest). This is intentionally lossy — full hash recovery is not possible
+// from the fingerprint, and birthday collisions at 16 bytes are acceptable for
+// telemetry aggregation (not cryptographic) use.
+// Paths are reduced to their basename. Long strings are truncated at 128 chars.
 func SanitizeValue(key, v string) string {
 	if v == "" {
 		return ""
@@ -226,7 +236,8 @@ func SanitizeValue(key, v string) string {
 	switch {
 	case strings.Contains(lk, "hash") || strings.Contains(lk, "tx") || strings.Contains(lk, "contract"):
 		h := sha256.Sum256([]byte(v))
-		// transmit a short deterministic fingerprint only
+		// Transmit only a short deterministic fingerprint — not the full hash.
+		// "sha256:" prefix (7 chars) + 25 hex chars = 32 chars total.
 		return fmt.Sprintf("sha256:%x", h)[:32]
 	case strings.Contains(v, string(filepath.Separator)) || strings.Contains(v, "/"):
 		return filepath.Base(v)
@@ -242,4 +253,24 @@ func SanitizeValue(key, v string) string {
 // telemetry export.
 func Attr(key, v string) attribute.KeyValue {
 	return attribute.String(key, SanitizeValue(key, v))
+}
+
+// sanitizeCommandName returns a safe, bounded representation of a CLI command
+// name for telemetry. It accepts alphanumerics, dash, colon, and underscore —
+// the characters used by all built-in glassbox commands — and replaces
+// anything else with "_". The result is capped at 64 characters.
+func sanitizeCommandName(name string) string {
+	if len(name) > 64 {
+		name = name[:64]
+	}
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == ':' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
 }

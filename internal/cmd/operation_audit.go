@@ -23,7 +23,17 @@ import (
 
 const operationAuditLogVersion = "1.0.0"
 
-var sensitiveFlagPattern = strings.NewReplacer(
+// maxMetadataKeyLen and maxMetadataValueLen bound user-supplied --metadata entries
+// so they cannot produce arbitrarily large signed payloads.
+const (
+	maxMetadataKeyLen   = 128
+	maxMetadataValueLen = 1024
+)
+
+// sensitiveFlagPattern is kept for documentation purposes but the actual check
+// is performed by isSensitiveKey to avoid dead-code confusion.
+// TODO: remove if no longer referenced by external tooling.
+var _ = strings.NewReplacer( // deliberately unused — see isSensitiveKey
 	"token", "token",
 	"secret", "secret",
 	"password", "password",
@@ -113,9 +123,17 @@ func writeOperationAuditLog(rawArgs []string, execErr error) error {
 func buildOperationAuditRecord(rawArgs []string, execErr error) (*OperationAuditLog, error) {
 	wd, _ := os.Getwd()
 
+	// Guard against an empty args slice so we never panic on rawArgs[0].
+	cmdPath := ""
+	var cmdArgsTail []string
+	if len(rawArgs) > 0 {
+		cmdPath = rawArgs[0]
+		cmdArgsTail = rawArgs[1:]
+	}
+
 	command := OperationAuditCommand{
-		Path:             rawArgs[0],
-		Args:             sanitizeArgs(rawArgs[1:]),
+		Path:             cmdPath,
+		Args:             sanitizeArgs(cmdArgsTail),
 		WorkingDirectory: wd,
 		CliVersion:       version.Version,
 	}
@@ -185,7 +203,25 @@ func parseMetadataEntries(source []string) []OperationAuditEntry {
 		if len(parts) != 2 {
 			continue
 		}
-		entries = append(entries, OperationAuditEntry{Key: strings.TrimSpace(parts[0]), Value: strings.TrimSpace(parts[1])})
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+
+		// Reject null bytes — they cause unpredictable behaviour in JSON and
+		// downstream consumers.
+		if strings.ContainsRune(key, 0) || strings.ContainsRune(val, 0) {
+			continue
+		}
+
+		// Enforce length limits so user-controlled entries cannot produce
+		// arbitrarily large signed payloads.
+		if len(key) == 0 || len(key) > maxMetadataKeyLen {
+			continue
+		}
+		if len(val) > maxMetadataValueLen {
+			val = val[:maxMetadataValueLen] + "... (truncated)"
+		}
+
+		entries = append(entries, OperationAuditEntry{Key: key, Value: val})
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Key < entries[j].Key })
 	return entries
@@ -246,35 +282,61 @@ func isLikelySecret(value string) bool {
 	return len(value) >= 16 && strings.ContainsAny(value, "0123456789abcdefABCDEF")
 }
 
+// sanitizeError converts an execution error to a safe string for the audit log.
+// It strips file paths (strings containing OS path separators) and potential
+// secret-like tokens from the error message so internal details are not
+// accidentally embedded in the signed record.
 func sanitizeError(err error) string {
 	if err == nil {
 		return ""
 	}
-	return err.Error()
+	msg := err.Error()
+	// Replace absolute path segments (Unix / Windows) with a placeholder so
+	// internal directory layouts are not leaked into the signed audit record.
+	parts := strings.FieldsFunc(msg, func(r rune) bool { return r == ' ' || r == '\t' || r == '\n' })
+	cleaned := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if strings.ContainsAny(p, "/\\") && len(p) > 3 {
+			cleaned = append(cleaned, "<path>")
+		} else if isLikelySecret(p) {
+			cleaned = append(cleaned, "REDACTED")
+		} else {
+			cleaned = append(cleaned, p)
+		}
+	}
+	return strings.Join(cleaned, " ")
 }
 
 func sanitizeArgs(rawArgs []string) []string {
 	result := make([]string, 0, len(rawArgs))
 	for i := 0; i < len(rawArgs); i++ {
 		arg := rawArgs[i]
+		// Handle both long flags (--flag, --flag=value) and short flags (-f, -f value).
+		var name string
+		var hasValue bool
+		var isFlag bool
+
 		if strings.HasPrefix(arg, "--") {
-			name, _, hasValue := splitFlag(arg)
-			if isSensitiveKey(name) {
-				if hasValue {
-					result = append(result, fmt.Sprintf("%s=REDACTED", name))
-				} else {
-					result = append(result, name)
-					if i+1 < len(rawArgs) {
-						i++
-						result = append(result, "REDACTED")
-					}
-				}
-				continue
-			}
+			name, _, hasValue = splitFlag(arg)
+			isFlag = true
+		} else if strings.HasPrefix(arg, "-") && len(arg) == 2 {
+			// Short single-char flag like -t
+			name = arg
+			isFlag = true
+		}
+
+		if isFlag && isSensitiveKey(name) {
 			if hasValue {
-				result = append(result, arg)
-				continue
+				result = append(result, name+"=REDACTED")
+			} else {
+				result = append(result, name)
+				// Redact the next positional argument (the flag value).
+				if i+1 < len(rawArgs) {
+					i++
+					result = append(result, "REDACTED")
+				}
 			}
+			continue
 		}
 		result = append(result, arg)
 	}
