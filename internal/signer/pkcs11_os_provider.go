@@ -32,12 +32,12 @@ func (p *OsPkcs11Provider) LoadModule(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &Error{Op: "pkcs11", Msg: fmt.Sprintf("module file not found: %s", path)}
+			return &Error{Op: "pkcs11", Msg: fmt.Sprintf("module file not found: %s — remediation: verify the path is correct or install the PKCS#11 module (apt install softhsm2, brew install softhsm, etc.)", path)}
 		}
-		return &Error{Op: "pkcs11", Msg: fmt.Sprintf("cannot access module file: %v", err)}
+		return &Error{Op: "pkcs11", Msg: fmt.Sprintf("cannot access module file %s: %v — remediation: check file permissions and ensure the process user can read the module", path, err)}
 	}
 	if info.IsDir() {
-		return &Error{Op: "pkcs11", Msg: fmt.Sprintf("%s is a directory, not a shared library", path)}
+		return &Error{Op: "pkcs11", Msg: fmt.Sprintf("%s is a directory, not a shared library — remediation: GLASSBOX_PKCS11_MODULE must point to a .so/.dylib/.dll file, not a directory", path)}
 	}
 	return nil
 }

@@ -56,9 +56,32 @@ type PersistedSnapshot struct {
 // SavePersisted writes a PersistedSnapshot to path atomically.
 // The file is written to a temp path first and then renamed so a partial
 // write never leaves a corrupt file on disk.
+//
+// The metadata is validated before writing so that incomplete or inconsistent
+// parameters are rejected early with a clear diagnostic.
 func SavePersisted(path string, meta *ReplayMetadata, snap *Snapshot) error {
 	if meta == nil {
 		return fmt.Errorf("metadata must not be nil")
+	}
+	if meta.TxHash == "" {
+		return fmt.Errorf(
+			"transaction hash is required in replay metadata\n" +
+				"  Fix: provide the transaction hash with --tx <hash>",
+		)
+	}
+	if meta.Network == "" {
+		return fmt.Errorf(
+			"network is required in replay metadata\n" +
+				"  Fix: provide the network with --network testnet (or mainnet, futurenet)",
+		)
+	}
+	validNetworks := map[string]bool{"testnet": true, "mainnet": true, "futurenet": true}
+	if !validNetworks[meta.Network] {
+		return fmt.Errorf(
+			"unsupported network %q in replay metadata — must be one of: testnet, mainnet, futurenet\n"+
+				"  Fix: re-run with --network testnet (or mainnet, futurenet)",
+			meta.Network,
+		)
 	}
 	if snap == nil {
 		snap = FromMap(nil)
@@ -117,6 +140,20 @@ func LoadPersisted(path string) (*PersistedSnapshot, error) {
 	// that the error messages and upgrade guidance stay in one place (schema.go).
 	if err := ValidateSchemaVersion(ps.Metadata.SchemaVersion, path); err != nil {
 		return nil, err
+	}
+	if ps.Metadata.TxHash == "" {
+		return nil, fmt.Errorf(
+			"snapshot file %s is missing the transaction hash in metadata — the file may be truncated or corrupted; "+
+				"re-run the debug command to regenerate the snapshot",
+			path,
+		)
+	}
+	if ps.Metadata.Network == "" {
+		return nil, fmt.Errorf(
+			"snapshot file %s is missing the network in metadata — the file may be truncated or corrupted; "+
+				"re-run the debug command to regenerate the snapshot",
+			path,
+		)
 	}
 	if ps.Snapshot == nil {
 		return nil, fmt.Errorf("snapshot file %s contains no ledger state", path)

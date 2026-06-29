@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/dotandev/glassbox/internal/clioutput"
 	"github.com/dotandev/glassbox/internal/deeplink"
@@ -17,24 +18,52 @@ import (
 // protocolDiagnoseJSON controls whether protocol:diagnose emits JSON output.
 var protocolDiagnoseJSON bool
 
+// protocolDiagnoseFormat controls the output format for protocol:diagnose ("text" or "json").
+var protocolDiagnoseFormat string
+
 // protocolVerifyProbe runs an optional glassbox://doctor-probe handler check.
 var protocolVerifyProbe bool
+
+// protocolRegisterDryRun previews what register would do without modifying OS state.
+var protocolRegisterDryRun bool
 
 var protocolRegisterCmd = &cobra.Command{
 	Use:     "protocol:register",
 	Aliases: []string{"pb:register"},
 	Short:   "Register the glassbox:// protocol handler in the operating system",
+	Long: `Register the glassbox:// URI scheme so the OS dispatches deep links to Glassbox.
+
+Use --dry-run to preview what would be written without modifying any system state.`,
 	GroupID: "utility",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		registrar, err := protocolreg.NewRegistrar()
 		if err != nil {
-			return err
+			return fmt.Errorf("initialise registrar: %w\n  Fix: ensure the glassbox binary is installed and accessible", err)
 		}
+
+		if protocolRegisterDryRun {
+			diag := registrar.Diagnose()
+			if diag.Status == protocolreg.StatusOK {
+				fmt.Fprintf(cmd.OutOrStdout(), "[DRY-RUN] Protocol handler is already registered — no changes needed.\n")
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "[DRY-RUN] Would register %s:// handler on %s.\n", protocolreg.Scheme, diag.Platform)
+				fmt.Fprintf(cmd.OutOrStdout(), "[DRY-RUN] Current status: %s\n", diag.Status)
+				if len(diag.Issues) > 0 {
+					fmt.Fprintf(cmd.OutOrStdout(), "[DRY-RUN] Issues to fix:\n")
+					for _, issue := range diag.Issues {
+						fmt.Fprintf(cmd.OutOrStdout(), "  - %s\n", issue)
+					}
+				}
+			}
+			return nil
+		}
+
 		if err := registrar.Register(); err != nil {
-			return err
+			return fmt.Errorf("%w\n  Tip: run 'glassbox protocol:diagnose' for a detailed breakdown, or 'glassbox protocol:repair' to attempt automatic repair", err)
 		}
 
 		fmt.Fprintf(cmd.OutOrStdout(), "Registered GLASSBOX Protocol handler for %s://\n", protocolreg.Scheme)
+		fmt.Fprintln(cmd.OutOrStdout(), "Tip: run 'glassbox protocol:verify' to confirm the registration is working.")
 		return nil
 	},
 }
@@ -69,11 +98,23 @@ var protocolStatusCmd = &cobra.Command{
 			return err
 		}
 
-		if registrar.IsRegistered() {
+		diag := registrar.Diagnose()
+		for _, check := range diag.Checks {
+			fmt.Fprintf(cmd.OutOrStdout(), "[OK] %s\n", check)
+		}
+
+		if diag.Status == protocolreg.StatusOK {
 			fmt.Fprintln(cmd.OutOrStdout(), "GLASSBOX Protocol handler is currently REGISTERED")
 			return nil
 		}
 
+		fmt.Fprintln(cmd.ErrOrStderr(), "GLASSBOX Protocol handler is NOT REGISTERED")
+		if len(diag.RemediationSteps) > 0 {
+			fmt.Fprintln(cmd.ErrOrStderr(), "\nTo register the protocol handler:")
+			for i, step := range diag.RemediationSteps {
+				fmt.Fprintf(cmd.ErrOrStderr(), "  %d. %s\n", i+1, step)
+			}
+		}
 		return fmt.Errorf("GLASSBOX Protocol handler is NOT REGISTERED")
 	},
 }
@@ -103,7 +144,6 @@ On failure, remediation steps are printed to help repair the registration.`,
 		for _, issue := range report.Issues {
 			fmt.Fprintf(cmd.ErrOrStderr(), "[FAIL] %s\n", issue)
 		}
-
 		probePassed := true
 		if protocolVerifyProbe {
 			exePath, exeErr := os.Executable()
@@ -136,7 +176,7 @@ On failure, remediation steps are printed to help repair the registration.`,
 			return fmt.Errorf("protocol handler probe failed")
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "Verified GLASSBOX Protocol registration on %s\n", report.Platform)
+		fmt.Fprintf(cmd.OutOrStdout(), "Verified GLASSBOX Protocol registration on %s (%dms)\n", report.Platform, report.ElapsedMs)
 		return nil
 	},
 }
@@ -150,7 +190,12 @@ var protocolHandlerCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		parsed, err := protocolreg.ParseDebugURI(args[0])
 		if err != nil {
-			return err
+			return fmt.Errorf(
+				"%w\n"+
+					"  Expected format: glassbox://debug/<64-char-hex>?network=<testnet|mainnet|futurenet>[&op=<n>][&view=<mode>]\n"+
+					"  Run 'glassbox protocol:handle --help' for full parameter documentation",
+				err,
+			)
 		}
 
 		executablePath, err := os.Executable()
@@ -206,7 +251,12 @@ Exit codes:
 
 		report := registrar.Diagnose()
 
-		if protocolDiagnoseJSON {
+		// Validate and resolve the output format.
+		normalizedFormat := strings.ToLower(strings.TrimSpace(protocolDiagnoseFormat))
+		if normalizedFormat != "" && normalizedFormat != "text" && normalizedFormat != "json" {
+			return fmt.Errorf("invalid --format %q: must be 'text' or 'json'", protocolDiagnoseFormat)
+		}
+		if clioutput.WantsJSON(protocolDiagnoseJSON, normalizedFormat) {
 			return clioutput.Write(cmd.OutOrStdout(), "protocol:diagnose", report)
 		}
 
@@ -309,9 +359,13 @@ PERMISSION NOTES
 
 func init() {
 	protocolDiagnoseCmd.Flags().BoolVar(&protocolDiagnoseJSON, "json", false,
-		"Emit diagnostic report as JSON (for machine consumption)")
+		"Emit diagnostic report as JSON (shorthand for --format json)")
+	protocolDiagnoseCmd.Flags().StringVar(&protocolDiagnoseFormat, "format", "",
+		"Output format: 'text' (default) or 'json'")
 	protocolVerifyCmd.Flags().BoolVar(&protocolVerifyProbe, "probe", false,
 		"Run a dry-run glassbox://doctor-probe handler check after registration verification")
+	protocolRegisterCmd.Flags().BoolVar(&protocolRegisterDryRun, "dry-run", false,
+		"Preview what would be registered without modifying OS state")
 
 	rootCmd.AddCommand(protocolRegisterCmd)
 	rootCmd.AddCommand(protocolUnregisterCmd)

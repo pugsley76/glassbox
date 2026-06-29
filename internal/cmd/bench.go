@@ -42,17 +42,27 @@ MODES
   sourcemap  Benchmark source cache lookups and entry serialization
   all        Run all benchmarks (default)
 
-EXAMPLES
-  # Run all benchmarks
+Source mapping benchmarks measure the latency of cache lookups and entry
+serialization used during WASM-to-Rust source line resolution. Use these
+results to tune --count and identify caching bottlenecks before profiling
+a live debug session.
+
+Validation:
+  --mode must be one of: rpc, replay, sourcemap, all.
+  --count must be a positive integer.`,
+	Example: `  # Run all benchmarks (includes sourcemap stage)
   glassbox bench
+
+  # Benchmark source mapping cache performance only
+  glassbox bench --mode sourcemap --count 20
 
   # Benchmark RPC only with 10 iterations
   glassbox bench --mode rpc --count 10
 
-  # Output results as JSON
+  # Output all results as JSON for CI consumption
   glassbox bench --mode all --json`,
-	Args:  cobra.NoArgs,
-	RunE:  runBench,
+	Args: cobra.NoArgs,
+	RunE: runBench,
 }
 
 func init() {

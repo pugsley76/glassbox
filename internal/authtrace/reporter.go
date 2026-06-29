@@ -23,6 +23,11 @@ func NewDetailedReporter(trace *AuthTrace) *DetailedReporter {
 }
 
 func (r *DetailedReporter) GenerateReport() string {
+	if r.trace == nil {
+		return "Error: cannot generate report — auth trace is nil\n" +
+			"  Fix: ensure the auth-debug analysis completed successfully before requesting a report"
+	}
+
 	var sb strings.Builder
 
 	status := "SUCCEEDED"
@@ -230,6 +235,10 @@ func (r *DetailedReporter) writeSignatureWeightSummary(sb *strings.Builder) {
 }
 
 func (r *DetailedReporter) GenerateJSON() ([]byte, error) {
+	if r.trace == nil {
+		return nil, fmt.Errorf("auth trace is nil — cannot generate JSON report\n" +
+			"  Fix: ensure the auth-debug analysis completed successfully before requesting output")
+	}
 	return json.MarshalIndent(r.trace, "", "  ")
 }
 

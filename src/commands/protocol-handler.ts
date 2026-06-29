@@ -15,20 +15,62 @@ dotenv.config();
 const LOCK_FILE = path.join(os.tmpdir(), 'glassbox-protocol-handler.lock');
 const LOCK_STALE_MS = 30_000;
 
-function acquireLock(force: boolean): boolean {
+/**
+ * Check whether a PID corresponds to a running process.
+ * Returns true when the process is live, false when it is gone or the PID
+ * is invalid.
+ */
+function isProcessAlive(pid: number): boolean {
+    if (!Number.isInteger(pid) || pid <= 0) {
+        return false;
+    }
+    try {
+        // Signal 0 tests existence without sending a real signal.
+        process.kill(pid, 0);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function acquireLock(force: boolean, staleLockTimeoutMs = LOCK_STALE_MS): boolean {
     if (force) {
         writeLock();
         return true;
     }
 
     try {
+        const raw = fs.readFileSync(LOCK_FILE, 'utf8').trim();
         const stat = fs.statSync(LOCK_FILE);
-        if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
-            writeLock();
-            return true;
+        const lockAgeSec = Math.round((Date.now() - stat.mtimeMs) / 1000);
+
+        // If the lock file is recent, check whether the owning process is still alive.
+        if (Date.now() - stat.mtimeMs <= staleLockTimeoutMs) {
+            const lockedPid = parseInt(raw, 10);
+            if (isProcessAlive(lockedPid)) {
+                // A live process owns this lock — respect it.
+                return false;
+            }
+            // The PID is gone — this is a stale lock from a crashed handler.
+            console.warn(
+                `[WARN] Stale lock detected: PID ${lockedPid} is no longer running ` +
+                `(lock age: ${lockAgeSec}s). Reclaiming.`
+            );
+        } else {
+            console.warn(
+                `[WARN] Lock file exceeded timeout (age: ${lockAgeSec}s, ` +
+                `timeout: ${Math.round(staleLockTimeoutMs / 1000)}s). Reclaiming.`
+            );
         }
-        return false;
-    } catch {
+
+        writeLock();
+        return true;
+    } catch (err: unknown) {
+        // Lock file absent or unreadable — safe to create.
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+            // Unexpected read error — log it but proceed.
+            console.warn('[WARN] Could not read lock file:', err);
+        }
         writeLock();
         return true;
     }
@@ -57,9 +99,28 @@ export function registerProtocolCommands(program: Command): void {
         .command('protocol-handler <uri>')
         .description('Internal: Handle GLASSBOX Protocol URI (invoked by OS)')
         .option('--force', 'Bypass the concurrency lock')
-        .action(async (uri: string, opts: { force?: boolean }) => {
-            if (!acquireLock(opts.force === true)) {
-                console.error('[WARN] Another protocol handler instance is running. Use --force to override.');
+        .option(
+            '--stale-lock-timeout <ms>',
+            'Override the stale-lock reclaim timeout in milliseconds (default: 30000)',
+            String(LOCK_STALE_MS),
+        )
+        .action(async (uri: string, opts: { force?: boolean; staleLockTimeout?: string }) => {
+            const staleLockMs = parseInt(opts.staleLockTimeout ?? String(LOCK_STALE_MS), 10);
+            const effectiveStaleLockMs = Number.isFinite(staleLockMs) && staleLockMs > 0
+                ? staleLockMs
+                : LOCK_STALE_MS;
+
+            if (!acquireLock(opts.force === true, effectiveStaleLockMs)) {
+                // Read the PID from the lock file to give an actionable message.
+                let lockDetail = '';
+                try {
+                    const pid = fs.readFileSync(LOCK_FILE, 'utf8').trim();
+                    lockDetail = ` (lock held by PID ${pid})`;
+                } catch { /* ignore */ }
+                console.error(
+                    `[WARN] Another protocol handler instance is running${lockDetail}. ` +
+                    `Use --force to override, or wait for it to finish.`
+                );
                 process.exit(1);
             }
 

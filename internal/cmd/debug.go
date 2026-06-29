@@ -71,6 +71,7 @@ var (
 	noCacheFlag           bool
 	demoMode              bool
 	watchFlag             bool
+	watchFilesFlag        bool
 	watchTimeoutFlag      int
 	hotReloadFlag         bool
 	hotReloadInterval     time.Duration
@@ -493,25 +494,32 @@ Local WASM Replay Mode:
 
 		// Validate --contract-source points to an accessible directory.
 		if contractSourceFlag != "" && !secureWorkspaceFlag {
-			info, statErr := os.Stat(contractSourceFlag)
+			trimmed := strings.TrimSpace(contractSourceFlag)
+			if trimmed == "" {
+				return errors.WrapValidationError(fmt.Sprintf(
+					"--contract-source: value must not be empty or whitespace\n" +
+						"  Provide the path to your contract's source directory (the one containing src/).",
+				))
+			}
+			info, statErr := os.Stat(trimmed)
 			if statErr != nil {
 				if os.IsNotExist(statErr) {
 					return errors.WrapValidationError(fmt.Sprintf(
 						"--contract-source: directory not found: %q\n"+
 							"  Provide the path to your contract's source directory (the one containing src/).\n"+
 							"  Source mapping will be unavailable without a valid path.",
-						contractSourceFlag,
+						trimmed,
 					))
 				}
 				return errors.WrapValidationError(fmt.Sprintf(
-					"--contract-source: cannot access %q: %v", contractSourceFlag, statErr,
+					"--contract-source: cannot access %q: %v", trimmed, statErr,
 				))
 			}
 			if !info.IsDir() {
 				return errors.WrapValidationError(fmt.Sprintf(
 					"--contract-source: %q is a file, not a directory\n"+
 						"  Provide the path to your contract's source directory, not a file.",
-					contractSourceFlag,
+					trimmed,
 				))
 			}
 		}
@@ -560,10 +568,22 @@ Local WASM Replay Mode:
 			}
 			// Warn about alias target paths that don't exist on disk.
 			for alias, target := range aliasMap {
-				if _, targetErr := os.Stat(target); targetErr != nil {
+				trimmedAlias := strings.TrimSpace(alias)
+				trimmedTarget := strings.TrimSpace(target)
+				if trimmedAlias == "" {
+					continue
+				}
+				if trimmedTarget == "" {
+					fmt.Fprintf(os.Stderr,
+						"Warning: --source-alias: target for %q is empty; source mapping for this alias will be skipped\n",
+						trimmedAlias,
+					)
+					continue
+				}
+				if _, targetErr := os.Stat(trimmedTarget); targetErr != nil {
 					fmt.Fprintf(os.Stderr,
 						"Warning: --source-alias: target for %q does not exist: %q — source mapping for this alias will be skipped\n",
-						alias, target,
+						trimmedAlias, trimmedTarget,
 					)
 				}
 			}
@@ -808,8 +828,32 @@ Local WASM Replay Mode:
 			fmt.Printf("Comparing against Network: %s\n", compareNetworkFlag)
 		}
 
-		// Fetch transaction details
-		if watchFlag {
+		var watchEvents <-chan struct{}
+		if watchFilesFlag {
+			paths := []string{"."}
+			if contractSourceFlag != "" {
+				paths = append(paths, contractSourceFlag)
+			}
+			cfg := watch.FileWatcherConfig{
+				Paths:          paths,
+				PollInterval:   500 * time.Millisecond,
+				DebounceWindow: 500 * time.Millisecond,
+			}
+			events, errs := watch.StartFileWatcher(ctx, cfg)
+			watchEvents = events
+			go func() {
+				for err := range errs {
+					fmt.Fprintf(os.Stderr, "Watch error: %v\n", err)
+				}
+			}()
+			fmt.Println("Watching for file changes to rerun debug session...")
+		}
+
+	watchLoop:
+		for {
+			sessionErr := func() error {
+				// Fetch transaction details
+				if watchFlag {
 			spinner := watch.NewSpinner()
 			spinner.Start("Waiting for transaction to appear on-chain...")
 			watchCtx, cancelWatch := context.WithTimeout(ctx, time.Duration(watchTimeoutFlag)*time.Second)
@@ -1297,6 +1341,7 @@ Local WASM Replay Mode:
 			SimResponseJSON: string(simRespJSON),
 			ErstVersion:     version.Version,
 			SchemaVersion:   session.SchemaVersion,
+			EnvFingerprint:  session.BuildEnvFingerprint(),
 		}
 		SetCurrentSession(sessionData)
 		fmt.Printf("\nSession created: %s\n", sessionData.ID)
@@ -1482,7 +1527,29 @@ func runDemoMode(cmdArgs []string) error {
 	fmt.Printf("\nToken Flow Summary:\n")
 	fmt.Printf("  %s XLM transferred\n", visualizer.Symbol("arrow_r"))
 	fmt.Printf("\nSession ready. Use 'Glassbox session save' to persist.\n")
-	return nil
+				return nil
+			}()
+			
+			if sessionErr != nil {
+				if !watchFilesFlag {
+					return sessionErr
+				}
+				fmt.Printf("Debug session error: %v\n", sessionErr)
+			} else if !watchFilesFlag {
+				return nil
+			}
+
+			fmt.Println("Waiting for file changes...")
+			select {
+			case <-ctx.Done():
+				break watchLoop
+			case <-watchEvents:
+				fmt.Println("File change detected, rerunning...")
+				// Add a small separator
+				fmt.Println("==================================================")
+			}
+		}
+		return nil
 }
 
 func runLocalWasmReplay() error {
@@ -2000,16 +2067,16 @@ func printSimulationResult(network string, res *simulator.SimulationResponse) {
 				fmt.Printf("  %s", visualizer.Colorize(*event.ContractID, "dim"))
 			}
 			// Add resource info: CPU, Mem, and Fee for this event
-			if event.CPU != nil || event.Mem != nil {
+			if event.CPU != nil || event.Memory != nil {
 				var cpuStr, memStr, feeStr string
 				if event.CPU != nil {
 					cpuStr = fmt.Sprintf("CPU: %d", *event.CPU)
 				}
-				if event.Mem != nil {
-					memStr = fmt.Sprintf("Mem: %d", *event.Mem)
+				if event.Memory != nil {
+					memStr = fmt.Sprintf("Mem: %d", *event.Memory)
 				}
-				if event.CPU != nil && event.Mem != nil {
-					fee := (*event.CPU / 10000) + (*event.Mem / (64 * 1024))
+				if event.CPU != nil && event.Memory != nil {
+					fee := (*event.CPU / 10000) + (*event.Memory / (64 * 1024))
 					feeStr = fmt.Sprintf("Fee: %d stroops", fee)
 				}
 				parts := []string{}
@@ -2255,8 +2322,6 @@ func formatOperationSummary(op xdr.Operation) string {
 		}
 	case xdr.OperationTypeInvokeHostFunction:
 		summary = fmt.Sprintf("%s", typeName)
-	case xdr.OperationTypeInvokeContract:
-		summary = fmt.Sprintf("%s", typeName)
 	}
 
 	return summary
@@ -2499,31 +2564,50 @@ func validateSourceDiscoveryFlags() error {
 
 	// --contract-source must be an existing directory.
 	if contractSourceFlag != "" {
-		info, statErr := os.Stat(contractSourceFlag)
+		trimmed := strings.TrimSpace(contractSourceFlag)
+		if trimmed == "" {
+			return errors.WrapValidationError(fmt.Sprintf(
+				"--contract-source: value must not be empty or whitespace\n" +
+					"  Provide the path to your contract's source directory (the one containing src/).",
+			))
+		}
+		if strings.ContainsRune(trimmed, 0) {
+			return errors.WrapValidationError(
+				"--contract-source: path contains null bytes and cannot be used\n" +
+					"  Fix: remove any null bytes from the path.",
+			)
+		}
+		info, statErr := os.Stat(trimmed)
 		if statErr != nil {
 			if os.IsNotExist(statErr) {
 				return errors.WrapValidationError(fmt.Sprintf(
 					"--contract-source: directory not found: %q\n"+
 						"  Provide the path to your contract's source directory (the one containing src/).\n"+
 						"  Source mapping will be unavailable without a valid path.",
-					contractSourceFlag,
+					trimmed,
 				))
 			}
 			return errors.WrapValidationError(fmt.Sprintf(
-				"--contract-source: cannot access %q: %v", contractSourceFlag, statErr,
+				"--contract-source: cannot access %q: %v", trimmed, statErr,
 			))
 		}
 		if !info.IsDir() {
 			return errors.WrapValidationError(fmt.Sprintf(
 				"--contract-source: %q is a file, not a directory\n"+
 					"  Provide the path to your contract's source directory, not a file.",
-				contractSourceFlag,
+				trimmed,
 			))
 		}
 	}
 
 	// --source-alias must be readable valid JSON and point to existing directories.
 	if sourceAliasFlag != "" {
+		if strings.ContainsRune(sourceAliasFlag, 0) {
+			return errors.WrapValidationError(
+				"--source-alias: path contains null bytes and cannot be used\n" +
+					"  Fix: remove any null bytes from the path.",
+			)
+		}
 		aliasBytes, readErr := os.ReadFile(sourceAliasFlag)
 		if readErr != nil {
 			if os.IsNotExist(readErr) {
@@ -2686,6 +2770,7 @@ func init() {
 	debugCmd.Flags().StringVar(&jsonFileFlag, "json-file", "", "Load transaction envelope from a local JSON file containing envelope_xdr")
 	debugCmd.Flags().StringVar(&resultMetaFileFlag, "result-meta-file", "", "Load transaction result metadata from a local XDR or JSON file")
 	debugCmd.Flags().BoolVar(&demoMode, "demo", false, "Print sample output (no network) - for testing color detection")
+	debugCmd.Flags().BoolVar(&watchFilesFlag, "watch-files", false, "Watch for source/config file changes and rerun debug session")
 	debugCmd.Flags().BoolVar(&watchFlag, "watch", false, "Poll for transaction on-chain before debugging")
 	debugCmd.Flags().IntVar(&watchTimeoutFlag, "watch-timeout", 30, "Timeout in seconds for watch mode")
 	debugCmd.Flags().BoolVar(&hotReloadFlag, "hot-reload", false, "Hot reload local WASM changes during debug session (requires --wasm)")
@@ -2705,7 +2790,7 @@ func init() {
 	debugCmd.Flags().StringVar(&exportSVGFlag, "export-svg", "", "Export call graph as SVG to specified file")
 	debugCmd.Flags().StringVar(&loadSnapshotsFlag, "load-snapshots", "", "Load simulation from a snapshot registry")
 	debugCmd.Flags().StringVar(&saveSnapshotsFlag, "save-snapshots", "", "Save simulation results to a snapshot registry")
-	debugCmd.Flags().StringVar(&contractSourceFlag, "contract-source", "", "Explicit path to contract source directory for source mapping (used when auto-discovery fails)")
+	debugCmd.Flags().StringVar(&contractSourceFlag, "contract-source", "", "Explicit path to contract source directory for source mapping (must exist and be a directory)")
 	debugCmd.Flags().BoolVar(&debugJSONFlag, "json", false, "Output simulation results as machine-readable JSON")
 	debugCmd.Flags().StringVar(&debugFormatFlag, "format", "text", "Output format: text or json")
 	debugCmd.Flags().BoolVar(&skipSourceMappingFlag, "skip-source-mapping", false, "Skip DWARF source mapping for faster raw trace replay")
@@ -2724,7 +2809,7 @@ func init() {
 	debugCmd.Flags().StringVar(&arweaveWalletFlag, "arweave-wallet", "", "Path to Arweave wallet JSON file")
 
 	// Source alias mapping flag
-	debugCmd.Flags().StringVar(&sourceAliasFlag, "source-alias", "", "Path to a JSON file mapping embedded source paths to local filesystem paths")
+	debugCmd.Flags().StringVar(&sourceAliasFlag, "source-alias", "", "Path to a JSON file mapping embedded source paths to local directory paths")
 
 	rootCmd.AddCommand(debugCmd)
 }

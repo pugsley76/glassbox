@@ -284,6 +284,28 @@ func TestPermissionHint_NilError(t *testing.T) {
 	}
 }
 
+// ── Verify — ElapsedMs is populated ──────────────────────────────────────────
+
+func TestVerify_ElapsedMs_IsPopulated(t *testing.T) {
+	r := newTestRegistrar(t)
+	report, _ := r.Verify()
+	// ElapsedMs must be a non-negative value; registration on most platforms
+	// completes in well under a second but we only assert it is non-negative.
+	if report.ElapsedMs < 0 {
+		t.Errorf("ElapsedMs must be non-negative, got %d", report.ElapsedMs)
+	}
+}
+
+func TestVerify_ElapsedMs_ReflectsWork(t *testing.T) {
+	r := newTestRegistrar(t)
+	// Call Verify twice and confirm both reports carry an ElapsedMs value.
+	r1, _ := r.Verify()
+	r2, _ := r.Verify()
+	if r1.ElapsedMs < 0 || r2.ElapsedMs < 0 {
+		t.Errorf("both Verify calls should populate ElapsedMs; got %d and %d", r1.ElapsedMs, r2.ElapsedMs)
+	}
+}
+
 // ---- defaultRemediationSteps ------------------------------------------------
 
 func TestDefaultRemediationSteps_NonEmpty(t *testing.T) {

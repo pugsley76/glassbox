@@ -21,6 +21,32 @@ type TraceFormatVersion struct {
 // CurrentFormatVersion is the current trace export format version
 var CurrentFormatVersion = TraceFormatVersion{Major: 1, Minor: 0, Patch: 0}
 
+// CurrentJSONSchemaVersion is the schema_version string embedded in the
+// ExportJSON (--output-json) envelope. It is defined here rather than as a
+// literal at each call site so that all callers stay in sync automatically
+// when the schema evolves.
+//
+// Format: "MAJOR.MINOR" — the patch component is omitted because patch
+// changes are documentation-only and do not affect the envelope structure.
+const CurrentJSONSchemaVersion = "1.0"
+
+// SupportedJSONSchemaVersions lists all schema_version values that this
+// binary can load from an ExportJSON envelope without error. When a new
+// minor version is introduced it should be appended here so older files
+// continue to load with a deprecation warning rather than a hard failure.
+var SupportedJSONSchemaVersions = []string{"1.0"}
+
+// IsJSONSchemaVersionSupported reports whether the given schema_version
+// string from an ExportJSON envelope is loadable by this binary.
+func IsJSONSchemaVersionSupported(v string) bool {
+	for _, s := range SupportedJSONSchemaVersions {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
 // String returns the version as a string (e.g., "1.0.0")
 func (v TraceFormatVersion) String() string {
 	return fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
@@ -69,35 +95,57 @@ func DefaultCompatibilityOptions() CompatibilityOptions {
 
 // ExportVersionedTrace exports a trace with version information
 func ExportVersionedTrace(trace *ExecutionTrace, format, outputPath string, opts ExportOptions, compatOpts CompatibilityOptions) error {
-	// Wrap trace with version
+	if err := ValidateTraceExportParams(trace, format, outputPath, opts); err != nil {
+		return fmt.Errorf("pre-export validation failed: %w", err)
+	}
+
+	if err := ValidateTraceFormatCompatibility(trace, format); err != nil {
+		return fmt.Errorf("format compatibility check failed: %w", err)
+	}
+
 	versioned := VersionedTrace{
 		Version: CurrentFormatVersion,
 		Trace:   trace,
 	}
-	
-	// For JSON format, export with version envelope
+
 	if strings.ToLower(format) == "json" {
 		data, err := json.MarshalIndent(versioned, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal versioned trace: %w", err)
 		}
-		
+
 		if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-			return fmt.Errorf("failed to create directory: %w", err)
+			return fmt.Errorf("failed to create output directory: %w\n"+
+				"  Path: %s\n"+
+				"  Fix: ensure the parent directory exists and is writable",
+				err, filepath.Dir(outputPath))
 		}
-		
+
 		if err := os.WriteFile(outputPath, data, 0o644); err != nil {
-			return fmt.Errorf("failed to write file: %w", err)
+			return fmt.Errorf("failed to write versioned trace file: %w\n"+
+				"  Path: %s\n"+
+				"  Fix: check disk space and file permissions",
+				err, outputPath)
 		}
-		
+
 		return nil
 	}
-	
-	// For other formats, use standard export (HTML/Markdown don't need versioning in content)
+
 	return ExportExecutionTraceWithOptions(trace, format, outputPath, opts)
 }
 
-// LoadVersionedTrace loads a trace with version compatibility checking
+// LoadVersionedTrace loads a trace with version compatibility checking.
+// It understands two JSON envelope shapes:
+//
+//  1. The VersionedTrace envelope written by ExportVersionedTrace / ExportWithCompatibility:
+//     {"version":{"major":1,"minor":0,"patch":0},"trace":{...}}
+//
+//  2. The ExportJSON envelope written by --output-json:
+//     {"schema_version":"1.0","generated_at":"...","trace":{...}}
+//
+// Both shapes carry the trace payload at the "trace" key. Legacy files that
+// are plain ExecutionTrace JSON (no envelope at all) are also accepted with a
+// deprecation warning.
 func LoadVersionedTrace(path string, compatOpts CompatibilityOptions) (*ExecutionTrace, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -105,29 +153,59 @@ func LoadVersionedTrace(path string, compatOpts CompatibilityOptions) (*Executio
 			"  Path: %s\n"+
 			"  Fix: ensure the file exists and you have read permissions", err, path)
 	}
-	
-	// Try to parse as versioned trace first
-	var versioned VersionedTrace
-	err = json.Unmarshal(data, &versioned)
-	
-	if err != nil || versioned.Trace == nil {
-		// Not a versioned trace, try loading as plain trace (legacy format)
-		var trace ExecutionTrace
-		err = json.Unmarshal(data, &trace)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse trace file (tried both versioned and legacy formats): %w\n"+
-				"  This may be a corrupted file or an unsupported format\n"+
-				"  Fix: verify the file is valid JSON with 'jq . %s'", err, path)
+
+	// Probe top-level keys to detect the envelope shape before full parsing.
+	var probe struct {
+		// VersionedTrace shape
+		Version *TraceFormatVersion `json:"version"`
+		// ExportJSON shape
+		SchemaVersion string `json:"schema_version"`
+		// Both shapes share this key
+		Trace *ExecutionTrace `json:"trace"`
+	}
+	probeErr := json.Unmarshal(data, &probe)
+
+	// ── ExportJSON envelope ────────────────────────────────────────────────
+	// Detect by presence of "schema_version" string key (not the semver object).
+	if probeErr == nil && probe.SchemaVersion != "" && probe.Trace != nil {
+		if !IsJSONSchemaVersionSupported(probe.SchemaVersion) {
+			return nil, fmt.Errorf(
+				"unsupported schema_version %q in trace file %q\n"+
+					"  This binary supports schema versions: %s\n"+
+					"  Fix: re-export the trace with the current CLI version, or upgrade Glassbox",
+				probe.SchemaVersion, path,
+				joinVersions(SupportedJSONSchemaVersions),
+			)
 		}
-		
-		// Legacy trace loaded successfully
+		if probe.SchemaVersion != CurrentJSONSchemaVersion {
+			fmt.Fprintf(os.Stderr,
+				"Warning: trace file %q uses schema_version %q; current is %q\n"+
+					"  Consider re-exporting with the current CLI for full compatibility\n",
+				path, probe.SchemaVersion, CurrentJSONSchemaVersion,
+			)
+		}
+		return probe.Trace, nil
+	}
+
+	// ── VersionedTrace envelope ────────────────────────────────────────────
+	var versioned VersionedTrace
+	if probeErr == nil && probe.Version != nil && probe.Trace != nil {
+		versioned.Version = *probe.Version
+		versioned.Trace = probe.Trace
+	} else if probeErr != nil || probe.Trace == nil {
+		// Not a recognised envelope — try legacy plain ExecutionTrace.
+		var plain ExecutionTrace
+		if err2 := json.Unmarshal(data, &plain); err2 != nil {
+			return nil, fmt.Errorf("failed to parse trace file (tried versioned, schema, and legacy formats): %w\n"+
+				"  This may be a corrupted file or an unsupported format\n"+
+				"  Fix: verify the file is valid JSON with 'jq . %s'", probeErr, path)
+		}
 		fmt.Fprintf(os.Stderr, "Warning: loaded legacy trace format (no version info)\n")
 		fmt.Fprintf(os.Stderr, "  Consider re-exporting with current version for full compatibility\n")
-		
-		return &trace, nil
+		return &plain, nil
 	}
-	
-	// Check version compatibility
+
+	// ── Semver compatibility check ─────────────────────────────────────────
 	if compatOpts.StrictVersionCheck {
 		if versioned.Version != CurrentFormatVersion {
 			return nil, fmt.Errorf("version mismatch: trace is version %s but CLI requires exactly version %s\n"+
@@ -142,7 +220,7 @@ func LoadVersionedTrace(path string, compatOpts CompatibilityOptions) (*Executio
 					"  Fix: use a CLI version with matching major version or export trace with current CLI",
 					versioned.Version.String(), CurrentFormatVersion.String())
 			}
-			
+
 			if versioned.Version.Minor > CurrentFormatVersion.Minor && !compatOpts.AllowNewerMinor {
 				return nil, fmt.Errorf("trace from newer minor version: trace is %s but CLI is %s\n"+
 					"  Set AllowNewerMinor=true to attempt loading (may lose new features)\n"+
@@ -152,8 +230,8 @@ func LoadVersionedTrace(path string, compatOpts CompatibilityOptions) (*Executio
 			}
 		}
 	}
-	
-	// Apply migrations if loading older version
+
+	// Apply migrations if loading older version.
 	if versioned.Version.Minor < CurrentFormatVersion.Minor {
 		migrated, err := migrateTrace(versioned.Trace, versioned.Version, CurrentFormatVersion)
 		if err != nil {
@@ -166,8 +244,79 @@ func LoadVersionedTrace(path string, compatOpts CompatibilityOptions) (*Executio
 		fmt.Fprintf(os.Stderr, "Info: migrated trace from version %s to %s\n",
 			versioned.Version.String(), CurrentFormatVersion.String())
 	}
-	
+
 	return versioned.Trace, nil
+}
+
+// joinVersions formats a []string as a comma-separated list for error messages.
+func joinVersions(versions []string) string {
+	if len(versions) == 0 {
+		return "(none)"
+	}
+	out := make([]string, len(versions))
+	for i, v := range versions {
+		out[i] = "\"" + v + "\""
+	}
+	result := ""
+	for i, o := range out {
+		if i > 0 {
+			result += ", "
+		}
+		result += o
+	}
+	return result
+}
+
+// SchemaCompatibilityReport describes the compatibility between two trace versions.
+type SchemaCompatibilityReport struct {
+	FromVersion       TraceFormatVersion
+	ToVersion         TraceFormatVersion
+	Compatible        bool
+	RequiresMigration bool
+	Warnings          []string
+	Actions           []string
+}
+
+// CheckSchemaCompatibility produces a detailed compatibility report between
+// two trace format versions, including actionable migration guidance.
+func CheckSchemaCompatibility(from, to TraceFormatVersion) SchemaCompatibilityReport {
+	r := SchemaCompatibilityReport{
+		FromVersion: from,
+		ToVersion:   to,
+	}
+
+	if from.Major != to.Major {
+		r.Compatible = false
+		r.RequiresMigration = true
+		r.Warnings = append(r.Warnings,
+			fmt.Sprintf("major version mismatch: %s → %s", from.String(), to.String()))
+		r.Actions = append(r.Actions,
+			fmt.Sprintf("use Glassbox CLI v%d.x.x to work with this trace", from.Major))
+		return r
+	}
+
+	if from.Minor > to.Minor {
+		r.Compatible = false
+		r.RequiresMigration = true
+		r.Warnings = append(r.Warnings,
+			fmt.Sprintf("trace is newer minor (%s) than CLI (%s)", from.String(), to.String()))
+		r.Actions = append(r.Actions,
+			"upgrade Glassbox CLI to match the trace version")
+		return r
+	}
+
+	if from.Minor < to.Minor {
+		r.Compatible = true
+		r.RequiresMigration = true
+		r.Warnings = append(r.Warnings,
+			fmt.Sprintf("trace uses older minor version (%s); migration to %s required", from.String(), to.String()))
+		r.Actions = append(r.Actions,
+			fmt.Sprintf("re-export trace with current CLI (%s) for best results", to.String()))
+		return r
+	}
+
+	r.Compatible = true
+	return r
 }
 
 // migrateTrace migrates a trace from one version to another

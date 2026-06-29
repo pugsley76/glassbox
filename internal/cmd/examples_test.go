@@ -24,6 +24,7 @@ func TestCommandExamples(t *testing.T) {
 		{"report", reportCmd.Example},
 		{"regression-test", regressionTestCmd.Example},
 		{"version", versionCmd.Example},
+		{"bench", benchCmd.Example},
 	}
 
 	for _, tc := range cases {
@@ -133,5 +134,57 @@ func TestCommandLongDescriptions(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// ── Source mapping commands — help output quality ─────────────────────────────
+
+// TestBenchCmd_ExamplePresent verifies that the bench command (which includes
+// the sourcemap pipeline stage) has a non-empty Example field.
+func TestBenchCmd_ExamplePresent(t *testing.T) {
+	if strings.TrimSpace(benchCmd.Example) == "" {
+		t.Error("bench command must have a non-empty Example field")
+	}
+}
+
+// TestBenchCmd_ExampleMentionsSourcemap verifies the bench Example field
+// references the sourcemap mode so users know it exists from --help output.
+func TestBenchCmd_ExampleMentionsSourcemap(t *testing.T) {
+	if !strings.Contains(benchCmd.Example, "sourcemap") {
+		t.Error("bench Example should reference the sourcemap mode")
+	}
+}
+
+// TestBenchCmd_LongDescriptionMentionsSourcemap verifies the bench Long
+// description explains the source mapping benchmark purpose.
+func TestBenchCmd_LongDescriptionMentionsSourcemap(t *testing.T) {
+	long := benchCmd.Long
+	if !strings.Contains(long, "sourcemap") {
+		t.Error("bench Long description should mention the sourcemap mode")
+	}
+	if !strings.Contains(long, "--mode") {
+		t.Error("bench Long description should mention --mode validation")
+	}
+}
+
+// TestBenchCmd_LongDescriptionMentionsCount verifies that --count is described.
+func TestBenchCmd_LongDescriptionMentionsCount(t *testing.T) {
+	if !strings.Contains(benchCmd.Long, "--count") {
+		t.Error("bench Long description should mention --count validation")
+	}
+}
+
+// TestWasmDiffCmd_ExamplePresent verifies wasm-diff has a non-empty Example.
+func TestWasmDiffCmd_ExamplePresent(t *testing.T) {
+	if strings.TrimSpace(wasmDiffCmd.Example) == "" {
+		t.Error("wasm-diff command must have a non-empty Example field")
+	}
+}
+
+// TestWasmDiffCmd_LongDescriptionMentionsSourceMapping verifies the wasm-diff
+// Long description explains its relevance to source mapping.
+func TestWasmDiffCmd_LongDescriptionMentionsSourceMapping(t *testing.T) {
+	if !strings.Contains(wasmDiffCmd.Long, "source mapping") {
+		t.Error("wasm-diff Long description should mention source mapping")
 	}
 }

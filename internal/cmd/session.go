@@ -50,22 +50,27 @@ Available subcommands:
   save    - Save current session to disk
   resume  - Restore a saved session
   list    - View all saved sessions
-  delete  - Remove a saved session`,
+  delete  - Remove a saved session
+  recover - Restore a session interrupted by an unexpected process exit
+  doctor  - Check saved sessions for schema and integrity problems`,
 	Example: `  # Save current debug session
-  Glassbox session save
+  glassbox session save
 
   # List all sessions
-  Glassbox session list
+  glassbox session list
 
   # Resume a specific session
-  Glassbox session resume <session-id>
+  glassbox session resume <session-id>
 
   # Save and load a named bookmark
-  Glassbox session save --name payroll-bug
-  Glassbox session load payroll-bug
+  glassbox session save --name payroll-bug
+  glassbox session load payroll-bug
+
+  # Recover a session after an unexpected exit
+  glassbox session recover
 
   # Delete a session
-  Glassbox session delete <session-id>`,
+  glassbox session delete <session-id>`,
 }
 
 var sessionSaveCmd = &cobra.Command{
@@ -74,15 +79,28 @@ var sessionSaveCmd = &cobra.Command{
 	Long: `Save the current debug session state to disk for later resumption.
 
 You must run 'Glassbox debug <tx-hash>' first to create an active session.
-The session ID can be auto-generated or specified with --id flag.`,
+The session ID can be auto-generated or specified with --id flag.
+
+Validation:
+  The session data is validated before saving. The following checks are made:
+    • Transaction hash is present
+    • Network is one of: testnet, mainnet, futurenet
+    • Status is a recognized value (auto-set to 'active' if empty)
+    • Session name, if provided, must not exceed 128 characters
+    • Horizon URL is auto-populated from the network if not provided
+
+  If any check fails an actionable error is printed with a remediation hint.`,
 	Example: `  # Save with auto-generated ID
-  Glassbox session save
+  glassbox session save
 
   # Save with custom ID
-  Glassbox session save --id my-debug-session
+  glassbox session save --id my-debug-session
 
   # Save a named bookmark
-  Glassbox session save --name payroll-bug`,
+  glassbox session save --name payroll-bug
+
+  # Save and pin a custom RPC endpoint
+  glassbox session save --pin-endpoint https://soroban-testnet.stellar.org`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -100,7 +118,15 @@ The session ID can be auto-generated or specified with --id flag.`,
 			data.ID = session.GenerateID(data.TxHash)
 		}
 		if sessionNameFlag != "" {
-			data.Name = strings.TrimSpace(sessionNameFlag)
+			name := strings.TrimSpace(sessionNameFlag)
+			if len(name) > 128 {
+				return fmt.Errorf(
+					"session name is too long (%d characters, max 128)\n"+
+						"  Fix: provide a shorter name with --name",
+					len(name),
+				)
+			}
+			data.Name = name
 		}
 
 		if sessionPinEndpointFlag != "" {
@@ -109,6 +135,10 @@ The session ID can be auto-generated or specified with --id flag.`,
 
 		data.Status = "saved"
 		data.LastAccessAt = time.Now()
+
+		if data.EnvFingerprint == "" {
+			data.EnvFingerprint = session.BuildEnvFingerprint()
+		}
 
 		// Open session store
 		store, err := session.NewStore()
@@ -124,8 +154,9 @@ The session ID can be auto-generated or specified with --id flag.`,
 			fmt.Fprintf(os.Stderr, "Warning: cleanup failed: %v\n", err)
 		}
 
-		// Save session
-		if err := store.Save(ctx, data); err != nil {
+		// Save with validation so corrupt or incomplete sessions are rejected
+		// early with a clear diagnostic instead of a silent partial write.
+		if err := store.SaveWithValidation(ctx, data); err != nil {
 			return errors.WrapValidationError(fmt.Sprintf("failed to save session: %v", err))
 		}
 
@@ -154,14 +185,17 @@ know exactly what to fix before continuing.
 
 Use 'Glassbox session list' to see available session IDs and names.`,
 	Example: `  # Resume a session
-  Glassbox session resume abc123
+  glassbox session resume abc123
 
   # Load by bookmark name
-  Glassbox session load payroll-bug
+  glassbox session load payroll-bug
 
-  # List available sessions first
-  Glassbox session list
-  Glassbox session resume <session-id-or-name>`,
+  # List available sessions first, then resume
+  glassbox session list
+  glassbox session resume <session-id-or-name>
+
+  # Run diagnostics if a session behaves unexpectedly
+  glassbox session doctor`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -191,8 +225,12 @@ Use 'Glassbox session list' to see available session IDs and names.`,
 		}
 
 		// Resolve session by exact ID, partial ID prefix, tx hash, or fuzzy match.
+		// Load validates schema compatibility and auto-upgrades older sessions.
 		data, resolveErr := resolveSessionInput(ctx, store, sessionID)
 		if resolveErr != nil {
+			if session.IsSchemaError(resolveErr) {
+				return resolveErr
+			}
 			return fmt.Errorf(
 				"session %q not found: %w\n"+
 					"Hint: run 'glassbox session list' to see all available sessions",
@@ -217,12 +255,6 @@ Use 'Glassbox session list' to see available session IDs and names.`,
 			fmt.Fprintf(os.Stderr, "To re-debug:   glassbox debug %s --network %s\n",
 				data.TxHash, data.Network)
 			return fmt.Errorf("session %s failed integrity validation (%d issue(s))", data.ID, len(report.Issues))
-		}
-
-		// Schema forward-compatibility check (also validated by ValidateIntegrity,
-		// but we surface a cleaner error with upgrade guidance here).
-		if !report.SchemaCompatible {
-			return errors.WrapProtocolUnsupported(uint32(report.StoredSchemaVersion))
 		}
 
 		// Update status and make it current.
@@ -304,7 +336,11 @@ See also:
   glassbox session resume  – restore a saved session
   glassbox session delete  – remove a session`,
 	Example: `  # List all sessions
-  glassbox session list`,
+  glassbox session list
+
+  # Then resume or delete by the ID shown
+  glassbox session resume <session-id>
+  glassbox session delete <session-id>`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -363,17 +399,13 @@ var sessionDeleteCmd = &cobra.Command{
 
 Use 'glassbox session list' to see all available session IDs and names.
 
-If you delete the session that is currently active (via 'glassbox session
-resume'), the in-memory state is cleared and no further saves will succeed
-without a new 'glassbox debug' run.
-
-Example: glassbox session delete abc123
-         glassbox session delete payroll-bug`,
-	Example: `  # Delete by session ID
+Use 'Glassbox session list' to see available sessions.`,
+	Example: `  # Delete a specific session
   glassbox session delete abc123
 
-  # Delete by bookmark name
-  glassbox session delete payroll-bug`,
+  # List sessions first to find the ID
+  glassbox session list
+  glassbox session delete <session-id>`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -425,9 +457,18 @@ hints. The checkpoint is removed after a successful recovery.
 
 If the checkpoint references a session that was never flushed to the store (the
 process crashed before saving), the stale checkpoint is cleared and guidance is
-printed so you know how to re-run the debug command.`,
-	Example: `  # Check for and restore an orphaned session
-  glassbox session recover`,
+printed so you know how to re-run the debug command.
+
+Validation:
+  The checkpoint file is validated for completeness before it is trusted.
+  Missing session ID, transaction hash, network, or invalid PID values are
+  detected and reported with actionable diagnostics. If the checkpoint is
+  corrupt, it is cleared and guidance is printed for starting a fresh session.`,
+	Example: `  # Check for and restore an orphaned session after a crash
+  glassbox session recover
+
+  # If recovery finds nothing, start a fresh debug session
+  glassbox debug <tx-hash> --network testnet`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -556,6 +597,59 @@ printed so you know how to re-run the debug command.`,
 	},
 }
 
+var sessionDoctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Check saved sessions for schema and integrity problems",
+	Long: `Run diagnostics on all persisted debug sessions in ~/.Glassbox/sessions.db.
+
+Reports schema version mismatches, missing fields, and other integrity issues
+with actionable remediation hints for each degraded session.`,
+	Example: `  # Check all saved sessions for schema and integrity problems
+  glassbox session doctor
+
+  # Re-run the debug command to recreate any degraded sessions
+  glassbox debug <tx-hash> --network testnet`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := cmd.Context()
+
+		store, err := session.NewStore()
+		if err != nil {
+			return errors.WrapValidationError(fmt.Sprintf(
+				"failed to open session store: %v\n"+
+					"Hint: ensure ~/.Glassbox/ is writable and not corrupted", err))
+		}
+		defer store.Close()
+
+		result, err := store.RunStoreDiagnostics(ctx)
+		if err != nil {
+			return err
+		}
+
+		fmt.Println(result.Summary())
+		if result.DegradedSessions == 0 {
+			return nil
+		}
+
+		fmt.Printf("\nDegraded sessions (%d):\n\n", result.DegradedSessions)
+		for _, report := range result.Reports {
+			fmt.Printf("Session %s:\n", report.SessionID)
+			for i, issue := range report.Issues {
+				fmt.Printf("  %d. [%s] %s\n", i+1, issue.Field, issue.Description)
+				if issue.Hint != "" {
+					fmt.Printf("     Hint: %s\n", issue.Hint)
+				}
+			}
+			if report.StoredSchemaVersion > 0 && report.StoredSchemaVersion != session.SchemaVersion {
+				fmt.Printf("  Schema: %s\n", session.SchemaVersionSummary(report.StoredSchemaVersion))
+			}
+			fmt.Println()
+		}
+
+		return fmt.Errorf("%d session(s) failed diagnostics", result.DegradedSessions)
+	},
+}
+
 func init() {
 	sessionSaveCmd.Flags().StringVar(&sessionIDFlag, "id", "", "Custom session ID (default: auto-generated)")
 	sessionSaveCmd.Flags().StringVar(&sessionNameFlag, "name", "", "Bookmark name for this session snapshot")
@@ -566,6 +660,7 @@ func init() {
 	sessionCmd.AddCommand(sessionListCmd)
 	sessionCmd.AddCommand(sessionDeleteCmd)
 	sessionCmd.AddCommand(sessionRecoverCmd)
+	sessionCmd.AddCommand(sessionDoctorCmd)
 
 	rootCmd.AddCommand(sessionCmd)
 }

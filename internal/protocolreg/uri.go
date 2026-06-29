@@ -13,6 +13,11 @@ import (
 
 var txHashPattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 
+const (
+	maxSourceLen    = 256
+	maxSignatureLen = 512
+)
+
 // allowedNetworks is the set of valid network identifiers for the deep link.
 var allowedNetworks = map[string]bool{
 	"testnet":   true,
@@ -69,6 +74,7 @@ type ParsedDebugURI struct {
 //
 // Returns a descriptive error for each class of invalid input:
 //   - empty URI
+//   - null bytes or control characters
 //   - wrong scheme
 //   - wrong host (not "debug")
 //   - missing or malformed transaction hash
@@ -79,6 +85,15 @@ func ParseDebugURI(raw string) (*ParsedDebugURI, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, fmt.Errorf("protocol URI must not be empty")
+	}
+	// Reject null bytes and ASCII control characters to prevent injection attacks.
+	for i := 0; i < len(raw); i++ {
+		if raw[i] == 0x00 {
+			return nil, fmt.Errorf("protocol URI must not contain null bytes")
+		}
+		if raw[i] < 0x20 && raw[i] != '\t' {
+			return nil, fmt.Errorf("protocol URI must not contain control characters (found 0x%02x)", raw[i])
+		}
 	}
 	if !strings.HasPrefix(raw, Scheme+"://") {
 		return nil, fmt.Errorf("invalid protocol URI: expected %s://", Scheme)
@@ -113,12 +128,34 @@ func ParseDebugURI(raw string) (*ParsedDebugURI, error) {
 		return nil, fmt.Errorf("invalid network %q: must be one of testnet, mainnet, futurenet", network)
 	}
 
+	source := q.Get("source")
+	if len(source) > maxSourceLen {
+		return nil, fmt.Errorf(
+			"source parameter is too long (%d characters, max %d)",
+			len(source), maxSourceLen,
+		)
+	}
+	if strings.ContainsRune(source, 0) {
+		return nil, fmt.Errorf("source parameter contains null bytes and cannot be used")
+	}
+
+	signature := q.Get("signature")
+	if len(signature) > maxSignatureLen {
+		return nil, fmt.Errorf(
+			"signature parameter is too long (%d characters, max %d)",
+			len(signature), maxSignatureLen,
+		)
+	}
+	if strings.ContainsRune(signature, 0) {
+		return nil, fmt.Errorf("signature parameter contains null bytes and cannot be used")
+	}
+
 	result := &ParsedDebugURI{
 		Raw:             raw,
 		TransactionHash: transactionHash,
 		Network:         network,
-		Source:          q.Get("source"),
-		Signature:       q.Get("signature"),
+		Source:          source,
+		Signature:       signature,
 	}
 
 	// --- op / operation (optional, "op" takes precedence) ---
@@ -127,9 +164,23 @@ func ParseDebugURI(raw string) (*ParsedDebugURI, error) {
 		opStr = q.Get("operation")
 	}
 	if opStr != "" {
-		parsedOp, err := strconv.Atoi(opStr)
-		if err != nil || parsedOp < 0 {
-			return nil, fmt.Errorf("invalid operation index %q: must be a non-negative integer", opStr)
+		parsedOp, parseErr := strconv.Atoi(opStr)
+		if parseErr != nil || parsedOp < 0 {
+			return nil, fmt.Errorf(
+				"invalid operation index %q: must be a non-negative integer\n"+
+					"  Fix: use a whole number >= 0 (e.g. op=0 for the first operation)",
+				opStr,
+			)
+		}
+		// Guard against values that parsed as int on 64-bit but would overflow
+		// on 32-bit platforms or downstream consumers expecting a reasonable index.
+		const maxOpIndex = 65535
+		if parsedOp > maxOpIndex {
+			return nil, fmt.Errorf(
+				"operation index %d exceeds the maximum allowed value (%d)\n"+
+					"  Fix: use an index in the range 0–%d",
+				parsedOp, maxOpIndex, maxOpIndex,
+			)
 		}
 		result.Op = &parsedOp
 		result.Operation = &parsedOp

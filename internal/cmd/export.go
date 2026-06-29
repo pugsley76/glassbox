@@ -69,6 +69,13 @@ Examples:
 			)
 		}
 
+		// Normalize and validate the output path before any session or I/O work.
+		// This catches null bytes, symlink escapes, and existing-directory targets
+		// early so the error message is clear and actionable.
+		if _, err := ValidateOutputPath("snapshot", exportSnapshotFlag); err != nil {
+			return err
+		}
+
 		// Get current session
 		data := GetCurrentSession()
 		if data == nil {

@@ -79,6 +79,19 @@ func (h *RegressionHarness) RunRegressionTests(
 		)
 	}
 
+	// Guard against a MaxWorkers value of 0 or negative that was set directly
+	// on the struct after construction (NewRegressionHarness already defaults
+	// it to 4, but callers can mutate it). A zero-capacity channel would
+	// deadlock every goroutine immediately.
+	if h.MaxWorkers <= 0 {
+		original := h.MaxWorkers
+		h.MaxWorkers = 4
+		logger.Logger.Warn(
+			"MaxWorkers was <= 0; defaulted to 4 to prevent semaphore deadlock",
+			"original", original,
+		)
+	}
+
 	logger.Logger.Info("Fetching historic failed transactions", "count", count)
 
 	txHashes, err := h.fetchFailedTransactions(ctx, count, startSeq)
@@ -170,7 +183,9 @@ func (h *RegressionHarness) testTransaction(
 	}
 
 	if txHash == "" {
-		result.ErrorMessage = "transaction hash is empty; skip this entry"
+		result.ErrorMessage = "transaction hash is empty — cannot test an empty hash\n" +
+			"  Fix: verify the transaction hash list from the RPC is not corrupted\n" +
+			"  Tip: re-run with --verbose to see which transactions are being fetched"
 		return result
 	}
 

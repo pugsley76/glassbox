@@ -12,8 +12,6 @@ import (
 
 // ContractSpec holds the decoded Soroban contract specification, grouped by
 // entry kind.
-type // ContractSpec holds the decoded Soroban contract specification, grouped by
-// entry kind.
 type ContractSpec struct {
 	Functions  []xdr.ScSpecFunctionV0
 	Structs    []xdr.ScSpecUdtStructV0

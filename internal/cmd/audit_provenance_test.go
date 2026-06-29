@@ -45,7 +45,7 @@ func TestBuildProvenance_NilWhenNoFlags(t *testing.T) {
 	auditSignCertChainFile = ""
 	auditSignPreviousSignatureHash = ""
 
-	prov, err := buildProvenance("software")
+	prov, err := buildProvenance("software", "", "ed25519")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestBuildProvenance_FieldsPopulated(t *testing.T) {
 		auditSignPreviousSignatureHash = ""
 	}()
 
-	prov, err := buildProvenance("software")
+	prov, err := buildProvenance("software", "", "ed25519")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,24 +78,27 @@ func TestBuildProvenance_FieldsPopulated(t *testing.T) {
 	if prov.KeyID != "my-key-label" {
 		t.Errorf("KeyID = %q, want %q", prov.KeyID, "my-key-label")
 	}
-	if prov.Algorithm != "Ed25519" {
-		t.Errorf("Algorithm = %q, want Ed25519", prov.Algorithm)
+	// Algorithm is now passed in directly rather than inferred from provider name.
+	if prov.Algorithm != "ed25519" {
+		t.Errorf("Algorithm = %q, want ed25519", prov.Algorithm)
 	}
 	if prov.PreviousSignatureHash != strings.Repeat("a", 64) {
 		t.Errorf("PreviousSignatureHash mismatch")
 	}
 }
 
-func TestBuildProvenance_PKCS11Algorithm(t *testing.T) {
+func TestBuildProvenance_AlgorithmPassedThrough(t *testing.T) {
+	// Algorithm is now derived from the live signer, not the provider name.
+	// Verify that whatever algorithm string is passed in is preserved.
 	auditSignSignerIdentity = "hsm-user"
 	defer func() { auditSignSignerIdentity = "" }()
 
-	prov, err := buildProvenance("pkcs11")
+	prov, err := buildProvenance("pkcs11", "", "ed25519")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if prov.Algorithm != "ECDSA-P256" {
-		t.Errorf("Algorithm = %q, want ECDSA-P256", prov.Algorithm)
+	if prov.Algorithm != "ed25519" {
+		t.Errorf("Algorithm = %q, want ed25519 (from signer, not inferred from provider name)", prov.Algorithm)
 	}
 }
 

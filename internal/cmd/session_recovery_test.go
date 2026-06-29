@@ -436,12 +436,13 @@ func TestSessionResume_TooNewSchema_ReturnsUpgradeError(t *testing.T) {
 		ID:            "future-session",
 		TxHash:        "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
 		Network:       "testnet",
+		HorizonURL:    "https://horizon-testnet.stellar.org",
 		Status:        "saved",
 		CreatedAt:     time.Now().Add(-time.Hour),
 		LastAccessAt:  time.Now(),
-		SchemaVersion: session.SchemaVersion + 99, // far future version
+		SchemaVersion: session.SchemaVersion + 99,
 	}
-	if err := store.Save(context.Background(), future); err != nil {
+	if err := store.SavePreservingSchemaVersion(context.Background(), future); err != nil {
 		t.Fatalf("save: %v", err)
 	}
 
@@ -453,7 +454,6 @@ func TestSessionResume_TooNewSchema_ReturnsUpgradeError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for session with schema version newer than current binary")
 	}
-	// Should mention version or upgrade.
 	msg := err.Error()
 	if !strings.Contains(msg, "version") && !strings.Contains(msg, "upgrade") && !strings.Contains(msg, "schema") {
 		t.Errorf("error should mention version/schema/upgrade, got: %v", err)
