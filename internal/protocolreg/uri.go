@@ -125,6 +125,9 @@ func ParseDebugURI(raw string) (*ParsedDebugURI, error) {
 			len(source), maxSourceLen,
 		)
 	}
+	if strings.ContainsRune(source, 0) {
+		return nil, fmt.Errorf("source parameter contains null bytes and cannot be used")
+	}
 
 	signature := q.Get("signature")
 	if len(signature) > maxSignatureLen {
@@ -132,6 +135,9 @@ func ParseDebugURI(raw string) (*ParsedDebugURI, error) {
 			"signature parameter is too long (%d characters, max %d)",
 			len(signature), maxSignatureLen,
 		)
+	}
+	if strings.ContainsRune(signature, 0) {
+		return nil, fmt.Errorf("signature parameter contains null bytes and cannot be used")
 	}
 
 	result := &ParsedDebugURI{
@@ -148,9 +154,23 @@ func ParseDebugURI(raw string) (*ParsedDebugURI, error) {
 		opStr = q.Get("operation")
 	}
 	if opStr != "" {
-		parsedOp, err := strconv.Atoi(opStr)
-		if err != nil || parsedOp < 0 {
-			return nil, fmt.Errorf("invalid operation index %q: must be a non-negative integer", opStr)
+		parsedOp, parseErr := strconv.Atoi(opStr)
+		if parseErr != nil || parsedOp < 0 {
+			return nil, fmt.Errorf(
+				"invalid operation index %q: must be a non-negative integer\n"+
+					"  Fix: use a whole number >= 0 (e.g. op=0 for the first operation)",
+				opStr,
+			)
+		}
+		// Guard against values that parsed as int on 64-bit but would overflow
+		// on 32-bit platforms or downstream consumers expecting a reasonable index.
+		const maxOpIndex = 65535
+		if parsedOp > maxOpIndex {
+			return nil, fmt.Errorf(
+				"operation index %d exceeds the maximum allowed value (%d)\n"+
+					"  Fix: use an index in the range 0–%d",
+				parsedOp, maxOpIndex, maxOpIndex,
+			)
 		}
 		result.Op = &parsedOp
 		result.Operation = &parsedOp
