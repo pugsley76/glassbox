@@ -88,6 +88,9 @@ PR_273_improve_trace_export_build_artifact_discovery.md
 
 # --- Kiro IDE workspace files ---
 .kiro/
+
+# --- Issue PR notes ---
+PR_270_improve_trace_export_session_recovery_integrity.md
 commit_309*.next
 *.py
 !emojis.py
@@ -98,10 +101,8 @@ commit_309*.next
 !perf_baseline.json
 
 # --- Issue PR notes (local only) ---
-PR_269_improve_trace_export_security_privacy.md
 PR_270_improve_trace_export_session_recovery_integrity.md
 PR_271_improve_trace_export_source_discovery_fallback.md
-PR_272_improve_trace_export_protocol_conflict_resolution.md
 
 .gocache
 

@@ -2571,6 +2571,12 @@ func validateSourceDiscoveryFlags() error {
 					"  Provide the path to your contract's source directory (the one containing src/).",
 			))
 		}
+		if strings.ContainsRune(trimmed, 0) {
+			return errors.WrapValidationError(
+				"--contract-source: path contains null bytes and cannot be used\n" +
+					"  Fix: remove any null bytes from the path.",
+			)
+		}
 		info, statErr := os.Stat(trimmed)
 		if statErr != nil {
 			if os.IsNotExist(statErr) {
@@ -2596,6 +2602,12 @@ func validateSourceDiscoveryFlags() error {
 
 	// --source-alias must be readable valid JSON and point to existing directories.
 	if sourceAliasFlag != "" {
+		if strings.ContainsRune(sourceAliasFlag, 0) {
+			return errors.WrapValidationError(
+				"--source-alias: path contains null bytes and cannot be used\n" +
+					"  Fix: remove any null bytes from the path.",
+			)
+		}
 		aliasBytes, readErr := os.ReadFile(sourceAliasFlag)
 		if readErr != nil {
 			if os.IsNotExist(readErr) {

@@ -121,6 +121,16 @@ func (r *Registrar) Diagnose() *DiagnosticReport {
 func (r *Registrar) Repair() *RepairResult {
 	result := &RepairResult{}
 
+	// Guard against a misconfigured Registrar — an empty executable path means
+	// any registration we write will point nowhere and immediately conflict again.
+	if r.executablePath == "" {
+		result.Err = fmt.Errorf(
+			"cannot repair: executable path is empty\n" +
+				"  Fix: ensure glassbox is invoked from a valid binary path, not via 'go run'",
+		)
+		return result
+	}
+
 	// Run diagnostics first to understand what needs fixing.
 	diag := r.Diagnose()
 	if diag.Status == StatusOK {

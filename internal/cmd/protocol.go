@@ -167,7 +167,12 @@ var protocolHandlerCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		parsed, err := protocolreg.ParseDebugURI(args[0])
 		if err != nil {
-			return fmt.Errorf("%w\n  Expected format: glassbox://debug/<64-char-hex>?network=<testnet|mainnet|futurenet>[&op=<n>][&view=<mode>]", err)
+			return fmt.Errorf(
+				"%w\n"+
+					"  Expected format: glassbox://debug/<64-char-hex>?network=<testnet|mainnet|futurenet>[&op=<n>][&view=<mode>]\n"+
+					"  Run 'glassbox protocol:handle --help' for full parameter documentation",
+				err,
+			)
 		}
 
 		executablePath, err := os.Executable()

@@ -94,6 +94,22 @@ func NewFallbackMapper(projectRoot string) *FallbackMapper {
 // using a multi-stage fallback pipeline. It always returns a non-nil result;
 // Quality indicates how reliable the mapping is.
 func (m *FallbackMapper) Resolve(wasmData []byte, addr uint64) *FallbackResult {
+	// Guard against nil or too-small WASM data — the binary helpers would
+	// silently produce no results anyway, but surfacing a clear unknown result
+	// with a remediation warning is more useful than a silent no-op.
+	if len(wasmData) < 8 {
+		return &FallbackResult{
+			Quality: MappingQualityUnknown,
+			Warning: fmt.Sprintf(
+				"[sourcemap] WASM data is nil or too small (%d bytes) to contain valid content — "+
+					"source location for address 0x%x cannot be resolved. "+
+					"Recompile with 'cargo build --release --target wasm32-unknown-unknown' "+
+					"and ensure the binary is fully uploaded.",
+				len(wasmData), addr,
+			),
+		}
+	}
+
 	// ── Stage 1: full DWARF ──────────────────────────────────────────────────
 	if result := m.tryFullDWARF(wasmData, addr); result != nil {
 		return result

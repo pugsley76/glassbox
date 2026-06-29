@@ -420,3 +420,93 @@ func TestNewRegistrar_NonExistentExecutable_ReturnsError(t *testing.T) {
 		t.Error("Diagnose with a non-existent executable should produce at least one issue or check")
 	}
 }
+
+// ─── source / signature null-byte validation ─────────────────────────────────
+
+func TestParseDebugURI_Source_NullByte_Rejected(t *testing.T) {
+	uri := baseURI + "&source=valid\x00injected"
+	_, err := ParseDebugURI(uri)
+	if err == nil {
+		t.Fatal("expected error for null byte in source parameter")
+	}
+	if !strings.Contains(err.Error(), "source") {
+		t.Errorf("error should mention 'source', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "null bytes") {
+		t.Errorf("error should mention 'null bytes', got: %v", err)
+	}
+}
+
+func TestParseDebugURI_Signature_NullByte_Rejected(t *testing.T) {
+	uri := baseURI + "&signature=ok\x00bad"
+	_, err := ParseDebugURI(uri)
+	if err == nil {
+		t.Fatal("expected error for null byte in signature parameter")
+	}
+	if !strings.Contains(err.Error(), "signature") {
+		t.Errorf("error should mention 'signature', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "null bytes") {
+		t.Errorf("error should mention 'null bytes', got: %v", err)
+	}
+}
+
+// ─── op overflow guard ────────────────────────────────────────────────────────
+
+func TestParseDebugURI_Op_ExceedsMaxIndex_Rejected(t *testing.T) {
+	uri := baseURI + "&op=99999"
+	_, err := ParseDebugURI(uri)
+	if err == nil {
+		t.Fatal("expected error for op exceeding maximum index")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "operation index") && !strings.Contains(msg, "maximum") {
+		t.Errorf("error should mention the operation index limit, got: %v", err)
+	}
+}
+
+func TestParseDebugURI_Op_AtMaxIndex_Accepted(t *testing.T) {
+	uri := baseURI + "&op=65535"
+	parsed, err := ParseDebugURI(uri)
+	if err != nil {
+		t.Fatalf("op at max index (65535) should be accepted: %v", err)
+	}
+	if parsed.Op == nil || *parsed.Op != 65535 {
+		t.Errorf("expected Op=65535, got %v", parsed.Op)
+	}
+}
+
+func TestParseDebugURI_Op_JustAboveMax_Rejected(t *testing.T) {
+	uri := baseURI + "&op=65536"
+	_, err := ParseDebugURI(uri)
+	if err == nil {
+		t.Fatal("expected error for op=65536 (just above max)")
+	}
+}
+
+// Verify the error message for a negative op includes the Fix: hint.
+func TestParseDebugURI_NegativeOp_ErrorIncludesFix(t *testing.T) {
+	_, err := ParseDebugURI(baseURI + "&op=-5")
+	if err == nil {
+		t.Fatal("expected error for negative op")
+	}
+	if !strings.Contains(err.Error(), "Fix:") {
+		t.Errorf("error for negative op should include a Fix: hint, got: %v", err)
+	}
+}
+
+// ─── protocol:handle error hint ──────────────────────────────────────────────
+
+// TestParseDebugURI_InvalidURI_ErrorDescribesFormat verifies that a bad URI
+// returns enough context for the user to construct a correct one.
+func TestParseDebugURI_InvalidURI_ErrorDescribesFormat(t *testing.T) {
+	_, err := ParseDebugURI("glassbox://debug/badhash?network=testnet")
+	if err == nil {
+		t.Fatal("expected error for invalid hash")
+	}
+	// Must name the hash requirement so the user knows the exact fix.
+	msg := err.Error()
+	if !strings.Contains(msg, "64") && !strings.Contains(msg, "hex") {
+		t.Errorf("error should describe the hash requirement, got: %v", err)
+	}
+}

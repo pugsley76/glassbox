@@ -136,3 +136,43 @@ func TestRepair_Linux_ConflictOverwrite_NoConflictFlag(t *testing.T) {
 		t.Error("expected ConflictDetected=false after repair overwrote the conflicting handler")
 	}
 }
+
+// ── Repair — empty executablePath guard ──────────────────────────────────────
+
+// TestRepair_EmptyExecutablePath_ReturnsActionableError verifies that calling
+// Repair on a Registrar with an empty executablePath fails immediately with a
+// clear error instead of silently writing a broken registration.
+func TestRepair_EmptyExecutablePath_ReturnsActionableError(t *testing.T) {
+	r := &Registrar{
+		executablePath: "", // intentionally empty
+		homeDir:        t.TempDir(),
+	}
+
+	result := r.Repair()
+
+	if result.Err == nil {
+		t.Fatal("expected Repair to return an error for an empty executablePath")
+	}
+	msg := result.Err.Error()
+	if !strings.Contains(msg, "executable path") {
+		t.Errorf("error should mention 'executable path', got: %q", msg)
+	}
+	if !strings.Contains(msg, "Fix:") {
+		t.Errorf("error should include a Fix: hint, got: %q", msg)
+	}
+	// Must not have recorded any registration actions before detecting the bad state.
+	for _, action := range result.Actions {
+		if strings.Contains(strings.ToLower(action), "register") {
+			t.Errorf("Repair should not attempt registration with empty executablePath; action: %q", action)
+		}
+	}
+}
+
+// TestRepair_EmptyExecutablePath_RepairFalse verifies Repaired is false.
+func TestRepair_EmptyExecutablePath_RepairFalse(t *testing.T) {
+	r := &Registrar{executablePath: "", homeDir: t.TempDir()}
+	result := r.Repair()
+	if result.Repaired {
+		t.Error("Repaired should be false when executable path is empty")
+	}
+}

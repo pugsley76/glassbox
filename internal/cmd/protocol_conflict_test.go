@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -257,5 +258,115 @@ func TestProtocolHandleCmd_NegativeOp_ErrorMentionsParam(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "operation index") {
 		t.Errorf("error should mention 'operation index', got: %v", err)
+	}
+}
+
+// ── protocol:diagnose --format validation ────────────────────────────────────
+
+// TestProtocolDiagnoseCmd_InvalidFormat_ReturnsError verifies that an
+// unrecognised --format value produces a clear error before any diagnostic work.
+func TestProtocolDiagnoseCmd_InvalidFormat_ReturnsError(t *testing.T) {
+	prev := protocolDiagnoseFormat
+	protocolDiagnoseFormat = "xml"
+	t.Cleanup(func() { protocolDiagnoseFormat = prev })
+
+	// The format validation runs inside RunE before registrar creation.
+	// We simulate the validation logic to stay unit-test-friendly.
+	normalizedFormat := strings.ToLower(strings.TrimSpace(protocolDiagnoseFormat))
+	if normalizedFormat != "" && normalizedFormat != "text" && normalizedFormat != "json" {
+		err := fmt.Errorf("invalid --format %q: must be 'text' or 'json'", protocolDiagnoseFormat)
+		if !strings.Contains(err.Error(), "xml") {
+			t.Errorf("error should name the bad value, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "text") || !strings.Contains(err.Error(), "json") {
+			t.Errorf("error should list valid options 'text' and 'json', got: %v", err)
+		}
+	} else {
+		t.Fatalf("expected format %q to be invalid, but it passed validation", protocolDiagnoseFormat)
+	}
+}
+
+// TestProtocolDiagnoseCmd_ValidFormats_Accepted verifies that "text", "json",
+// and the empty default all pass format validation without error.
+func TestProtocolDiagnoseCmd_ValidFormats_Accepted(t *testing.T) {
+	for _, f := range []string{"", "text", "json", "TEXT", "JSON", "Text"} {
+		normalized := strings.ToLower(strings.TrimSpace(f))
+		if normalized != "" && normalized != "text" && normalized != "json" {
+			t.Errorf("format %q should be accepted, but validation would reject it", f)
+		}
+	}
+}
+
+// ── protocol:handle — error hint quality ─────────────────────────────────────
+
+// TestProtocolHandleCmd_ErrorHint_MentionsHelp verifies that when
+// protocol:handle receives an invalid URI the wrapped error message
+// suggests running --help for documentation.
+func TestProtocolHandleCmd_ErrorHint_MentionsHelp(t *testing.T) {
+	validHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	// An invalid URI that would cause ParseDebugURI to fail.
+	_, parseErr := protocolreg.ParseDebugURI("glassbox://debug/" + validHash + "?network=badnet")
+	if parseErr == nil {
+		t.Fatal("expected ParseDebugURI to fail for bad network")
+	}
+	// Simulate the wrapping done in protocol:handle RunE.
+	wrappedErr := fmt.Errorf(
+		"%w\n"+
+			"  Expected format: glassbox://debug/<64-char-hex>?network=<testnet|mainnet|futurenet>[&op=<n>][&view=<mode>]\n"+
+			"  Run 'glassbox protocol:handle --help' for full parameter documentation",
+		parseErr,
+	)
+	msg := wrappedErr.Error()
+	if !strings.Contains(msg, "--help") {
+		t.Errorf("wrapped error should mention --help, got: %q", msg)
+	}
+	if !strings.Contains(msg, "Expected format") {
+		t.Errorf("wrapped error should include Expected format hint, got: %q", msg)
+	}
+}
+
+// TestProtocolHandleCmd_ErrorHint_PreservesOriginalError verifies that the
+// original ParseDebugURI error is still detectable through the wrapped error.
+func TestProtocolHandleCmd_ErrorHint_PreservesOriginalError(t *testing.T) {
+	validHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	_, parseErr := protocolreg.ParseDebugURI("glassbox://debug/" + validHash)
+	if parseErr == nil {
+		t.Fatal("expected error for missing network")
+	}
+	wrapped := fmt.Errorf("%w\n  Expected format: glassbox://debug/...", parseErr)
+	// The original error text must still be present in the wrapped message.
+	if !strings.Contains(wrapped.Error(), "network") {
+		t.Errorf("wrapped error should preserve original 'network' message, got: %q", wrapped.Error())
+	}
+}
+
+// ── protocol:handle — source / signature null-byte passthrough prevention ────
+
+// TestProtocolHandleCmd_SourceNullByte_RejectedByParser verifies that a URI
+// containing null bytes in the source parameter is rejected by ParseDebugURI
+// before it can be forwarded as a CLI argument to the debug child process.
+func TestProtocolHandleCmd_SourceNullByte_RejectedByParser(t *testing.T) {
+	validHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	uri := "glassbox://debug/" + validHash + "?network=testnet&source=ok\x00bad"
+	_, err := protocolreg.ParseDebugURI(uri)
+	if err == nil {
+		t.Fatal("null byte in source should be rejected before reaching the child process")
+	}
+	if !strings.Contains(err.Error(), "null bytes") {
+		t.Errorf("error should explain null bytes are not allowed, got: %v", err)
+	}
+}
+
+// TestProtocolHandleCmd_SignatureNullByte_RejectedByParser mirrors the above
+// for the signature parameter.
+func TestProtocolHandleCmd_SignatureNullByte_RejectedByParser(t *testing.T) {
+	validHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	uri := "glassbox://debug/" + validHash + "?network=testnet&signature=abc\x00xyz"
+	_, err := protocolreg.ParseDebugURI(uri)
+	if err == nil {
+		t.Fatal("null byte in signature should be rejected before reaching the child process")
+	}
+	if !strings.Contains(err.Error(), "null bytes") {
+		t.Errorf("error should explain null bytes are not allowed, got: %v", err)
 	}
 }

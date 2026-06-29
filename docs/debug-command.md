@@ -515,8 +515,38 @@ The `protocol:handle` sub-command parses and dispatches `glassbox://debug/…` U
 | Wrong scheme | `invalid protocol URI: expected glassbox://` |
 | Missing transaction hash | `invalid transaction hash "": must be a 64-character hex string` |
 | Invalid network | `invalid network "…": must be one of testnet, mainnet, futurenet` |
-| Negative op index | `invalid operation index "…": must be a non-negative integer` |
+| Negative op index | `invalid operation index "…": must be a non-negative integer` with `Fix:` hint |
+| Op index too large (>65535) | `operation index … exceeds the maximum allowed value (65535)` with `Fix:` hint |
 | Unknown view | `invalid view "…": must be one of trace, flamegraph, events, auth, budget, storage` |
+| `source` contains null bytes | `source parameter contains null bytes and cannot be used` |
+| `signature` contains null bytes | `signature parameter contains null bytes and cannot be used` |
+| `source` too long (>256 chars) | `source parameter is too long (… characters, max 256)` |
+| `signature` too long (>512 chars) | `signature parameter is too long (… characters, max 512)` |
+
+When `protocol:handle` receives a bad URI, the error wraps the specific parse failure with a format reminder and a `--help` hint:
+
+```
+invalid network "devnet": must be one of testnet, mainnet, futurenet
+  Expected format: glassbox://debug/<64-char-hex>?network=<testnet|mainnet|futurenet>[&op=<n>][&view=<mode>]
+  Run 'glassbox protocol:handle --help' for full parameter documentation
+```
+
+### `protocol:repair` pre-condition validation
+
+`protocol:repair` validates that the registrar's executable path is non-empty before attempting any write. Running repair via `go run` or from a stripped build without a resolved executable fails immediately with:
+
+```
+cannot repair: executable path is empty
+  Fix: ensure glassbox is invoked from a valid binary path, not via 'go run'
+```
+
+### `protocol:diagnose --format` validation
+
+The `--format` flag accepts only `text` (default) or `json`. Any other value is rejected before the diagnostic runs:
+
+```
+invalid --format "xml": must be 'text' or 'json'
+```
 
 ---
 
