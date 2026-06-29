@@ -173,24 +173,35 @@ func runDebugDryRun(cmd *cobra.Command, txHash string) error {
 
 	// Source discovery pre-flight: validate --contract-source when set.
 	if contractSourceFlag != "" {
-		info, statErr := os.Stat(contractSourceFlag)
-		if statErr != nil {
-			if os.IsNotExist(statErr) {
-				failures = append(failures, fmt.Sprintf("contract-source: directory not found: %q", contractSourceFlag))
-				fmt.Fprintf(errOut, "[FAIL] --contract-source directory not found: %q\n"+
-					"       Fix: provide the path to your contract source directory (the one containing src/)\n"+
-					"       Example: --contract-source ./contracts/my_contract/src\n", contractSourceFlag)
-			} else {
-				failures = append(failures, fmt.Sprintf("contract-source: cannot access %q: %v", contractSourceFlag, statErr))
-				fmt.Fprintf(errOut, "[FAIL] --contract-source: cannot access %q: %v\n"+
-					"       Fix: check file permissions\n", contractSourceFlag, statErr)
+		trimmed := strings.TrimSpace(contractSourceFlag)
+		if trimmed == "" || strings.ContainsRune(trimmed, 0) {
+			label := "empty or whitespace"
+			if strings.ContainsRune(trimmed, 0) {
+				label = "contains null bytes"
 			}
-		} else if !info.IsDir() {
-			failures = append(failures, fmt.Sprintf("contract-source: %q is a file, not a directory", contractSourceFlag))
-			fmt.Fprintf(errOut, "[FAIL] --contract-source: %q is a file, not a directory\n"+
-				"       Fix: provide the path to a directory, not a file\n", contractSourceFlag)
+			failures = append(failures, fmt.Sprintf("contract-source: path %s", label))
+			fmt.Fprintf(errOut, "[FAIL] --contract-source: path %s and cannot be used\n"+
+				"       Fix: provide a valid directory path without null or whitespace-only values\n", label)
 		} else {
-			fmt.Fprintf(out, "[OK]   Source directory: %s\n", contractSourceFlag)
+			info, statErr := os.Stat(trimmed)
+			if statErr != nil {
+				if os.IsNotExist(statErr) {
+					failures = append(failures, fmt.Sprintf("contract-source: directory not found: %q", trimmed))
+					fmt.Fprintf(errOut, "[FAIL] --contract-source directory not found: %q\n"+
+						"       Fix: provide the path to your contract source directory (the one containing src/)\n"+
+						"       Example: --contract-source ./contracts/my_contract/src\n", trimmed)
+				} else {
+					failures = append(failures, fmt.Sprintf("contract-source: cannot access %q: %v", trimmed, statErr))
+					fmt.Fprintf(errOut, "[FAIL] --contract-source: cannot access %q: %v\n"+
+						"       Fix: check file permissions\n", trimmed, statErr)
+				}
+			} else if !info.IsDir() {
+				failures = append(failures, fmt.Sprintf("contract-source: %q is a file, not a directory", trimmed))
+				fmt.Fprintf(errOut, "[FAIL] --contract-source: %q is a file, not a directory\n"+
+					"       Fix: provide the path to a directory, not a file\n", trimmed)
+			} else {
+				fmt.Fprintf(out, "[OK]   Source directory: %s\n", trimmed)
+			}
 		}
 	}
 
@@ -215,7 +226,6 @@ func runDebugDryRun(cmd *cobra.Command, txHash string) error {
 				} else {
 					fmt.Fprintf(out, "[OK]   Source alias file: %s (%d mapping(s))\n", sourceAliasFlag, len(aliasMap))
 				}
-				fmt.Fprintf(out, "[OK]   Source alias file: %s (%d mapping(s))\n", sourceAliasFlag, len(aliasMap))
 			}
 		}
 	}

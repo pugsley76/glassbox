@@ -394,3 +394,53 @@ func TestPreflightReport_Summary_RealPreflight_ContainsIssues(t *testing.T) {
 		t.Errorf("Summary() should include the skip_source_mapping_env check, got: %q", s)
 	}
 }
+
+// ── RunSourceMapPreflight — null byte in projectRoot ─────────────────────────
+
+// TestPreflight_NullByteInProjectRoot_ErrorIssue verifies that a projectRoot
+// containing a null byte is rejected before any filesystem access with a clear
+// error message.
+func TestPreflight_NullByteInProjectRoot_ErrorIssue(t *testing.T) {
+	t.Setenv("GLASSBOX_SKIP_SOURCE_MAPPING", "")
+	t.Setenv("GLASSBOX_SOURCE_MAP_CACHE", "")
+
+	report := RunSourceMapPreflight("/valid/path\x00injection")
+	if report.OK {
+		t.Fatal("null byte in projectRoot must set report.OK=false")
+	}
+	requireIssueCheck(t, report, "project_root")
+	for _, issue := range report.Issues {
+		if issue.Check == "project_root" {
+			if !strings.Contains(issue.Description, "null bytes") {
+				t.Errorf("issue description should mention null bytes, got: %q", issue.Description)
+			}
+			if strings.TrimSpace(issue.Hint) == "" {
+				t.Error("project_root null-byte issue must have a non-empty hint")
+			}
+		}
+	}
+}
+
+// TestPreflight_NullByteInCacheDir_ErrorIssue verifies that
+// GLASSBOX_SOURCE_MAP_CACHE containing a null byte is rejected with a clear
+// error rather than producing an obscure OS error.
+func TestPreflight_NullByteInCacheDir_ErrorIssue(t *testing.T) {
+	t.Setenv("GLASSBOX_SKIP_SOURCE_MAPPING", "")
+	t.Setenv("GLASSBOX_SOURCE_MAP_CACHE", "/valid\x00bad")
+
+	report := RunSourceMapPreflight("")
+	if report.OK {
+		t.Fatal("null byte in GLASSBOX_SOURCE_MAP_CACHE must set report.OK=false")
+	}
+	requireIssueCheck(t, report, "source_map_cache_dir")
+	for _, issue := range report.Issues {
+		if issue.Check == "source_map_cache_dir" {
+			if !strings.Contains(issue.Description, "null bytes") {
+				t.Errorf("issue description should mention null bytes, got: %q", issue.Description)
+			}
+			if strings.TrimSpace(issue.Hint) == "" {
+				t.Error("source_map_cache_dir null-byte issue must have a non-empty hint")
+			}
+		}
+	}
+}
