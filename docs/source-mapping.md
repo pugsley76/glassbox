@@ -191,6 +191,34 @@ WASM magic number (\0asm) — skipped
   to ensure the file is a proper WASM binary.
 ```
 
+### Path safety
+
+Any path supplied to source-mapping functions is validated for null bytes before
+filesystem access begins. Null bytes in file paths are a shell-injection risk and
+produce obscure OS errors deep in the path layer:
+
+| Input | Error |
+|-------|-------|
+| `--contract-source /path\x00bad` | `--contract-source: path contains null bytes and cannot be used` |
+| `--source-alias /path\x00bad.json` | `--source-alias: path contains null bytes and cannot be used` |
+| `GLASSBOX_SOURCE_MAP_CACHE=/path\x00bad` | `GLASSBOX_SOURCE_MAP_CACHE=... contains null bytes and cannot be used` |
+
+Each error includes a `Fix:` hint and the offending flag name so you know
+exactly what to correct.
+
+### Fallback mapper input guard
+
+`FallbackMapper.Resolve` now guards against nil or abnormally small WASM data
+(fewer than 8 bytes). Previously, passing nil data would silently fall through
+all stages and return a no-context unknown result. The new behavior returns an
+explicit `MappingQualityUnknown` result with a descriptive warning:
+
+```
+[sourcemap] WASM data is nil or too small (0 bytes) to contain valid content —
+source location for address 0x100 cannot be resolved.
+Recompile with 'cargo build --release --target wasm32-unknown-unknown'
+and ensure the binary is fully uploaded.
+```
 ### Hash mismatch diagnostic
 
 When the local WASM binary's SHA-256 hash differs from the on-chain contract

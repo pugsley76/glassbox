@@ -435,3 +435,112 @@ func TestDryRun_SourceDiscoveryFailuresEnumeratedInSummary(t *testing.T) {
 		t.Errorf("failures should be numbered, got: %s", stderr)
 	}
 }
+
+// ── validateSourceDiscoveryFlags — null-byte checks ──────────────────────────
+
+func TestValidateSourceDiscoveryFlags_ContractSource_NullByte_ReturnsError(t *testing.T) {
+	prev := contractSourceFlag
+	contractSourceFlag = "/valid/path\x00injected"
+	t.Cleanup(func() { contractSourceFlag = prev })
+
+	err := validateSourceDiscoveryFlags()
+	if err == nil {
+		t.Fatal("expected error for null byte in --contract-source")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "--contract-source") {
+		t.Errorf("error should mention --contract-source, got: %q", msg)
+	}
+	if !strings.Contains(msg, "null bytes") {
+		t.Errorf("error should mention null bytes, got: %q", msg)
+	}
+}
+
+func TestValidateSourceDiscoveryFlags_SourceAlias_NullByte_ReturnsError(t *testing.T) {
+	prev := sourceAliasFlag
+	sourceAliasFlag = "/valid/path\x00injected.json"
+	t.Cleanup(func() { sourceAliasFlag = prev })
+
+	err := validateSourceDiscoveryFlags()
+	if err == nil {
+		t.Fatal("expected error for null byte in --source-alias")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "--source-alias") {
+		t.Errorf("error should mention --source-alias, got: %q", msg)
+	}
+	if !strings.Contains(msg, "null bytes") {
+		t.Errorf("error should mention null bytes, got: %q", msg)
+	}
+}
+
+// ── dry-run: source alias OK line printed exactly once ────────────────────────
+
+// TestDryRun_SourceAliasValidJSON_OKLineNotDuplicated verifies that a valid
+// --source-alias file causes the [OK] confirmation line to be printed exactly
+// once, not twice (regression for the duplicate-print bug).
+func TestDryRun_SourceAliasValidJSON_OKLineNotDuplicated(t *testing.T) {
+	dir := t.TempDir()
+	aliasPath := filepath.Join(dir, "aliases.json")
+	data, _ := json.Marshal(map[string]string{"my_crate": filepath.Join(dir, "src")})
+	if err := os.WriteFile(aliasPath, data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Create the target dir so LoadAliasConfig validation passes.
+	if err := os.MkdirAll(filepath.Join(dir, "src"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() {
+		networkFlag = "mainnet"
+		sourceAliasFlag = ""
+		rpcURLFlag = ""
+	})
+	networkFlag = "testnet"
+	sourceAliasFlag = aliasPath
+	rpcURLFlag = "http://127.0.0.1:19999" // unreachable so other checks fail
+
+	var out, errBuf bytes.Buffer
+	cmd := makeDebugCmdForTest()
+	cmd.SetOut(&out)
+	cmd.SetErr(&errBuf)
+
+	validHash := "5c0a1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"
+	_ = runDebugDryRun(cmd, validHash)
+
+	stdout := out.String()
+	count := strings.Count(stdout, "Source alias file:")
+	if count > 1 {
+		t.Errorf("'Source alias file:' should appear at most once in stdout, got %d occurrences:\n%s", count, stdout)
+	}
+}
+
+// ── dry-run: both --contract-source null-byte and --source-alias null-byte ────
+
+func TestDryRun_ContractSourceNullByte_AppearsInFailures(t *testing.T) {
+	t.Cleanup(func() {
+		networkFlag = "mainnet"
+		contractSourceFlag = ""
+		rpcURLFlag = ""
+	})
+	networkFlag = "testnet"
+	contractSourceFlag = "/path\x00bad"
+
+	var out, errBuf bytes.Buffer
+	cmd := makeDebugCmdForTest()
+	cmd.SetOut(&out)
+	cmd.SetErr(&errBuf)
+
+	validHash := "5c0a1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"
+	err := runDebugDryRun(cmd, validHash)
+	if err == nil {
+		t.Fatal("expected dry-run to fail for null byte in --contract-source")
+	}
+	stderr := errBuf.String()
+	if !strings.Contains(stderr, "[FAIL]") {
+		t.Errorf("expected [FAIL] in stderr, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "contract-source") {
+		t.Errorf("stderr should mention contract-source, got: %s", stderr)
+	}
+}

@@ -58,6 +58,7 @@ func (r *PreflightReport) Summary() string {
 // required (or strongly recommended) for accurate source mapping.
 //
 // Checks performed:
+//   - projectRoot, when non-empty, must not contain null bytes (error if it does)
 //   - projectRoot, when non-empty, exists and is a directory (error if not)
 //   - WASM target directory exists under projectRoot (target/wasm32-unknown-unknown)
 //   - At least one .wasm file is present in the release output directory
@@ -71,6 +72,18 @@ func RunSourceMapPreflight(projectRoot string) *PreflightReport {
 
 	// ── WASM build artifact checks ────────────────────────────────────────────
 	if projectRoot != "" {
+		// Reject null bytes before any filesystem access.
+		if strings.ContainsRune(projectRoot, 0) {
+			report.Issues = append(report.Issues, PreflightIssue{
+				Check:       "project_root",
+				Severity:    "error",
+				Description: "project root path contains null bytes and cannot be used",
+				Hint:        "Remove null bytes from the project root path.",
+			})
+			report.OK = false
+			return report
+		}
+
 		rootInfo, rootErr := os.Stat(projectRoot)
 		if os.IsNotExist(rootErr) {
 			report.Issues = append(report.Issues, PreflightIssue{
@@ -130,7 +143,14 @@ func RunSourceMapPreflight(projectRoot string) *PreflightReport {
 
 	// ── GLASSBOX_SOURCE_MAP_CACHE ─────────────────────────────────────────────
 	if cacheDir := os.Getenv("GLASSBOX_SOURCE_MAP_CACHE"); cacheDir != "" {
-		if err := validateCacheDir(cacheDir); err != nil {
+		if strings.ContainsRune(cacheDir, 0) {
+			report.Issues = append(report.Issues, PreflightIssue{
+				Check:       "source_map_cache_dir",
+				Severity:    "error",
+				Description: fmt.Sprintf("GLASSBOX_SOURCE_MAP_CACHE=%q contains null bytes and cannot be used", cacheDir),
+				Hint:        "Unset GLASSBOX_SOURCE_MAP_CACHE or set it to a valid directory path without null bytes.",
+			})
+		} else if err := validateCacheDir(cacheDir); err != nil {
 			report.Issues = append(report.Issues, PreflightIssue{
 				Check:       "source_map_cache_dir",
 				Severity:    "error",

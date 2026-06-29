@@ -6,6 +6,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -171,7 +172,7 @@ func buildConfigOutput(cfg *config.Config, configSource string) configShowOutput
 	}
 	if len(cfg.SorobanRpcUrls) > 0 {
 		output.Values["soroban_rpc_urls"] = configValueSource{
-			Value:  fmt.Sprintf("%v", cfg.SorobanRpcUrls),
+			Value:  fmt.Sprintf("%v", stripURLCredentials(cfg.SorobanRpcUrls)),
 			Source: resolveConfigSource("GLASSBOX_SOROBAN_RPC_URLS", configSource, "default"),
 		}
 	}
@@ -249,4 +250,22 @@ func defaultConfigFilePath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(home, ".glassbox", "config.toml"), nil
+}
+
+// stripURLCredentials removes userinfo (username:password) from a list of URLs
+// so they can be safely displayed in config output without leaking credentials.
+// Non-parseable entries are replaced with "[invalid url]".
+func stripURLCredentials(urls []string) []string {
+	cleaned := make([]string, 0, len(urls))
+	for _, raw := range urls {
+		u, err := url.Parse(raw)
+		if err != nil {
+			cleaned = append(cleaned, "[invalid url]")
+			continue
+		}
+		// Remove any embedded credentials (user:pass@host).
+		u.User = nil
+		cleaned = append(cleaned, u.String())
+	}
+	return cleaned
 }
