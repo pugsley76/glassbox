@@ -61,7 +61,15 @@ export function registerAuditCommands(program: Command): void {
       dryRun?: boolean;
     }) => {
       try {
-        const trace = JSON.parse(opts.payload);
+        let trace;
+        try {
+          trace = JSON.parse(opts.payload);
+        } catch (_jsonErr) {
+          console.error('[FAIL] audit signing failed: --payload is not valid JSON.');
+          console.error('       Ensure the value is a valid JSON string, e.g.:');
+          console.error('         --payload (JSON with input, state, events, timestamp fields)');
+          process.exit(1);
+        }
 
         const signer = createAuditSigner({
           hsmProvider: opts.hsmProvider,
@@ -114,6 +122,14 @@ export function registerAuditCommands(program: Command): void {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error(`[FAIL] audit signing failed: ${msg}`);
+        if (msg.includes('schema validation failed')) {
+          console.error('       Fix the payload fields listed above and retry.');
+          console.error('       Required fields: timestamp (ISO 8601), input (object), state (object), events (array).');
+        } else if (msg.includes('private key') || msg.includes('GLASSBOX_AUDIT_PRIVATE_KEY_PEM')) {
+          console.error('       Set the GLASSBOX_AUDIT_PRIVATE_KEY_PEM environment variable or pass --software-private-key.');
+        } else if (msg.includes('KMS') || msg.includes('kms')) {
+          console.error('       Check GLASSBOX_KMS_KEY_ID and AWS_REGION environment variables.');
+        }
         process.exit(1);
       }
     });
