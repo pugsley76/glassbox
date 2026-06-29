@@ -420,3 +420,39 @@ func TestNewRegistrar_NonExistentExecutable_ReturnsError(t *testing.T) {
 		t.Error("Diagnose with a non-existent executable should produce at least one issue or check")
 	}
 }
+
+// ── Security: null bytes and control characters in URI ────────────────────────
+
+func TestParseDebugURI_NullByte_Rejected(t *testing.T) {
+	uri := "glassbox://debug/" + validHash + "?network=testnet\x00injected"
+	_, err := ParseDebugURI(uri)
+	if err == nil {
+		t.Fatal("expected error for URI containing a null byte")
+	}
+	if !strings.Contains(err.Error(), "null byte") {
+		t.Errorf("error should mention 'null byte', got: %v", err)
+	}
+}
+
+func TestParseDebugURI_ControlCharacter_Rejected(t *testing.T) {
+	// 0x01 is a control character that should be rejected.
+	uri := "glassbox://debug/" + validHash + "?network=testnet\x01extra"
+	_, err := ParseDebugURI(uri)
+	if err == nil {
+		t.Fatal("expected error for URI containing a control character")
+	}
+	if !strings.Contains(err.Error(), "control character") {
+		t.Errorf("error should mention 'control character', got: %v", err)
+	}
+}
+
+func TestParseDebugURI_TabCharacter_Accepted(t *testing.T) {
+	// Tabs are stripped by TrimSpace before processing so are effectively harmless.
+	// We test that a leading/trailing tab does not cause a hard failure.
+	uri := "\t" + "glassbox://debug/" + validHash + "?network=testnet" + "\t"
+	_, err := ParseDebugURI(uri)
+	// After trimming, this should be a valid URI.
+	if err != nil {
+		t.Errorf("URI with surrounding tabs should be accepted after trimming, got: %v", err)
+	}
+}

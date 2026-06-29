@@ -74,6 +74,7 @@ type ParsedDebugURI struct {
 //
 // Returns a descriptive error for each class of invalid input:
 //   - empty URI
+//   - null bytes or control characters
 //   - wrong scheme
 //   - wrong host (not "debug")
 //   - missing or malformed transaction hash
@@ -84,6 +85,15 @@ func ParseDebugURI(raw string) (*ParsedDebugURI, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, fmt.Errorf("protocol URI must not be empty")
+	}
+	// Reject null bytes and ASCII control characters to prevent injection attacks.
+	for i := 0; i < len(raw); i++ {
+		if raw[i] == 0x00 {
+			return nil, fmt.Errorf("protocol URI must not contain null bytes")
+		}
+		if raw[i] < 0x20 && raw[i] != '\t' {
+			return nil, fmt.Errorf("protocol URI must not contain control characters (found 0x%02x)", raw[i])
+		}
 	}
 	if !strings.HasPrefix(raw, Scheme+"://") {
 		return nil, fmt.Errorf("invalid protocol URI: expected %s://", Scheme)
