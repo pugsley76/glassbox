@@ -290,9 +290,21 @@ var sessionListCmd = &cobra.Command{
 	Short: "List all saved debugging sessions",
 	Long: `List all saved debug sessions, ordered by most recently accessed.
 
-Displays session ID, network, last access time, and transaction hash.`,
+Displays session ID, bookmark name (if set), network, last access time, and
+transaction hash for each session. Expired sessions are pruned automatically.
+
+Sessions can be resumed with:
+  glassbox session resume <session-id>
+
+To filter or inspect a session before resuming:
+  glassbox session resume <session-id> --dry-run  (not yet available)
+
+See also:
+  glassbox session save    – save the current session
+  glassbox session resume  – restore a saved session
+  glassbox session delete  – remove a session`,
 	Example: `  # List all sessions
-  Glassbox session list`,
+  glassbox session list`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -317,13 +329,15 @@ Displays session ID, network, last access time, and transaction hash.`,
 		}
 
 		if len(sessions) == 0 {
-			fmt.Println("No saved sessions found.")
+			fmt.Fprintln(cmd.OutOrStdout(), "No saved sessions found.")
+			fmt.Fprintln(cmd.OutOrStdout(), "Tip: run 'glassbox debug <tx-hash> --network testnet' to start a new session,")
+			fmt.Fprintln(cmd.OutOrStdout(), "     then 'glassbox session save' to persist it.")
 			return nil
 		}
 
-		fmt.Printf("Saved sessions (%d):\n\n", len(sessions))
-		fmt.Printf("%-20s %-20s %-12s %-20s %-66s\n", "ID", "Name", "Network", "Last Accessed", "Transaction Hash")
-		fmt.Println("--------------------------------------------------------------------------------")
+		fmt.Fprintf(cmd.OutOrStdout(), "Saved sessions (%d):\n\n", len(sessions))
+		fmt.Fprintf(cmd.OutOrStdout(), "%-20s %-20s %-12s %-20s %-66s\n", "ID", "Name", "Network", "Last Accessed", "Transaction Hash")
+		fmt.Fprintln(cmd.OutOrStdout(), "--------------------------------------------------------------------------------")
 
 		for _, s := range sessions {
 			lastAccess := s.LastAccessAt.Format("2006-01-02 15:04")
@@ -335,7 +349,7 @@ Displays session ID, network, last access time, and transaction hash.`,
 			if name == "" {
 				name = "-"
 			}
-			fmt.Printf("%-20s %-20s %-12s %-20s %-66s\n", s.ID, name, s.Network, lastAccess, txHash)
+			fmt.Fprintf(cmd.OutOrStdout(), "%-20s %-20s %-12s %-20s %-66s\n", s.ID, name, s.Network, lastAccess, txHash)
 		}
 
 		return nil
@@ -345,15 +359,33 @@ Displays session ID, network, last access time, and transaction hash.`,
 var sessionDeleteCmd = &cobra.Command{
 	Use:   "delete <session-id>",
 	Short: "Remove a saved debugging session",
-	Long: `Delete a saved debug session by ID. This action cannot be undone.
+	Long: `Delete a saved debug session by ID or name. This action cannot be undone.
 
-Use 'Glassbox session list' to see available sessions.`,
-	Example: `  # Delete a specific session
-  Glassbox session delete abc123`,
+Use 'glassbox session list' to see all available session IDs and names.
+
+If you delete the session that is currently active (via 'glassbox session
+resume'), the in-memory state is cleared and no further saves will succeed
+without a new 'glassbox debug' run.
+
+Example: glassbox session delete abc123
+         glassbox session delete payroll-bug`,
+	Example: `  # Delete by session ID
+  glassbox session delete abc123
+
+  # Delete by bookmark name
+  glassbox session delete payroll-bug`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		sessionID := args[0]
+		sessionID := strings.TrimSpace(args[0])
+
+		if sessionID == "" {
+			return errors.WrapValidationError(
+				"session ID is required\n" +
+					"Usage: glassbox session delete <session-id-or-name>\n" +
+					"Run 'glassbox session list' to see available sessions",
+			)
+		}
 
 		// Open session store
 		store, err := session.NewStore()
@@ -365,14 +397,18 @@ Use 'Glassbox session list' to see available sessions.`,
 		// Resolve to a valid session ID before deleting
 		resolved, resolveErr := resolveSessionInput(ctx, store, sessionID)
 		if resolveErr != nil {
-			return resolveErr
+			return fmt.Errorf(
+				"session %q not found: %w\n"+
+					"Hint: run 'glassbox session list' to see all available sessions",
+				sessionID, resolveErr,
+			)
 		}
 
 		if err := store.Delete(ctx, resolved.ID); err != nil {
-			return errors.WrapValidationError(fmt.Sprintf("failed to delete session '%s': %v", resolved.ID, err))
+			return errors.WrapValidationError(fmt.Sprintf("failed to delete session %q: %v\nHint: run 'glassbox session list' to verify the session exists", resolved.ID, err))
 		}
 
-		fmt.Printf("Session deleted: %s\n", resolved.ID)
+		fmt.Fprintf(cmd.OutOrStdout(), "Session deleted: %s\n", resolved.ID)
 		return nil
 	},
 }
@@ -412,33 +448,21 @@ printed so you know how to re-run the debug command.`,
 		}
 
 		// Validate checkpoint fields before trusting them.
-		var cpIssues []string
-		if cp.SessionID == "" {
-			cpIssues = append(cpIssues, "checkpoint is missing the session ID")
-		}
-		if cp.TxHash == "" {
-			cpIssues = append(cpIssues, "checkpoint is missing the transaction hash")
-		}
-		if cp.Network == "" {
-			cpIssues = append(cpIssues, "checkpoint is missing the network")
-		}
-		if cp.StartedAt.IsZero() {
-			cpIssues = append(cpIssues, "checkpoint has a zero started_at timestamp")
-		}
-		if cp.PID <= 0 {
-			cpIssues = append(cpIssues, fmt.Sprintf("checkpoint has an invalid PID: %d", cp.PID))
-		}
-		if len(cpIssues) > 0 {
-			fmt.Fprintf(os.Stderr, "Checkpoint validation failed (%d issue(s)):\n", len(cpIssues))
-			for i, issue := range cpIssues {
-				fmt.Fprintf(os.Stderr, "  %d. %s\n", i+1, issue)
+		cpReport := session.ValidateCheckpoint(cp)
+		if !cpReport.OK {
+			fmt.Fprintf(os.Stderr, "Checkpoint validation failed (%d issue(s)):\n", len(cpReport.Issues))
+			for i, issue := range cpReport.Issues {
+				fmt.Fprintf(os.Stderr, "  %d. [%s] %s\n", i+1, issue.Field, issue.Description)
+				if issue.Hint != "" {
+					fmt.Fprintf(os.Stderr, "     Hint: %s\n", issue.Hint)
+				}
 			}
 			fmt.Fprintf(os.Stderr, "\nClearing corrupt checkpoint.\n")
 			fmt.Fprintf(os.Stderr, "Hint: re-run 'glassbox debug <tx-hash>' to start a fresh session.\n")
 			if clearErr := session.ClearCheckpoint(); clearErr != nil {
 				fmt.Fprintf(os.Stderr, "Warning: failed to clear checkpoint: %v\n", clearErr)
 			}
-			return fmt.Errorf("checkpoint is corrupt and cannot be recovered (%d issue(s))", len(cpIssues))
+			return fmt.Errorf("checkpoint is corrupt and cannot be recovered (%d issue(s))", len(cpReport.Issues))
 		}
 
 		// Liveness probe: the process must be gone before we can take over the session.

@@ -122,3 +122,28 @@ Resource.rc
 *.msi
 *.msix
 *.cab
+
+# --- Test snapshots and generated test artefacts ---
+**/__snapshots__/
+**/*.snap
+testdata/snapshots/
+*.snapshot.json
+*.snap.json
+# Go test output artefacts
+*.test
+*.prof
+cpu.prof
+mem.prof
+*.coverprofile
+# pprof profiles
+*.pb.gz
+# flamegraph outputs
+*.flamegraph.html
+*.flamegraph.svg
+
+# --- Session and runtime artefacts (never commit user data) ---
+~/.Glassbox/
+sessions.db
+ui_state.db
+active_session.json
+*.session.json

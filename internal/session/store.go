@@ -67,15 +67,22 @@ func NewStore() (*Store, error) {
 
 	erstDir := filepath.Join(homeDir, ".Glassbox")
 	if err = os.MkdirAll(erstDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create .Glassbox directory: %w", err)
+		return nil, fmt.Errorf("failed to create .Glassbox directory: %s",
+			SanitizeErrorMessage(err.Error()))
 	}
 
 	dbPath := filepath.Join(erstDir, "sessions.db")
 
+	// Validate DB permissions before opening so we surface a clear, PII-free
+	// error rather than a raw sqlite driver error that may contain path details.
+	if permErr := ValidateDBPermissions(dbPath); permErr != nil {
+		return nil, permErr
+	}
+
 	// Open SQLite database
 	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL")
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return nil, WrapStoreError("open", dbPath, err)
 	}
 
 	store := &Store{db: db}
@@ -88,7 +95,8 @@ func NewStore() (*Store, error) {
 
 	// Set file permissions to 600 (read/write for owner only)
 	if chmodErr := os.Chmod(dbPath, 0600); chmodErr != nil {
-		logger.Logger.Warn("Failed to set database permissions", "error", chmodErr)
+		logger.Logger.Warn("Failed to set database permissions",
+			"error", SanitizeErrorMessage(chmodErr.Error()))
 	}
 
 	return store, nil
