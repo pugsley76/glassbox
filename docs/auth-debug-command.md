@@ -40,13 +40,15 @@ The `GLASSBOX_RPC_TOKEN` environment variable (or the `rpc_token` config value) 
 
 ## Validation
 
-All inputs are checked early in `PreRunE`, before any network connection is opened:
+All inputs are checked early in `PreRunE`, before any network connection is opened. The hash and RPC URL validations collect **all problems in a single pass** using `ValidateAuthTraceInputs`, so users see every issue at once instead of one error at a time:
 
 1. **Transaction hash format** — must be exactly 64 hexadecimal characters.
 2. **`--rpc-url` format** — when provided, each (optionally comma-separated) URL must use the `http` or `https` scheme and include a host.
 3. **Network name** — must be a built-in network (`testnet`, `mainnet`, `futurenet`) or a custom network defined in config.
 
 When `--network` is not supplied explicitly, the command attempts to auto-detect the network from the transaction and prints the resolved value (`Resolved network: testnet`).
+
+Multiple validation failures are reported together in a single numbered list so users can fix all problems before retrying.
 
 ---
 
@@ -90,8 +92,11 @@ glassbox auth-debug --network testnet 5c0a1234...ef7890ab
 # Detailed analysis with summary metrics and missing signatures
 glassbox auth-debug --detailed 5c0a1234...ef7890ab
 
-# Machine-readable JSON output
+# Machine-readable JSON output (--detailed has no effect here; JSON always includes full detail)
 glassbox auth-debug --json 5c0a1234...ef7890ab
+
+# Use a custom RPC endpoint
+glassbox auth-debug --rpc-url https://soroban-testnet.stellar.org --network testnet 5c0a1234...ef7890ab
 ```
 
 ---
