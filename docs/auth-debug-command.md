@@ -78,6 +78,39 @@ Because the warning is written to stderr, `--json` output on stdout stays clean 
 
 ---
 
+## Session persistence
+
+An auth-debug run can be recorded as an **auth session** so its inputs and
+outcome can be associated with the parent debug session and replayed or audited
+later. The persisted record (`session.AuthSession`) captures the transaction
+hash, network, RPC endpoint, the `--detailed`/`--json` flags, the number of
+authorization events / failures / missing signatures, and the terminal status.
+
+Before an auth session is written or replayed it is checked by
+`session.ValidateAuthSession`, which rejects corrupt or inconsistent records
+**up front** with explicit, field-level diagnostics rather than letting a
+malformed record fail deep in persistence. The validated invariants are:
+
+| Field | Rule |
+|---|---|
+| `SessionID` | Must be present (links the analysis to a parent debug session). |
+| `TxHash` | Must be exactly 64 hexadecimal characters. |
+| `Network` | Must be a recognised Stellar network (`testnet`, `mainnet`, `futurenet`). |
+| `RPCURL` | When set, must be an `http`/`https` URL with a host. |
+| `StartedAt` | Must be non-zero. |
+| `CompletedAt` | When set, must not be before `StartedAt`. |
+| `AuthEventCount`, `FailureCount`, `MissingSignatureCount` | Must be non-negative. |
+| `Status` | Must be one of `completed`, `failed`, `no_auth_data`. |
+| `Error` | Required when `Status` is `failed`; must be empty otherwise. |
+| `FailureCount` | Must be `0` when `Status` is `no_auth_data`. |
+
+Each violation is reported as a `{Field, Description, Hint}` issue, and
+`AuthSessionReport.Error()` renders them as a single actionable, multi-line
+message (every problem is listed, not just the first), so a bad record is
+surfaced clearly instead of as a low-level persistence error.
+
+---
+
 ## Examples
 
 ```sh

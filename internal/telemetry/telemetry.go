@@ -17,10 +17,9 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
-	"go.opentelemetry.io/otel/sdk/trace"
-	oteltrace "go.opentelemetry.io/otel/trace"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
-	"go.opentelemetry.io/otel/trace"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // Config holds OpenTelemetry configuration
@@ -78,11 +77,11 @@ func Init(ctx context.Context, config Config) (func(), error) {
 
 	// Initialize environment metadata
 	envMetadata = EnvMetadata{
-		Version:     getVersion(),
-		Platform:    runtime.GOOS,
-		Arch:        runtime.GOARCH,
+		Version:      getVersion(),
+		Platform:     runtime.GOOS,
+		Arch:         runtime.GOARCH,
 		FeatureFlags: getFeatureFlags(),
-		Anonymized:  config.Anonymized,
+		Anonymized:   config.Anonymized,
 	}
 
 	if !config.Enabled {
