@@ -495,6 +495,14 @@ glassbox protocol:repair
 glassbox protocol:register
 ```
 
+`protocol:register` validates prerequisites **before** writing any OS registration state:
+
+- The Glassbox binary path must exist and be executable (or a runnable Windows extension).
+- Linux requires `xdg-mime` from the `xdg-utils` package.
+- Unsupported platforms are rejected immediately with remediation guidance.
+
+On failure the command prints explicit `[FAIL]` diagnostics and numbered fix steps. After a successful registration, run `glassbox protocol:status` to confirm the registered binary path is usable.
+
 `protocol:repair` runs `protocol:diagnose` first, then overwrites the registration with the current binary. A post-repair verification confirms the fix succeeded.
 
 **JSON output** for CI pipelines:
