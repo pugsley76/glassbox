@@ -111,7 +111,7 @@ At least one of `GLASSBOX_PKCS11_KEY_LABEL` or `GLASSBOX_PKCS11_KEY_ID` is requi
 |----------|-------------|
 | `GLASSBOX_PKCS11_KEY_ID` | Hex-encoded `CKA_ID` of the key (alternative to label) |
 | `GLASSBOX_PKCS11_TOKEN_LABEL` | Select token by label instead of slot index |
-| `GLASSBOX_PKCS11_SLOT` | Slot index (default `0`) |
+| `GLASSBOX_PKCS11_SLOT` | Slot index (default `0`; must be a non-negative integer) |
 
 ### CLI flags and precedence
 
@@ -170,6 +170,16 @@ message instead of a low-level error mid-signing:
   ```
   --pkcs11-key-id must be a hex-encoded CKA_ID (e.g. a1b2c3): encoding/hex: invalid byte ...
     Fix: provide a valid hex string, e.g. 'a1b2c3' (use pkcs11-tool --list-objects to find the CKA_ID)
+  ```
+
+- `GLASSBOX_PKCS11_SLOT`, when provided, must be a non-negative integer. Invalid
+  values are rejected before preflight/signing starts so they do not silently
+  fall back to slot `0`:
+
+  ```
+  GLASSBOX_PKCS11_SLOT must be a non-negative integer, got "not-a-number"
+    Fix: set GLASSBOX_PKCS11_SLOT to a numeric slot index such as 0 or 1, or unset it to use the default slot
+    Tip: run 'glassbox audit:sign --validate-only --signing-provider pkcs11' to inspect available slot diagnostics
   ```
 
 ### Preflight (`--validate-only`)

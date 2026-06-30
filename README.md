@@ -113,7 +113,7 @@ Required env vars:
 
 Optional:
 
-- `GLASSBOX_PKCS11_SLOT` — numeric slot index (default `0`)
+- `GLASSBOX_PKCS11_SLOT` — numeric slot index (default `0`; must be a non-negative integer)
 - `GLASSBOX_PKCS11_TOKEN_LABEL` — select token by label
 
 Example:
@@ -136,7 +136,7 @@ Run a preflight check before signing to surface configuration errors with action
 glassbox audit:sign --hsm-provider pkcs11 --validate-only
 ```
 
-This checks module loading, slot enumeration, PIN authentication, key lookup, and a test signing operation — without touching any payload.
+This checks module loading, slot enumeration, PIN authentication, key lookup, and a test signing operation — without touching any payload. Invalid `GLASSBOX_PKCS11_SLOT` values are rejected up front with a clear remediation hint.
 
 The command prints the signed audit log JSON to stdout so it can be redirected to a file.
 
