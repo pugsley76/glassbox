@@ -25,16 +25,46 @@ export class ProtocolRegistrar {
     private readonly protocol = 'glassbox';
     private readonly cliPath: string;
 
-    constructor() {
+    constructor(cliPath?: string) {
         // Get the absolute path to the Glassbox CLI executable
         // In production, this would be the actual binary path
-        this.cliPath = process.execPath;
+        this.cliPath = cliPath || process.execPath;
     }
 
     /**
      * Register the glassbox:// protocol handler for the current OS
      */
     async register(): Promise<void> {
+        if (!this.cliPath) {
+            throw new Error('Registration failed: CLI path is not defined.');
+        }
+
+        if (!path.isAbsolute(this.cliPath)) {
+            throw new Error(`Registration failed: CLI path must be absolute, got '${this.cliPath}'.`);
+        }
+
+        try {
+            await fs.access(this.cliPath);
+        } catch (err) {
+            throw new Error(`Registration failed: CLI executable not found at '${this.cliPath}'.`);
+        }
+
+        try {
+            if (os.platform() === 'win32') {
+                const ext = path.extname(this.cliPath).toLowerCase();
+                if (!['.exe', '.cmd', '.bat', '.com'].includes(ext)) {
+                    throw new Error(`Registration failed: Invalid executable extension on Windows for '${this.cliPath}'.`);
+                }
+            } else {
+                await fs.access(this.cliPath, fsConstants.X_OK);
+            }
+        } catch (err: any) {
+            if (err.message.startsWith('Registration failed')) {
+                throw err;
+            }
+            throw new Error(`Registration failed: CLI file is not executable at '${this.cliPath}'.`);
+        }
+
         const platform = os.platform();
 
         try {
@@ -53,9 +83,9 @@ export class ProtocolRegistrar {
             }
 
             console.log(` Protocol handler registered for ${this.protocol}://`);
-        } catch (error) {
+        } catch (error: any) {
             console.error('Failed to register protocol handler:', error);
-            throw error;
+            throw new Error(`Protocol registration failed on ${platform}: ${error.message}`);
         }
     }
 

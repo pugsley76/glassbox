@@ -151,7 +151,7 @@ export function registerProtocolCommands(program: Command): void {
     // 2. Protocol Registration
     program
         .command('protocol:register')
-        .description('Register the glassbox:// protocol handler in the operating system')
+        .description('Register the glassbox:// protocol handler in the operating system (validates CLI path exists and is executable)')
         .action(async () => {
             try {
                 const registrar = new ProtocolRegistrar();

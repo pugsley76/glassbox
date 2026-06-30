@@ -119,3 +119,50 @@ describe('ProtocolRegistrar.diagnose', () => {
         expect(result.isExecutable).toBe(true);
     });
 });
+
+describe('ProtocolRegistrar.register', () => {
+    let registrar: ProtocolRegistrar;
+
+    beforeEach(() => {
+        jest.resetAllMocks();
+        (os.platform as jest.Mock).mockReturnValue(process.platform);
+        (os.homedir as jest.Mock).mockReturnValue(require('os').homedir());
+    });
+
+    it('should throw if CLI path is not absolute', async () => {
+        registrar = new ProtocolRegistrar('relative/path');
+        await expect(registrar.register()).rejects.toThrow("Registration failed: CLI path must be absolute, got 'relative/path'.");
+    });
+
+    it('should throw if CLI executable is not found', async () => {
+        registrar = new ProtocolRegistrar('/usr/local/bin/nonexistent');
+        (fs.access as jest.Mock).mockRejectedValue(new Error('ENOENT'));
+        await expect(registrar.register()).rejects.toThrow("Registration failed: CLI executable not found at '/usr/local/bin/nonexistent'.");
+    });
+
+    it('should throw if Windows executable has invalid extension', async () => {
+        (os.platform as jest.Mock).mockReturnValue('win32');
+        registrar = new ProtocolRegistrar('C:\\invalid.txt');
+        (fs.access as jest.Mock).mockResolvedValue(undefined);
+        await expect(registrar.register()).rejects.toThrow("Registration failed: Invalid executable extension on Windows for 'C:\\invalid.txt'.");
+    });
+
+    it('should throw if Unix executable is not executable', async () => {
+        (os.platform as jest.Mock).mockReturnValue('linux');
+        registrar = new ProtocolRegistrar('/usr/local/bin/script.sh');
+        (fs.access as jest.Mock).mockResolvedValueOnce(undefined); // First access check for existence
+        (fs.access as jest.Mock).mockRejectedValueOnce(new Error('EACCES')); // Second for executability
+        await expect(registrar.register()).rejects.toThrow("Registration failed: CLI file is not executable at '/usr/local/bin/script.sh'.");
+    });
+    
+    it('should throw with clear message if OS registration fails', async () => {
+        (os.platform as jest.Mock).mockReturnValue('linux');
+        registrar = new ProtocolRegistrar('/usr/local/bin/glassbox');
+        (fs.access as jest.Mock).mockResolvedValue(undefined);
+        
+        // Mock the internal registerLinux method to fail
+        jest.spyOn(registrar as any, 'registerLinux').mockRejectedValue(new Error('Permission denied'));
+        
+        await expect(registrar.register()).rejects.toThrow("Protocol registration failed on linux: Permission denied");
+    });
+});
