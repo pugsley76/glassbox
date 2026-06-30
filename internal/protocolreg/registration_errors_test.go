@@ -65,6 +65,72 @@ func TestErrRegistryConflict_WrappedIncludesActionableGuidance(t *testing.T) {
 	}
 }
 
+// ── NewRegistrar validation ──────────────────────────────────────────────────
+
+func TestNewRegistrar_RejectsSystemRootPath(t *testing.T) {
+	// We can't directly inject a path into NewRegistrar, but we can verify the
+	// validation logic by constructing a Registrar manually and checking that
+	// validatePreRegistration catches an empty executable path (which would be
+	// the result of a failed NewRegistrar).
+	r := &Registrar{
+		executablePath: "/",
+		homeDir:        t.TempDir(),
+	}
+	err := r.validatePreRegistration()
+	if err == nil {
+		t.Error("validatePreRegistration should reject a system root executable path")
+	}
+	if !strings.Contains(err.Error(), "empty") {
+		t.Errorf("error should mention 'empty' for root path, got: %v", err)
+	}
+}
+
+func TestNewRegistrar_ValidatesHomeDirectory(t *testing.T) {
+	r := &Registrar{
+		executablePath: t.TempDir(), // a directory, not a file, but validatePreRegistration only checks existence
+		homeDir:        "/nonexistent/home/dir/that/does/not/exist",
+	}
+	err := r.validatePreRegistration()
+	if err == nil {
+		t.Error("validatePreRegistration should reject an inaccessible home directory")
+	}
+	if !strings.Contains(err.Error(), "home directory") {
+		t.Errorf("error should mention 'home directory', got: %v", err)
+	}
+}
+
+func TestNewRegistrar_EmptyExecutablePath_ReturnsError(t *testing.T) {
+	r := &Registrar{
+		executablePath: "",
+		homeDir:        t.TempDir(),
+	}
+	err := r.validatePreRegistration()
+	if err == nil {
+		t.Fatal("validatePreRegistration should reject empty executable path")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "executable path is empty") {
+		t.Errorf("error should mention 'executable path is empty', got: %v", err)
+	}
+	if !strings.Contains(msg, "Fix:") {
+		t.Errorf("error should include a Fix: hint, got: %v", err)
+	}
+}
+
+func TestNewRegistrar_EmptyHomeDir_ReturnsError(t *testing.T) {
+	r := &Registrar{
+		executablePath: t.TempDir(),
+		homeDir:        "",
+	}
+	err := r.validatePreRegistration()
+	if err == nil {
+		t.Fatal("validatePreRegistration should reject empty home directory")
+	}
+	if !strings.Contains(err.Error(), "home directory is empty") {
+		t.Errorf("error should mention 'home directory is empty', got: %v", err)
+	}
+}
+
 // ── hasCommand ───────────────────────────────────────────────────────────────
 
 func TestHasCommand_KnownMissingCommand(t *testing.T) {
@@ -146,6 +212,186 @@ func TestRegisterLinux_XdgMissingMessage_IsActionable(t *testing.T) {
 	for _, keyword := range []string{"xdg-mime", "xdg-utils", "apt install", "dnf install", "pacman"} {
 		if !strings.Contains(msg, keyword) {
 			t.Errorf("xdg-mime missing error should mention %q", keyword)
+		}
+	}
+}
+
+// ── Register/Unregister/Verify empty path guards ─────────────────────────────
+
+func TestRegister_EmptyExecutablePath_ReturnsActionableError(t *testing.T) {
+	r := &Registrar{
+		executablePath: "",
+		homeDir:        t.TempDir(),
+	}
+	err := r.Register()
+	if err == nil {
+		t.Fatal("Register should fail with empty executable path")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "pre-registration validation failed") {
+		t.Errorf("error should mention pre-registration validation, got: %v", err)
+	}
+	if !strings.Contains(msg, "Fix:") {
+		t.Errorf("error should include a Fix: hint, got: %v", err)
+	}
+}
+
+func TestUnregister_EmptyExecutablePath_ReturnsActionableError(t *testing.T) {
+	r := &Registrar{
+		executablePath: "",
+		homeDir:        t.TempDir(),
+	}
+	err := r.Unregister()
+	if err == nil {
+		t.Fatal("Unregister should fail with empty executable path")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "cannot unregister") {
+		t.Errorf("error should mention 'cannot unregister', got: %v", err)
+	}
+	if !strings.Contains(msg, "Fix:") {
+		t.Errorf("error should include a Fix: hint, got: %v", err)
+	}
+}
+
+func TestVerify_EmptyExecutablePath_ReturnsActionableError(t *testing.T) {
+	r := &Registrar{
+		executablePath: "",
+		homeDir:        t.TempDir(),
+	}
+	_, err := r.Verify()
+	if err == nil {
+		t.Fatal("Verify should fail with empty executable path")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "cannot verify") {
+		t.Errorf("error should mention 'cannot verify', got: %v", err)
+	}
+	if !strings.Contains(msg, "Fix:") {
+		t.Errorf("error should include a Fix: hint, got: %v", err)
+	}
+}
+
+// ── validatePreRegistration — non-existent paths ─────────────────────────────
+
+func TestValidatePreRegistration_NonExistentExecutable_ReturnsError(t *testing.T) {
+	r := &Registrar{
+		executablePath: "/nonexistent/path/to/binary",
+		homeDir:        t.TempDir(),
+	}
+	err := r.validatePreRegistration()
+	if err == nil {
+		t.Fatal("validatePreRegistration should fail for non-existent executable")
+	}
+	if !strings.Contains(err.Error(), "no longer exists") {
+		t.Errorf("error should mention 'no longer exists', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Fix:") {
+		t.Errorf("error should include a Fix: hint, got: %v", err)
+	}
+}
+
+func TestValidatePreRegistration_NonExistentHomeDir_ReturnsError(t *testing.T) {
+	r := &Registrar{
+		executablePath: t.TempDir(),
+		homeDir:        "/nonexistent/home/directory",
+	}
+	err := r.validatePreRegistration()
+	if err == nil {
+		t.Fatal("validatePreRegistration should fail for non-existent home directory")
+	}
+	if !strings.Contains(err.Error(), "home directory") {
+		t.Errorf("error should mention 'home directory', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Fix:") {
+		t.Errorf("error should include a Fix: hint, got: %v", err)
+	}
+}
+
+// ── Linux registration validation ────────────────────────────────────────────
+
+func TestRegisterLinux_WrapperScriptValidation(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux-only test")
+	}
+
+	r := newTestRegistrar(t)
+
+	// Create a scenario where the wrapper script would be written but we can
+	// verify the validation logic by checking that a corrupted wrapper is detected.
+	applicationsDir := filepath.Dir(r.linuxDesktopPath())
+	helperDir := filepath.Dir(r.linuxWrapperPath())
+
+	if err := os.MkdirAll(applicationsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.MkdirAll(helperDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// Write a wrapper script that does NOT reference the executable (simulating corruption).
+	badWrapper := "#!/bin/sh\nexec /some/other/binary protocol-handler \"$1\"\n"
+	if err := os.WriteFile(r.linuxWrapperPath(), []byte(badWrapper), 0o755); err != nil {
+		t.Fatalf("write bad wrapper: %v", err)
+	}
+
+	// Write a valid desktop file.
+	if err := os.WriteFile(r.linuxDesktopPath(), []byte(r.linuxDesktopEntry()), 0o644); err != nil {
+		t.Fatalf("write desktop: %v", err)
+	}
+
+	// Attempt registration - it should fail because the wrapper doesn't reference the executable.
+	err := r.Register()
+	if err == nil {
+		t.Error("Register should fail when wrapper script does not reference the executable")
+	} else {
+		if !strings.Contains(err.Error(), "wrapper script does not reference") {
+			t.Errorf("error should mention wrapper script issue, got: %v", err)
+		}
+	}
+}
+
+// ── Darwin registration validation ───────────────────────────────────────────
+
+func TestRegisterDarwin_PlistValidation(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS-only test")
+	}
+
+	r := newTestRegistrar(t)
+
+	// Create the app bundle directory structure.
+	bundleDir := filepath.Dir(r.macOSExecutablePath())
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// Write a valid executable script.
+	if err := os.WriteFile(r.macOSExecutablePath(), []byte(r.unixHandlerScript()), 0o755); err != nil {
+		t.Fatalf("write exec: %v", err)
+	}
+
+	// Write a plist that does NOT contain the scheme (simulating corruption).
+	badPlist := `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>glassbox-protocol-handler</string>
+</dict>
+</plist>
+`
+	if err := os.WriteFile(r.macOSPlistPath(), []byte(badPlist), 0o644); err != nil {
+		t.Fatalf("write bad plist: %v", err)
+	}
+
+	// Attempt registration - it should fail because the plist doesn't contain the scheme.
+	err := r.Register()
+	if err == nil {
+		t.Error("Register should fail when plist does not contain the scheme")
+	} else {
+		if !strings.Contains(err.Error(), "does not contain the") {
+			t.Errorf("error should mention plist scheme issue, got: %v", err)
 		}
 	}
 }

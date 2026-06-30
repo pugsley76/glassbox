@@ -56,12 +56,38 @@ func NewRegistrar() (*Registrar, error) {
 		return nil, fmt.Errorf("executable path contains a null byte and cannot be trusted")
 	}
 
+	// Validate that the path is not a system-critical directory (e.g., root, /usr, /etc)
+	// which would indicate a misconfigured installation.
+	cleanPath := filepath.Clean(executablePath)
+	if cleanPath == "/" || cleanPath == "\\" {
+		return nil, fmt.Errorf(
+			"executable path %q resolves to a system root directory — this is not a valid binary location\n"+
+				"  Fix: ensure glassbox is installed in a proper bin directory (e.g., ~/.local/bin or /usr/local/bin)",
+			executablePath,
+		)
+	}
+
 	if _, err := os.Stat(executablePath); err != nil {
 		return nil, fmt.Errorf(
 			"executable not found at %s: %w\n"+
 				"  Fix: ensure the glassbox binary is installed correctly and the path is not a broken symlink",
 			executablePath, err,
 		)
+	}
+
+	// Verify the file is executable (important on Unix systems where a file can exist
+	// but lack execute permissions).
+	if runtime.GOOS != "windows" {
+		if info, statErr := os.Stat(executablePath); statErr == nil {
+			mode := info.Mode()
+			if mode&0o111 == 0 {
+				return nil, fmt.Errorf(
+					"executable at %s is not executable (permissions: %04o)\n"+
+						"  Fix: run 'chmod +x %s' to make the binary executable",
+					executablePath, mode&0o777, executablePath,
+				)
+			}
+		}
 	}
 
 	// Resolve symlinks so the registered handler always points to the real binary,
@@ -81,6 +107,19 @@ func NewRegistrar() (*Registrar, error) {
 		return nil, fmt.Errorf("resolve user home directory: %w", err)
 	}
 
+	// Validate home directory is not empty and is actually a directory.
+	if homeDir == "" {
+		return nil, fmt.Errorf("resolved home directory is empty — cannot determine user profile location")
+	}
+
+	homeInfo, homeErr := os.Stat(homeDir)
+	if homeErr != nil {
+		return nil, fmt.Errorf("home directory %s is not accessible: %w", homeDir, homeErr)
+	}
+	if !homeInfo.IsDir() {
+		return nil, fmt.Errorf("home directory %s is not a directory", homeDir)
+	}
+
 	return &Registrar{
 		executablePath: executablePath,
 		homeDir:        homeDir,
@@ -88,6 +127,12 @@ func NewRegistrar() (*Registrar, error) {
 }
 
 func (r *Registrar) Register() error {
+	// Pre-flight validation: ensure the registrar is in a valid state before
+	// attempting any OS modifications.
+	if err := r.validatePreRegistration(); err != nil {
+		return fmt.Errorf("pre-registration validation failed: %w", err)
+	}
+
 	start := time.Now()
 	var err error
 	switch runtime.GOOS {
@@ -106,7 +151,45 @@ func (r *Registrar) Register() error {
 	return nil
 }
 
+// validatePreRegistration performs sanity checks before any OS state is modified.
+func (r *Registrar) validatePreRegistration() error {
+	if r.executablePath == "" {
+		return fmt.Errorf(
+			"executable path is empty — cannot register a handler that points nowhere\n"+
+				"  Fix: ensure glassbox is invoked from a valid binary, not via 'go run' or an empty path",
+		)
+	}
+
+	// Re-validate that the executable still exists (it could have been deleted after
+	// NewRegistrar was called).
+	if _, err := os.Stat(r.executablePath); err != nil {
+		return fmt.Errorf(
+			"executable no longer exists at %s: %w\n"+
+				"  Fix: the binary may have been moved or deleted — reinstall or restart from the correct location",
+			r.executablePath, err,
+		)
+	}
+
+	// Validate home directory is still usable.
+	if r.homeDir == "" {
+		return fmt.Errorf("home directory is empty — cannot write registration artefacts")
+	}
+	if _, err := os.Stat(r.homeDir); err != nil {
+		return fmt.Errorf("home directory %s is no longer accessible: %w", r.homeDir, err)
+	}
+
+	return nil
+}
+
 func (r *Registrar) Unregister() error {
+	// Validate state before attempting removal to avoid partial/unclean unregistration.
+	if r.executablePath == "" {
+		return fmt.Errorf(
+			"cannot unregister: executable path is empty\n"+
+				"  Fix: ensure glassbox is invoked from a valid binary path",
+		)
+	}
+
 	switch runtime.GOOS {
 	case "windows":
 		return r.unregisterWindows()
@@ -125,6 +208,14 @@ func (r *Registrar) IsRegistered() bool {
 }
 
 func (r *Registrar) Verify() (*VerificationReport, error) {
+	// Guard against verifying a misconfigured registrar.
+	if r.executablePath == "" {
+		return nil, fmt.Errorf(
+			"cannot verify: executable path is empty\n"+
+				"  Fix: ensure glassbox is invoked from a valid binary path",
+		)
+	}
+
 	start := time.Now()
 	report := &VerificationReport{
 		Platform: runtime.GOOS,
@@ -228,23 +319,7 @@ func (r *Registrar) verifyWindows(report *VerificationReport) {
 }
 
 func (r *Registrar) registerLinux() error {
-	applicationsDir := filepath.Dir(r.linuxDesktopPath())
-	if err := os.MkdirAll(applicationsDir, 0o755); err != nil {
-		return fmt.Errorf("create applications directory: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(r.linuxWrapperPath()), 0o755); err != nil {
-		return fmt.Errorf("create protocol helper directory: %w", err)
-	}
-
-	if err := os.WriteFile(r.linuxWrapperPath(), []byte(r.unixHandlerScript()), 0o755); err != nil {
-		return fmt.Errorf("write protocol helper script: %w", err)
-	}
-
-	if err := os.WriteFile(r.linuxDesktopPath(), []byte(r.linuxDesktopEntry()), 0o644); err != nil {
-		return fmt.Errorf("write desktop file: %w", err)
-	}
-
+	// Validate that required system tools are available before writing files.
 	if !hasCommand("xdg-mime") {
 		return fmt.Errorf(
 			"xdg-mime is not installed: cannot register the glassbox:// MIME handler\n" +
@@ -255,13 +330,47 @@ func (r *Registrar) registerLinux() error {
 		)
 	}
 
+	applicationsDir := filepath.Dir(r.linuxDesktopPath())
+	if err := os.MkdirAll(applicationsDir, 0o755); err != nil {
+		return fmt.Errorf("create applications directory %s: %w", applicationsDir, err)
+	}
+
+	helperDir := filepath.Dir(r.linuxWrapperPath())
+	if err := os.MkdirAll(helperDir, 0o755); err != nil {
+		return fmt.Errorf("create protocol helper directory %s: %w", helperDir, err)
+	}
+
+	// Write the wrapper script first so we can validate it before writing the desktop file.
+	if err := os.WriteFile(r.linuxWrapperPath(), []byte(r.unixHandlerScript()), 0o755); err != nil {
+		return fmt.Errorf("write protocol helper script to %s: %w", r.linuxWrapperPath(), err)
+	}
+
+	// Validate the wrapper script was written correctly by reading it back.
+	wrapperContent, readErr := os.ReadFile(r.linuxWrapperPath())
+	if readErr != nil {
+		return fmt.Errorf("verify written wrapper script: %w", readErr)
+	}
+	if !strings.Contains(string(wrapperContent), r.executablePath) {
+		return fmt.Errorf(
+			"wrapper script does not reference the executable %s — written content may be corrupted",
+			r.executablePath,
+		)
+	}
+
+	if err := os.WriteFile(r.linuxDesktopPath(), []byte(r.linuxDesktopEntry()), 0o644); err != nil {
+		// Clean up the wrapper script if desktop file write fails to avoid partial registration.
+		_ = os.Remove(r.linuxWrapperPath())
+		return fmt.Errorf("write desktop file to %s: %w", r.linuxDesktopPath(), err)
+	}
+
 	if _, err := runCommand("xdg-mime", "default", linuxDesktopFile, linuxMimeType); err != nil {
-		return err
+		return fmt.Errorf("configure xdg-mime default handler: %w", err)
 	}
 
 	if hasCommand("update-desktop-database") {
 		if _, err := runCommand("update-desktop-database", filepath.Dir(r.linuxDesktopPath())); err != nil {
-			return err
+			// Non-fatal: update-desktop-database failure shouldn't block registration.
+			// The MIME association is already set; the database update is an optimization.
 		}
 	}
 
@@ -329,20 +438,65 @@ func (r *Registrar) verifyLinux(report *VerificationReport) {
 }
 
 func (r *Registrar) registerDarwin() error {
-	if err := os.MkdirAll(filepath.Dir(r.macOSExecutablePath()), 0o755); err != nil {
-		return fmt.Errorf("create macOS app bundle: %w", err)
+	appPath := r.macOSAppPath()
+	execPath := r.macOSExecutablePath()
+	plistPath := r.macOSPlistPath()
+
+	// Validate that the LaunchServices tool exists before writing files.
+	if !hasCommand(macOSLSRegisterPath()) {
+		return fmt.Errorf(
+			"LaunchServices registration tool not found at %s\n"+
+				"  Fix: this tool is part of macOS and should always be present — your macOS installation may be corrupted",
+			macOSLSRegisterPath(),
+		)
 	}
 
-	if err := os.WriteFile(r.macOSExecutablePath(), []byte(r.unixHandlerScript()), 0o755); err != nil {
-		return fmt.Errorf("write app bundle executable: %w", err)
+	bundleDir := filepath.Dir(execPath)
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		return fmt.Errorf("create macOS app bundle directory %s: %w", bundleDir, err)
 	}
 
-	if err := os.WriteFile(r.macOSPlistPath(), []byte(r.macOSInfoPlist()), 0o644); err != nil {
-		return fmt.Errorf("write app bundle plist: %w", err)
+	// Write the executable script.
+	if err := os.WriteFile(execPath, []byte(r.unixHandlerScript()), 0o755); err != nil {
+		return fmt.Errorf("write app bundle executable to %s: %w", execPath, err)
 	}
 
-	if _, err := runCommand(macOSLSRegisterPath(), "-f", r.macOSAppPath()); err != nil {
-		return err
+	// Validate the executable script references the correct binary.
+	execContent, readErr := os.ReadFile(execPath)
+	if readErr != nil {
+		return fmt.Errorf("verify written app bundle executable: %w", readErr)
+	}
+	if !strings.Contains(string(execContent), r.executablePath) {
+		return fmt.Errorf(
+			"app bundle executable does not reference %s — written content may be corrupted",
+			r.executablePath,
+		)
+	}
+
+	// Write the Info.plist.
+	if err := os.WriteFile(plistPath, []byte(r.macOSInfoPlist()), 0o644); err != nil {
+		// Clean up the executable if plist write fails.
+		_ = os.RemoveAll(appPath)
+		return fmt.Errorf("write app bundle plist to %s: %w", plistPath, err)
+	}
+
+	// Validate the plist contains the expected scheme.
+	plistContent, plistReadErr := os.ReadFile(plistPath)
+	if plistReadErr != nil {
+		_ = os.RemoveAll(appPath)
+		return fmt.Errorf("verify written plist: %w", plistReadErr)
+	}
+	if !strings.Contains(string(plistContent), Scheme) {
+		_ = os.RemoveAll(appPath)
+		return fmt.Errorf(
+			"generated Info.plist does not contain the %q scheme — plist generation is broken",
+			Scheme,
+		)
+	}
+
+	// Register with LaunchServices.
+	if _, err := runCommand(macOSLSRegisterPath(), "-f", appPath); err != nil {
+		return fmt.Errorf("register with LaunchServices: %w", err)
 	}
 
 	return nil

@@ -533,12 +533,24 @@ invalid network "devnet": must be one of testnet, mainnet, futurenet
 
 ### `protocol:repair` pre-condition validation
 
-`protocol:repair` validates that the registrar's executable path is non-empty before attempting any write. Running repair via `go run` or from a stripped build without a resolved executable fails immediately with:
+`protocol:repair` validates that the registrar's executable path is non-empty and that the binary still exists before attempting any write. Running repair via `go run` or from a stripped build without a resolved executable fails immediately with:
 
 ```
 cannot repair: executable path is empty
   Fix: ensure glassbox is invoked from a valid binary path, not via 'go run'
 ```
+
+### Enhanced registration validation
+
+All protocol registration operations (`protocol:register`, `protocol:unregister`, `protocol:verify`, `protocol:diagnose`, `protocol:repair`) now perform pre-flight validation:
+
+- **Executable path checks**: Rejects empty paths, non-existent binaries, and system root directories
+- **Permission checks**: On Unix, validates that the binary has execute permissions
+- **Home directory checks**: Ensures the home directory is accessible before writing registration artefacts
+- **Tool availability**: Validates that required system tools (`xdg-mime`, `reg`, `lsregister`) are present before attempting registration
+- **Post-write validation**: After writing files, reads them back to confirm they reference the correct executable and contain the expected scheme declarations
+
+When validation fails, errors include actionable `Fix:` hints to guide users toward resolution.
 
 ### `protocol:diagnose --format` validation
 
