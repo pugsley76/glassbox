@@ -552,6 +552,25 @@ All protocol registration operations (`protocol:register`, `protocol:unregister`
 
 When validation fails, errors include actionable `Fix:` hints to guide users toward resolution.
 
+### Path normalization and safety
+
+All filesystem paths used during protocol registration are normalized and validated to prevent security issues and improve robustness:
+
+- **Path normalization**: Removes redundant separators, resolves `.` and `..` components, and rejects suspicious patterns
+- **Path traversal protection**: Rejects paths containing `..` sequences that could indicate directory traversal attempts
+- **Consecutive dots**: Rejects paths with `...` which may indicate attempts to hide files or create ambiguous paths
+- **Length limits**: Enforces a maximum path length of 255 characters (conservative limit for cross-platform compatibility)
+- **Null byte detection**: Rejects paths containing null bytes before any filesystem operations
+- **Post-symlink validation**: After resolving symlinks, the resulting path is re-validated to ensure it remains safe
+
+**Examples of rejected paths:**
+- `/usr/local/bin/../../etc/passwd` — path traversal pattern
+- `/path/to/.../file` — consecutive dots
+- Paths exceeding 255 characters
+- Paths containing null bytes (`\x00`)
+
+When a path fails validation, the error message explains what was wrong and suggests a fix, such as moving the binary to a shorter path or using a direct path without `..` components.
+
 ### `protocol:diagnose --format` validation
 
 The `--format` flag accepts only `text` (default) or `json`. Any other value is rejected before the diagnostic runs:
