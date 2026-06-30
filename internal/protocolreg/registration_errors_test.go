@@ -132,8 +132,6 @@ func TestShellQuote_EmptyString(t *testing.T) {
 	}
 }
 
-// ── XdgMime missing error message ────────────────────────────────────────────
-
 func TestRegisterLinux_XdgMissingMessage_IsActionable(t *testing.T) {
 	// Construct the exact error message that registerLinux would return when
 	// xdg-mime is absent, and verify it contains installation guidance.
@@ -147,5 +145,53 @@ func TestRegisterLinux_XdgMissingMessage_IsActionable(t *testing.T) {
 		if !strings.Contains(msg, keyword) {
 			t.Errorf("xdg-mime missing error should mention %q", keyword)
 		}
+	}
+}
+
+// ── validateRegistrationPreconditions ────────────────────────────────────────
+
+func TestValidateRegistrationPreconditions_EmptyExecutablePath(t *testing.T) {
+	r := &Registrar{executablePath: "", homeDir: t.TempDir()}
+	err := r.validateRegistrationPreconditions()
+	if err == nil {
+		t.Fatal("expected error for empty executable path")
+	}
+	if !strings.Contains(err.Error(), "executable path is empty") {
+		t.Errorf("error should mention empty path, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "go run") {
+		t.Errorf("error should mention go run remediation, got: %v", err)
+	}
+}
+
+func TestValidateRegistrationPreconditions_MissingExecutable(t *testing.T) {
+	r := &Registrar{
+		executablePath: "/tmp/glassbox-nonexistent-binary-xyz-373",
+		homeDir:        t.TempDir(),
+	}
+	err := r.validateRegistrationPreconditions()
+	if err == nil {
+		t.Fatal("expected error for missing executable")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should mention missing executable, got: %v", err)
+	}
+}
+
+func TestValidateRegistrationPreconditions_ValidExecutable(t *testing.T) {
+	r := newTestRegistrar(t)
+	if err := r.validateRegistrationPreconditions(); err != nil {
+		t.Fatalf("expected preconditions to pass, got: %v", err)
+	}
+}
+
+func TestRegister_RejectsEmptyExecutableBeforePlatformWork(t *testing.T) {
+	r := &Registrar{executablePath: "", homeDir: t.TempDir()}
+	err := r.Register()
+	if err == nil {
+		t.Fatal("Register() should fail before touching OS state when executable path is empty")
+	}
+	if !strings.Contains(err.Error(), "executable path is empty") {
+		t.Errorf("Register() should surface precondition error, got: %v", err)
 	}
 }

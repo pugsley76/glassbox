@@ -3,7 +3,7 @@
 
 import { Command } from 'commander';
 import { ProtocolHandler } from '../protocol/handler';
-import { ProtocolRegistrar } from '../protocol/register';
+import { ProtocolRegistrar, RegistrationValidationError, formatRegistrationSummary } from '../protocol/register';
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -166,9 +166,13 @@ export function registerProtocolCommands(program: Command): void {
                 await registrar.register();
                 console.log(' Successfully registered GLASSBOX Protocol handler');
                 console.log('You can now launch Glassbox directly from supported dashboards via glassbox:// links.');
+                console.log('Tip: run "GLASSBOX Protocol:status" to verify the registration summary.');
             } catch (error) {
-                if (error instanceof Error) {
+                if (error instanceof RegistrationValidationError) {
                     console.error(`[FAIL] Registration failed: ${error.message}`);
+                } else if (error instanceof Error) {
+                    console.error(`[FAIL] Registration failed: ${error.message}`);
+                    console.error('  Tip: run "GLASSBOX Protocol:status" for a diagnostic summary.');
                 } else {
                     console.error('[FAIL] Registration failed: An unknown error occurred');
                 }
@@ -198,63 +202,68 @@ export function registerProtocolCommands(program: Command): void {
     // 4. Registration Status
     program
         .command('protocol:status')
-        .description('Check current registration status of the glassbox:// protocol handler')
+        .description('Check registration status and print a diagnostic summary for glassbox://')
         .action(async () => {
             try {
                 const registrar = new ProtocolRegistrar();
                 const diag = await registrar.diagnose();
-                const executableFix = process.platform === 'win32'
-                    ? 'Ensure the registered file is a runnable .exe, .cmd, .bat, or .com binary'
-                    : `Restore execute permissions, for example: chmod +x ${diag.cliPath ?? '<path>'}`;
 
                 console.log('GLASSBOX Protocol Handler Status');
                 console.log('----------------------------');
+                console.log(`Summary:         ${formatRegistrationSummary(diag)}`);
+                console.log(`Platform:        ${diag.platform}`);
                 console.log(`Registered Path: ${diag.cliPath ?? '(not registered)'}`);
+                console.log(`Current Binary:  ${diag.currentCliPath}`);
+
+                if (diag.status === 'unsupported') {
+                    console.log('Registration:    UNSUPPORTED PLATFORM');
+                    console.log('');
+                    for (const issue of diag.issues) {
+                        console.log(`[FAIL] ${issue}`);
+                    }
+                    console.log('');
+                    console.log('Fix:');
+                    for (const fix of diag.remediationSteps) {
+                        console.log(`  - ${fix}`);
+                    }
+                    process.exit(1);
+                }
 
                 if (!diag.registered) {
                     console.log('Registration:    NOT REGISTERED');
                     console.log('Path Exists:     No');
                     console.log('Executable:      No');
                     console.log('');
+                    for (const issue of diag.issues) {
+                        console.log(`[FAIL] ${issue}`);
+                    }
+                    console.log('');
                     console.log('Fix:');
-                    console.log('  - Run "GLASSBOX Protocol:register" to enable dashboard integration');
-                    return;
+                    for (const fix of diag.remediationSteps) {
+                        console.log(`  - ${fix}`);
+                    }
+                    process.exit(1);
                 }
 
-                console.log('Registration:    REGISTERED');
+                console.log(`Registration:    ${diag.status === 'ok' ? 'REGISTERED' : 'REGISTERED (DEGRADED)'}`);
                 console.log(`Path Exists:     ${diag.pathExists ? 'Yes' : 'No'}`);
                 console.log(`Executable:      ${!diag.pathExists ? 'No' : diag.isExecutable ? 'Yes' : 'No'}`);
 
-                const issues: string[] = [];
-                const fixes: string[] = [];
-
-                if (!diag.cliPath) {
-                    issues.push('Could not determine registered CLI path');
-                    fixes.push('Re-run "GLASSBOX Protocol:register" to refresh registration');
-                } else if (!diag.pathExists) {
-                    issues.push(`Binary not found at ${diag.cliPath}`);
-                    fixes.push(`Ensure the Glassbox binary exists at ${diag.cliPath}`);
-                    fixes.push('Re-run "GLASSBOX Protocol:register" to update the registered path');
-                } else if (!diag.isExecutable) {
-                    issues.push(`Binary at ${diag.cliPath} is not executable`);
-                    fixes.push(executableFix);
-                    fixes.push('Re-run "GLASSBOX Protocol:register" if the binary moved or was replaced');
-                }
-
-                if (issues.length === 0) {
+                if (diag.status === 'ok') {
                     console.log('[OK] Registered CLI is usable.');
                     return;
                 }
 
                 console.log('');
-                for (const issue of issues) {
+                for (const issue of diag.issues) {
                     console.log(`[FAIL] ${issue}`);
                 }
                 console.log('');
                 console.log('Fix:');
-                for (const fix of fixes) {
+                for (const fix of diag.remediationSteps) {
                     console.log(`  - ${fix}`);
                 }
+                process.exit(1);
             } catch (error) {
                 if (error instanceof Error) {
                     console.error(`[FAIL] Status check failed: ${error.message}`);
