@@ -11,6 +11,9 @@ export interface ParsedURI {
     source?: string;
     signature?: string;
     raw: string;
+    mockLedgerManifest?: string;
+    mockLedgerEntries?: string[];
+    protocolVersion?: number;
 }
 
 /**
@@ -88,6 +91,47 @@ export class URIParser {
             // Signature (optional)
             const signature = params.get('signature') || undefined;
 
+            // Protocol Version (optional)
+            const protoVersionStr = params.get('protocol-version');
+            let protocolVersion: number | undefined;
+            if (protoVersionStr !== null) {
+                protocolVersion = parseInt(protoVersionStr, 10);
+                if (isNaN(protocolVersion) || protocolVersion <= 0) {
+                    throw new Error('Invalid protocol-version: must be a positive integer');
+                }
+                const allowedProtos = [20, 21, 22];
+                if (!allowedProtos.includes(protocolVersion)) {
+                    throw new Error(`Invalid protocol-version: unsupported version ${protocolVersion}. Supported: ${allowedProtos.join(', ')}`);
+                }
+            }
+
+            // Mock Ledger Manifest (optional)
+            const mockManifest = params.get('mock-ledger-manifest') || undefined;
+            if (mockManifest && mockManifest.includes('\0')) {
+                throw new Error('Invalid mock-ledger-manifest: cannot contain null bytes');
+            }
+
+            // Mock Ledger Entry (optional, repeatable)
+            const mockEntries = params.getAll('mock-ledger-entry');
+            const validatedEntries: string[] = [];
+            for (const entry of mockEntries) {
+                const trimmed = entry.trim();
+                if (!trimmed) continue;
+                const parts = trimmed.split(':');
+                if (parts.length < 2 || !parts[0]) {
+                    throw new Error(`Invalid mock-ledger-entry format: expected key:value (got '${trimmed}')`);
+                }
+                const val = parts.slice(1).join(':');
+                if (!val) {
+                    throw new Error(`Invalid mock-ledger-entry value: value cannot be empty (got '${trimmed}')`);
+                }
+                // Validate base64 value
+                if (!/^[a-zA-Z0-9+/]*={0,2}$/.test(val) || val.length % 4 !== 0) {
+                    throw new Error(`Invalid mock-ledger-entry value: must be valid base64 (got '${trimmed}')`);
+                }
+                validatedEntries.push(trimmed);
+            }
+
             return {
                 transactionHash,
                 network: network as 'testnet' | 'mainnet',
@@ -95,6 +139,9 @@ export class URIParser {
                 source,
                 signature,
                 raw: uriString,
+                protocolVersion,
+                mockLedgerManifest: mockManifest,
+                mockLedgerEntries: validatedEntries.length > 0 ? validatedEntries : undefined,
             };
         } catch (error) {
             if (error instanceof Error) {

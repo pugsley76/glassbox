@@ -510,3 +510,106 @@ func TestParseDebugURI_InvalidURI_ErrorDescribesFormat(t *testing.T) {
 		t.Errorf("error should describe the hash requirement, got: %v", err)
 	}
 }
+
+// ─── mock-ledger-manifest & mock-ledger-entry & protocol-version parameters ────
+
+func TestParseDebugURI_ProtocolVersion_Valid(t *testing.T) {
+	for _, version := range []string{"20", "21", "22"} {
+		uri := baseURI + "&protocol-version=" + version
+		parsed, err := ParseDebugURI(uri)
+		if err != nil {
+			t.Fatalf("unexpected error parsing protocol-version=%s: %v", version, err)
+		}
+		val := uint32(20)
+		if version == "21" {
+			val = 21
+		} else if version == "22" {
+			val = 22
+		}
+		if parsed.ProtocolVersion == nil || *parsed.ProtocolVersion != val {
+			t.Errorf("expected ProtocolVersion=%d, got %v", val, parsed.ProtocolVersion)
+		}
+	}
+}
+
+func TestParseDebugURI_ProtocolVersion_Invalid(t *testing.T) {
+	tests := []struct {
+		val string
+		err string
+	}{
+		{"0", "must be a positive integer"},
+		{"abc", "must be a positive integer"},
+		{"19", "use a supported protocol version"},
+		{"99", "use a supported protocol version"},
+	}
+
+	for _, tc := range tests {
+		uri := baseURI + "&protocol-version=" + tc.val
+		_, err := ParseDebugURI(uri)
+		if err == nil {
+			t.Fatalf("expected error for protocol-version=%s", tc.val)
+		}
+		if !strings.Contains(err.Error(), tc.err) {
+			t.Errorf("error message for protocol-version=%s should mention %q, got: %v", tc.val, tc.err, err)
+		}
+	}
+}
+
+func TestParseDebugURI_MockLedgerManifest_Valid(t *testing.T) {
+	uri := baseURI + "&mock-ledger-manifest=/path/to/manifest.json"
+	parsed, err := ParseDebugURI(uri)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if parsed.MockLedgerManifest != "/path/to/manifest.json" {
+		t.Errorf("expected MockLedgerManifest='/path/to/manifest.json', got %q", parsed.MockLedgerManifest)
+	}
+}
+
+func TestParseDebugURI_MockLedgerManifest_NullByte(t *testing.T) {
+	uri := baseURI + "&mock-ledger-manifest=/path/to\x00manifest.json"
+	_, err := ParseDebugURI(uri)
+	if err == nil {
+		t.Fatal("expected error for null byte in mock-ledger-manifest")
+	}
+	if !strings.Contains(err.Error(), "null bytes") {
+		t.Errorf("error should explain null bytes are not allowed, got: %v", err)
+	}
+}
+
+func TestParseDebugURI_MockLedgerEntries_Valid(t *testing.T) {
+	uri := baseURI + "&mock-ledger-entry=AAAAAQ==:BBBBQg==&mock-ledger-entry=CCCCQw==:DDDDRA=="
+	parsed, err := ParseDebugURI(uri)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(parsed.MockLedgerEntries) != 2 {
+		t.Fatalf("expected 2 mock ledger entries, got %d", len(parsed.MockLedgerEntries))
+	}
+	if parsed.MockLedgerEntries[0] != "AAAAAQ==:BBBBQg==" || parsed.MockLedgerEntries[1] != "CCCCQw==:DDDDRA==" {
+		t.Errorf("unexpected entries: %v", parsed.MockLedgerEntries)
+	}
+}
+
+func TestParseDebugURI_MockLedgerEntries_Invalid(t *testing.T) {
+	tests := []struct {
+		entry string
+		err   string
+	}{
+		{"keyonly", "expected key:value"},
+		{":value", "expected key:value"},
+		{"key:", "empty value"},
+		{"key:not-base64-!@#$", "invalid base64"},
+	}
+
+	for _, tc := range tests {
+		uri := baseURI + "&mock-ledger-entry=" + tc.entry
+		_, err := ParseDebugURI(uri)
+		if err == nil {
+			t.Fatalf("expected error for mock-ledger-entry=%s", tc.entry)
+		}
+		if !strings.Contains(err.Error(), tc.err) {
+			t.Errorf("error message for mock-ledger-entry=%s should mention %q, got: %v", tc.entry, tc.err, err)
+		}
+	}
+}

@@ -3,7 +3,7 @@
 
 import { Command } from 'commander';
 import { ProtocolHandler } from '../protocol/handler';
-import { ProtocolRegistrar } from '../protocol/register';
+import { ProtocolRegistrar, ProtocolRegistrationError } from '../protocol/register';
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -88,6 +88,26 @@ function releaseLock(): void {
     }
 }
 
+function printProtocolRegistrationFailure(action: string, error: unknown): void {
+    if (error instanceof ProtocolRegistrationError) {
+        console.error(`[FAIL] ${action} failed: ${error.message}`);
+        if (error.remediation.length > 0) {
+            console.error('Fix:');
+            for (const step of error.remediation) {
+                console.error(`  - ${step}`);
+            }
+        }
+        return;
+    }
+
+    if (error instanceof Error) {
+        console.error(`[FAIL] ${action} failed: ${error.message}`);
+        return;
+    }
+
+    console.error(`[FAIL] ${action} failed: An unknown error occurred`);
+}
+
 /**
  * registerProtocolCommands adds protocol-related commands to the Glassbox CLI.
  * These include the internal handler called by the OS and user-facing 
@@ -159,19 +179,17 @@ export function registerProtocolCommands(program: Command): void {
                 const isRegistered = await registrar.isRegistered();
                 if (isRegistered) {
                     console.log('[WARN]  Protocol handler is already registered.');
-                    console.log('To refresh registration, run: GLASSBOX Protocol:unregister && GLASSBOX Protocol:register');
+                    console.log('To refresh registration, run: glassbox protocol:unregister && glassbox protocol:register');
+                    console.log('Tip: run "glassbox protocol:status" to verify the registered binary path.');
                     return;
                 }
 
                 await registrar.register();
                 console.log(' Successfully registered GLASSBOX Protocol handler');
                 console.log('You can now launch Glassbox directly from supported dashboards via glassbox:// links.');
+                console.log('Tip: run "glassbox protocol:status" to confirm the registration is working.');
             } catch (error) {
-                if (error instanceof Error) {
-                    console.error(`[FAIL] Registration failed: ${error.message}`);
-                } else {
-                    console.error('[FAIL] Registration failed: An unknown error occurred');
-                }
+                printProtocolRegistrationFailure('Registration', error);
                 process.exit(1);
             }
         });
@@ -186,11 +204,7 @@ export function registerProtocolCommands(program: Command): void {
                 await registrar.unregister();
                 console.log(' Successfully unregistered GLASSBOX Protocol handler');
             } catch (error) {
-                if (error instanceof Error) {
-                    console.error(`[FAIL] Unregistration failed: ${error.message}`);
-                } else {
-                    console.error('[FAIL] Unregistration failed: An unknown error occurred');
-                }
+                printProtocolRegistrationFailure('Unregistration', error);
                 process.exit(1);
             }
         });

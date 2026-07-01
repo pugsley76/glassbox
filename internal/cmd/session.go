@@ -78,8 +78,13 @@ var sessionSaveCmd = &cobra.Command{
 	Short: "Save the current debugging session",
 	Long: `Save the current debug session state to disk for later resumption.
 
-You must run 'Glassbox debug <tx-hash>' first to create an active session.
-The session ID can be auto-generated or specified with --id flag.
+	You must run 'Glassbox debug <tx-hash>' first to create an active session.
+	The session ID can be auto-generated or specified with --id flag.
+
+	Before persisting, Glassbox validates required session fields and any audit-chain
+	metadata (audit_hash, audit_signature, previous_session_hash) so malformed or
+	incomplete chain state is rejected with actionable diagnostics instead of being
+	written to the store.
 
 Validation:
   The session data is validated before saving. The following checks are made:
@@ -578,7 +583,7 @@ Validation:
 
 		data.Status = "recovered"
 		data.LastAccessAt = time.Now()
-		if saveErr := store.Save(ctx, data); saveErr != nil {
+		if saveErr := store.SaveWithValidation(ctx, data); saveErr != nil {
 			return errors.WrapValidationError(fmt.Sprintf(
 				"failed to update recovered session: %v", saveErr))
 		}

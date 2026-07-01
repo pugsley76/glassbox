@@ -33,7 +33,21 @@ var protocolRegisterCmd = &cobra.Command{
 	Short:   "Register the glassbox:// protocol handler in the operating system",
 	Long: `Register the glassbox:// URI scheme so the OS dispatches deep links to Glassbox.
 
-Use --dry-run to preview what would be written without modifying any system state.`,
+On Linux, a .desktop file and a wrapper script are written under ~/.local/share/.
+On macOS, an app bundle is created in ~/Applications/ and registered with LaunchServices.
+On Windows, registry keys are written under HKEY_CURRENT_USER\Software\Classes\Glassbox.
+
+Use --dry-run to preview what would be written without modifying any system state.
+Run 'glassbox protocol:verify' after registration to confirm the handler is working.
+If registration fails, run 'glassbox protocol:diagnose' for a root-cause breakdown.`,
+	Example: `  # Register the protocol handler on the current platform
+  glassbox protocol:register
+
+  # Preview the registration without writing any OS state
+  glassbox protocol:register --dry-run
+
+  # Confirm the registration worked after registering
+  glassbox protocol:register && glassbox protocol:verify`,
 	GroupID: "utility",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		registrar, err := protocolreg.NewRegistrar()
@@ -72,6 +86,19 @@ var protocolUnregisterCmd = &cobra.Command{
 	Use:     "protocol:unregister",
 	Aliases: []string{"pb:unregister"},
 	Short:   "Unregister the glassbox:// protocol handler from the operating system",
+	Long: `Remove the glassbox:// protocol handler registration from the operating system.
+
+On Linux, the .desktop file and wrapper script are deleted from ~/.local/share/.
+On macOS, the app bundle is removed from ~/Applications/ and unregistered from LaunchServices.
+On Windows, the registry key HKEY_CURRENT_USER\Software\Classes\Glassbox is deleted.
+
+After unregistering, glassbox:// deep links will no longer open Glassbox automatically.
+Use 'glassbox protocol:register' to re-register at any time.`,
+	Example: `  # Remove the protocol handler registration
+  glassbox protocol:unregister
+
+  # Verify it was removed
+  glassbox protocol:unregister && glassbox protocol:status`,
 	GroupID: "utility",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		registrar, err := protocolreg.NewRegistrar()
@@ -91,6 +118,19 @@ var protocolStatusCmd = &cobra.Command{
 	Use:     "protocol:status",
 	Aliases: []string{"pb:status"},
 	Short:   "Check current registration status of the glassbox:// protocol handler",
+	Long: `Check whether the glassbox:// protocol handler is currently registered on this system.
+
+The command runs a quick diagnostic pass and prints each passing check as [OK].
+If the handler is not registered or is broken, issues and remediation steps are
+printed to stderr and the command exits with a non-zero exit code.
+
+For a more detailed root-cause analysis, use 'glassbox protocol:diagnose'.
+To fix a broken registration automatically, use 'glassbox protocol:repair'.`,
+	Example: `  # Check whether the protocol handler is registered
+  glassbox protocol:status
+
+  # Use in a script to gate further steps on registration
+  glassbox protocol:status || glassbox protocol:register`,
 	GroupID: "utility",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		registrar, err := protocolreg.NewRegistrar()
@@ -130,6 +170,14 @@ Use --probe to simulate a glassbox://doctor-probe deep link and confirm the hand
 responds without side effects.
 
 On failure, remediation steps are printed to help repair the registration.`,
+	Example: `  # Verify the registration is working
+  glassbox protocol:verify
+
+  # Verify and run a live probe that exercises the OS dispatch path
+  glassbox protocol:verify --probe
+
+  # Register first, then verify
+  glassbox protocol:register && glassbox protocol:verify`,
 	GroupID: "utility",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		registrar, err := protocolreg.NewRegistrar()
@@ -185,6 +233,37 @@ var protocolHandlerCmd = &cobra.Command{
 	Use:     "protocol:handle <uri>",
 	Aliases: []string{"protocol-handler", "pb:handle"},
 	Short:   "Handle an glassbox:// protocol URI and dispatch it to the debugger",
+	Long: `Parse and dispatch a glassbox:// deep link URI to the Glassbox debugger.
+
+This command is invoked automatically by the OS when a glassbox:// link is opened
+(e.g. from a browser or another application). It validates the URI, extracts the
+transaction hash and query parameters, and re-invokes 'glassbox debug' with the
+appropriate flags.
+
+URI format:
+  glassbox://debug/<64-char-hex>?network=<network>[&op=<n>][&view=<mode>]
+
+Required parameters:
+  network   One of: testnet, mainnet, futurenet
+
+Optional parameters:
+  op        Zero-based operation index (e.g. op=0 for the first operation)
+  operation Alias for op (legacy; op takes precedence when both are provided)
+  view      Initial view mode: trace, flamegraph, events, auth, budget, storage
+  source    Free-form source identifier (e.g. "dashboard")
+  signature Free-form signature hint
+
+Exit codes:
+  0  — dispatch succeeded
+  1  — URI is invalid or the debug sub-command failed`,
+	Example: `  # Open a transaction debug session from a deep link
+  glassbox protocol:handle "glassbox://debug/abc123...def?network=testnet"
+
+  # Open a specific operation on futurenet with the flamegraph view
+  glassbox protocol:handle "glassbox://debug/abc123...def?network=futurenet&op=1&view=flamegraph"
+
+  # Test the handler manually with a known-good URI
+  glassbox protocol:handle "glassbox://debug/0000000000000000000000000000000000000000000000000000000000000001?network=testnet"`,
 	GroupID: "utility",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -219,6 +298,21 @@ var protocolHandlerCmd = &cobra.Command{
 			debugArgs = append(debugArgs, "--view", parsed.View)
 		}
 
+		// Forward protocol version override when present.
+		if parsed.ProtocolVersion != nil {
+			debugArgs = append(debugArgs, "--protocol-version", fmt.Sprintf("%d", *parsed.ProtocolVersion))
+		}
+
+		// Forward mock ledger manifest when present.
+		if parsed.MockLedgerManifest != "" {
+			debugArgs = append(debugArgs, "--mock-ledger-manifest", parsed.MockLedgerManifest)
+		}
+
+		// Forward mock ledger entries when present.
+		for _, entry := range parsed.MockLedgerEntries {
+			debugArgs = append(debugArgs, "--mock-ledger-entry", entry)
+		}
+
 		child := exec.CommandContext(cmd.Context(), executablePath, debugArgs...)
 		child.Stdout = cmd.OutOrStdout()
 		child.Stderr = cmd.ErrOrStderr()
@@ -243,6 +337,17 @@ The command checks:
 Exit codes:
   0  — registration is healthy
   1  — registration is missing or broken (issues are printed to stderr)`,
+	Example: `  # Inspect the registration and print a text report
+  glassbox protocol:diagnose
+
+  # Emit the diagnostic report as machine-readable JSON
+  glassbox protocol:diagnose --format json
+
+  # Use --json shorthand for JSON output
+  glassbox protocol:diagnose --json
+
+  # Pipe JSON output to jq for filtering
+  glassbox protocol:diagnose --json | jq '.status'`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		registrar, err := protocolreg.NewRegistrar()
 		if err != nil {
@@ -329,6 +434,14 @@ PERMISSION NOTES
   On Windows, registry writes to HKEY_CURRENT_USER do not require elevation.
   On Linux and macOS, the handler is installed per-user (~/.local/share or
   ~/Applications) and does not require root.`,
+	Example: `  # Attempt to repair a broken or missing registration
+  glassbox protocol:repair
+
+  # Diagnose first, then repair if needed
+  glassbox protocol:diagnose || glassbox protocol:repair
+
+  # Repair and verify the fix in one step
+  glassbox protocol:repair && glassbox protocol:verify`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		registrar, err := protocolreg.NewRegistrar()
 		if err != nil {

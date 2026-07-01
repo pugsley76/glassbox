@@ -1,15 +1,15 @@
 // Copyright (c) glassbox Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-import { createHash } from 'crypto';
-import { Command } from 'commander';
-import * as dotenv from 'dotenv';
-import * as fs from 'fs';
-import stringify from 'fast-json-stable-stringify';
-import { AuditLogger } from '../audit/AuditLogger';
-import { renderAuditHTML, writeAuditReport } from '../audit/AuditRenderer';
-import { createAuditSigner } from '../audit/signing/factory';
-import { verifyAuditLog } from '../audit/AuditVerifier';
+import { createHash } from "crypto";
+import { Command } from "commander";
+import * as dotenv from "dotenv";
+import * as fs from "fs";
+import stringify from "fast-json-stable-stringify";
+import { AuditLogger } from "../audit/AuditLogger";
+import { renderAuditHTML, writeAuditReport } from "../audit/AuditRenderer";
+import { createAuditSigner } from "../audit/signing/factory";
+import { verifyAuditLog } from "../audit/AuditVerifier";
 
 // Load env for key/provider configuration
 dotenv.config();
@@ -29,28 +29,31 @@ dotenv.config();
  */
 export function registerAuditCommands(program: Command): void {
   program
-    .command('audit:sign')
-    .description('Generate a signed audit log from a JSON payload')
-    .requiredOption('--payload <json>', 'JSON string to sign as the audit trace')
-    .option(
-      '--hsm-provider <provider>',
-      'Signing provider: software (default), pkcs11, or kms'
+    .command("audit:sign")
+    .description("Generate a signed audit log from a JSON payload")
+    .requiredOption(
+      "--payload <json>",
+      "JSON string to sign as the audit trace",
     )
     .option(
-      '--software-private-key <pem>',
-      'Ed25519 private key (PKCS#8 PEM). If unset, uses GLASSBOX_AUDIT_PRIVATE_KEY_PEM'
+      "--hsm-provider <provider>",
+      "Signing provider: software (default), pkcs11, or kms",
     )
     .option(
-      '--kms-key-id <id>',
-      'AWS KMS key ID or ARN. If unset, uses GLASSBOX_KMS_KEY_ID'
+      "--software-private-key <pem>",
+      "Ed25519 private key (PKCS#8 PEM). If unset, uses GLASSBOX_AUDIT_PRIVATE_KEY_PEM",
     )
     .option(
-      '--kms-signing-algorithm <alg>',
-      'AWS KMS signing algorithm (default: ECDSA_SHA_256). If unset, uses GLASSBOX_KMS_SIGNING_ALGORITHM'
+      "--kms-key-id <id>",
+      "AWS KMS key ID or ARN. If unset, uses GLASSBOX_KMS_KEY_ID",
     )
     .option(
-      '--dry-run',
-      'Validate payload parsing, canonicalization, and provider connectivity without signing'
+      "--kms-signing-algorithm <alg>",
+      "AWS KMS signing algorithm (default: ECDSA_SHA_256). If unset, uses GLASSBOX_KMS_SIGNING_ALGORITHM",
+    )
+    .option(
+      "--dry-run",
+      "Validate payload parsing, canonicalization, and provider connectivity without signing",
     )
     .action(async (opts: {
       payload: string;
@@ -78,40 +81,27 @@ export function registerAuditCommands(program: Command): void {
           kmsSigningAlgorithm: opts.kmsSigningAlgorithm,
         });
 
-        const providerLabel = opts.hsmProvider ?? 'software';
+          const logger = new AuditLogger(signer, providerLabel);
+          const log = await logger.generateLog(trace);
 
-        if (opts.dryRun) {
-          let attestation: unknown;
-          if (typeof signer.attestation_chain === 'function') {
-            attestation = await signer.attestation_chain();
+          // Print to stdout so callers can redirect to a file
+          process.stdout.write(JSON.stringify(log, null, 2) + "\n");
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.error(`[FAIL] audit signing failed: ${msg}`);
+          process.exit(1);
+        } finally {
+          if (signer && typeof signer.close === "function") {
+            try {
+              await signer.close();
+            } catch (closeError) {
+              const msg =
+                closeError instanceof Error
+                  ? closeError.message
+                  : String(closeError);
+              console.error(`[WARN] audit signing cleanup failed: ${msg}`);
+            }
           }
-
-          const hashInput = attestation
-            ? { trace, hardware_attestation: attestation }
-            : { trace };
-          const canonicalString = stringify(hashInput);
-          const hash = createHash('sha256').update(canonicalString).digest('hex');
-          const publicKey = await signer.public_key();
-
-          process.stdout.write(
-            JSON.stringify(
-              {
-                dry_run: true,
-                signer_provider: providerLabel,
-                checks: {
-                  payload_parsed: true,
-                  canonicalized: true,
-                  signer_connected: true,
-                },
-                canonical_hash: hash,
-                public_key_available: Boolean(publicKey),
-                attestation_present: Boolean(attestation),
-              },
-              null,
-              2
-            ) + '\n'
-          );
-          return;
         }
 
         const logger = new AuditLogger(signer, providerLabel);
@@ -135,11 +125,16 @@ export function registerAuditCommands(program: Command): void {
     });
 
   program
-    .command('audit:render')
-    .description('Render a raw ExecutionTrace or SignedAuditLog JSON payload to an HTML report')
-    .requiredOption('--payload <json>', 'JSON string containing the audit payload (ExecutionTrace or SignedAuditLog)')
-    .option('--output <path>', 'Write HTML to this file instead of stdout')
-    .option('--title <title>', 'Report title (default: "Audit Report")')
+    .command("audit:render")
+    .description(
+      "Render a raw ExecutionTrace or SignedAuditLog JSON payload to an HTML report",
+    )
+    .requiredOption(
+      "--payload <json>",
+      "JSON string containing the audit payload (ExecutionTrace or SignedAuditLog)",
+    )
+    .option("--output <path>", "Write HTML to this file instead of stdout")
+    .option("--title <title>", 'Report title (default: "Audit Report")')
     .action((opts: { payload: string; output?: string; title?: string }) => {
       try {
         const payload = JSON.parse(opts.payload);
@@ -157,49 +152,59 @@ export function registerAuditCommands(program: Command): void {
     });
 
   program
-    .command('audit:verify')
-    .description('Verify an audit log signature locally (offline verification)')
-    .option('--payload <json>', 'JSON string of the audit trace')
-    .option('--sig <hex>', 'Hex-encoded signature')
-    .option('--pubkey <pem>', 'Public key in PEM format')
-    .option('--file <path>', 'Path to a complete audit log JSON file')
-    .action(async (opts: {
-      payload?: string;
-      sig?: string;
-      pubkey?: string;
-      file?: string;
-    }) => {
-      try {
-        let auditLog: any;
+    .command("audit:verify")
+    .description("Verify an audit log signature locally (offline verification)")
+    .option("--payload <json>", "JSON string of the audit trace")
+    .option("--sig <hex>", "Hex-encoded signature")
+    .option("--pubkey <pem>", "Public key in PEM format")
+    .option("--file <path>", "Path to a complete audit log JSON file")
+    .action(
+      async (opts: {
+        payload?: string;
+        sig?: string;
+        pubkey?: string;
+        file?: string;
+      }) => {
+        try {
+          let auditLog: any;
 
-        if (opts.file) {
-          const content = fs.readFileSync(opts.file, 'utf8');
-          auditLog = JSON.parse(content);
-        } else if (opts.payload && opts.sig && opts.pubkey) {
-          auditLog = {
-            trace: JSON.parse(opts.payload),
-            signature: opts.sig,
-            publicKey: opts.pubkey,
-          };
+          if (opts.file) {
+            const content = fs.readFileSync(opts.file, "utf8");
+            auditLog = JSON.parse(content);
+          } else if (opts.payload && opts.sig && opts.pubkey) {
+            auditLog = {
+              trace: JSON.parse(opts.payload),
+              signature: opts.sig,
+              publicKey: opts.pubkey,
+            };
 
-          const canonicalString = stringify(auditLog.trace);
-          auditLog.hash = createHash('sha256').update(canonicalString).digest('hex');
-        } else {
-          throw new Error('You must provide either --file or all of (--payload, --sig, --pubkey)');
-        }
+            const canonicalString = stringify(auditLog.trace);
+            auditLog.hash = createHash("sha256")
+              .update(canonicalString)
+              .digest("hex");
+          } else {
+            throw new Error(
+              "You must provide either --file or all of (--payload, --sig, --pubkey)",
+            );
+          }
 
-        const isValid = verifyAuditLog(auditLog);
+          const isValid = verifyAuditLog(auditLog);
 
-        if (isValid) {
-          console.log('[OK] Verification successful: Signature and integrity verified.');
-        } else {
-          console.error('[FAIL] Verification failed: Invalid signature or tampered payload.');
+          if (isValid) {
+            console.log(
+              "[OK] Verification successful: Signature and integrity verified.",
+            );
+          } else {
+            console.error(
+              "[FAIL] Verification failed: Invalid signature or tampered payload.",
+            );
+            process.exit(1);
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.error(`[FAIL] audit verification failed: ${msg}`);
           process.exit(1);
         }
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.error(`[FAIL] audit verification failed: ${msg}`);
-        process.exit(1);
-      }
-    });
+      },
+    );
 }

@@ -4,11 +4,14 @@
 package protocolreg
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/dotandev/glassbox/internal/simulator"
 )
 
 var txHashPattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
@@ -68,6 +71,12 @@ type ParsedDebugURI struct {
 	Source string
 	// Signature is an optional free-form signature hint.
 	Signature string
+	// ProtocolVersion is the optional protocol version override for simulation.
+	ProtocolVersion *uint32
+	// MockLedgerManifest is the optional path to a mock ledger JSON manifest.
+	MockLedgerManifest string
+	// MockLedgerEntries is the optional list of mock ledger key:value overrides.
+	MockLedgerEntries []string
 }
 
 // ParseDebugURI parses and validates a glassbox:// debug URI.
@@ -156,6 +165,58 @@ func ParseDebugURI(raw string) (*ParsedDebugURI, error) {
 		Network:         network,
 		Source:          source,
 		Signature:       signature,
+	}
+
+	// --- protocol-version (optional) ---
+	protoVerStr := q.Get("protocol-version")
+	if protoVerStr != "" {
+		protoVer, err := strconv.ParseUint(protoVerStr, 10, 32)
+		if err != nil || protoVer == 0 {
+			return nil, fmt.Errorf("invalid protocol-version %q: must be a positive integer\n"+
+				"  Fix: use a supported version number (e.g. 20, 21, or 22)", protoVerStr)
+		}
+		val := uint32(protoVer)
+		if err := simulator.Validate(val); err != nil {
+			return nil, fmt.Errorf("invalid protocol-version %d: %w\n"+
+				"  Fix: use a supported protocol version (e.g. 20, 21, or 22)\n"+
+				"  Tip: run 'glassbox version' to see all supported versions", val, err)
+		}
+		result.ProtocolVersion = &val
+	}
+
+	// --- mock-ledger-manifest (optional) ---
+	mockManifest := q.Get("mock-ledger-manifest")
+	if mockManifest != "" {
+		if strings.ContainsRune(mockManifest, 0) {
+			return nil, fmt.Errorf("mock-ledger-manifest parameter contains null bytes and cannot be used")
+		}
+		result.MockLedgerManifest = mockManifest
+	}
+
+	// --- mock-ledger-entry (optional, repeatable) ---
+	mockEntries := q["mock-ledger-entry"]
+	if len(mockEntries) > 0 {
+		for _, entry := range mockEntries {
+			entry = strings.TrimSpace(entry)
+			if entry == "" {
+				continue
+			}
+			parts := strings.SplitN(entry, ":", 2)
+			if len(parts) != 2 || parts[0] == "" {
+				return nil, fmt.Errorf("invalid mock-ledger-entry format %q — expected key:value\n"+
+					"  Fix: specify both key and value as non-empty colon-separated strings", entry)
+			}
+			val := parts[1]
+			if val == "" {
+				return nil, fmt.Errorf("mock-ledger-entry %q has an empty value\n"+
+					"  Fix: specify a non-empty base64-encoded value after the colon", entry)
+			}
+			if _, decErr := base64.StdEncoding.DecodeString(val); decErr != nil {
+				return nil, fmt.Errorf("mock-ledger-entry %q has an invalid base64 value: %v\n"+
+					"  Fix: ensure the value after the colon is valid base64", entry, decErr)
+			}
+			result.MockLedgerEntries = append(result.MockLedgerEntries, entry)
+		}
 	}
 
 	// --- op / operation (optional, "op" takes precedence) ---

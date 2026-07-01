@@ -23,6 +23,10 @@ const (
 	macOSAppName       = "GLASSBOX Protocol.app"
 	macOSBundleID      = "dev.dotan.Glassbox.protocol"
 	macOSExecutable    = "glassbox-protocol-handler"
+
+	// maxPathLength is the maximum acceptable path length for registration artefacts.
+	// Windows MAX_PATH is 260, but we use a more conservative limit for cross-platform safety.
+	maxPathLength = 255
 )
 
 type Registrar struct {
@@ -39,21 +43,83 @@ type VerificationReport struct {
 	ElapsedMs int64
 }
 
+// validatePathLength checks that a path is within acceptable length limits.
+// Returns an error with actionable guidance if the path is too long.
+func validatePathLength(path string, context string) error {
+	if len(path) > maxPathLength {
+		return fmt.Errorf(
+			"%s path is too long (%d characters, maximum %d)\n"+
+				"  Fix: move the binary to a shorter path (e.g., ~/.local/bin/glassbox) or use a symlink",
+			context, len(path), maxPathLength,
+		)
+	}
+	return nil
+}
+
+// normalizePath cleans and validates a filesystem path, rejecting dangerous patterns.
+// It removes redundant separators, resolves . and .. components, and checks for
+// suspicious patterns like consecutive dots or path traversal attempts.
+func normalizePath(path string, context string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("%s path is empty", context)
+	}
+
+	// Check for null bytes before any processing.
+	if strings.ContainsRune(path, 0) {
+		return "", fmt.Errorf("%s contains null bytes and cannot be trusted", context)
+	}
+
+	// Clean the path to resolve . and .. components and remove redundant separators.
+	cleaned := filepath.Clean(path)
+
+	// Check for path traversal patterns (e.g., ".." sequences that weren't resolved).
+	// This catches cases like "/usr/local/bin/../../etc/passwd" which Clean() normalizes
+	// but we want to flag as suspicious.
+	if strings.Contains(cleaned, "..") {
+		return "", fmt.Errorf(
+			"%s contains suspicious path traversal pattern\n"+
+				"  Fix: use a direct path without '..' components",
+			context,
+		)
+	}
+
+	// Check for consecutive dots which may indicate an attempt to hide files.
+	if strings.Contains(cleaned, "...") {
+		return "", fmt.Errorf(
+			"%s contains consecutive dots which is not allowed\n"+
+				"  Fix: use a standard path without consecutive dots",
+			context,
+		)
+	}
+
+	// Validate the cleaned path length.
+	if err := validatePathLength(cleaned, context); err != nil {
+		return "", err
+	}
+
+	return cleaned, nil
+}
+
 func NewRegistrar() (*Registrar, error) {
 	executablePath, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("resolve executable path: %w", err)
 	}
 
-	executablePath, err = filepath.Abs(executablePath)
+	// Normalize and validate the executable path.
+	executablePath, err = normalizePath(executablePath, "executable path")
 	if err != nil {
-		return nil, fmt.Errorf("resolve absolute executable path: %w", err)
+		return nil, err
 	}
 
-	// Reject paths containing null bytes — these cannot represent real files and
-	// indicate a hostile environment or misconfigured OS.
-	if strings.ContainsRune(executablePath, 0) {
-		return nil, fmt.Errorf("executable path contains a null byte and cannot be trusted")
+	// Validate that the path is not a system-critical directory (e.g., root, /usr, /etc)
+	// which would indicate a misconfigured installation.
+	if executablePath == "/" || executablePath == "\\" {
+		return nil, fmt.Errorf(
+			"executable path %q resolves to a system root directory — this is not a valid binary location\n"+
+				"  Fix: ensure glassbox is installed in a proper bin directory (e.g., ~/.local/bin or /usr/local/bin)",
+			executablePath,
+		)
 	}
 
 	// Validate that the path is not a system-critical directory (e.g., root, /usr, /etc)
@@ -100,6 +166,12 @@ func NewRegistrar() (*Registrar, error) {
 			executablePath, err,
 		)
 	}
+
+	// Normalize the resolved path to ensure it's still safe after symlink resolution.
+	resolved, err = normalizePath(resolved, "resolved executable path")
+	if err != nil {
+		return nil, fmt.Errorf("resolved path validation failed: %w", err)
+	}
 	executablePath = resolved
 
 	homeDir, err := os.UserHomeDir()
@@ -107,11 +179,13 @@ func NewRegistrar() (*Registrar, error) {
 		return nil, fmt.Errorf("resolve user home directory: %w", err)
 	}
 
-	// Validate home directory is not empty and is actually a directory.
-	if homeDir == "" {
-		return nil, fmt.Errorf("resolved home directory is empty — cannot determine user profile location")
+	// Normalize and validate home directory.
+	homeDir, err = normalizePath(homeDir, "home directory")
+	if err != nil {
+		return nil, err
 	}
 
+	// Validate home directory is actually a directory.
 	homeInfo, homeErr := os.Stat(homeDir)
 	if homeErr != nil {
 		return nil, fmt.Errorf("home directory %s is not accessible: %w", homeDir, homeErr)

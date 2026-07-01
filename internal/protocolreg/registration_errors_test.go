@@ -308,6 +308,139 @@ func TestValidatePreRegistration_NonExistentHomeDir_ReturnsError(t *testing.T) {
 	}
 }
 
+// ── Path normalization ───────────────────────────────────────────────────────
+
+func TestNormalizePath_EmptyPath_ReturnsError(t *testing.T) {
+	_, err := normalizePath("", "test path")
+	if err == nil {
+		t.Fatal("normalizePath should reject empty path")
+	}
+	if !strings.Contains(err.Error(), "test path") {
+		t.Errorf("error should mention context, got: %v", err)
+	}
+}
+
+func TestNormalizePath_NullBytes_ReturnsError(t *testing.T) {
+	_, err := normalizePath("/path/with\x00null/bytes", "test path")
+	if err == nil {
+		t.Fatal("normalizePath should reject path with null bytes")
+	}
+	if !strings.Contains(err.Error(), "null bytes") {
+		t.Errorf("error should mention null bytes, got: %v", err)
+	}
+}
+
+func TestNormalizePath_PathTraversal_ReturnsError(t *testing.T) {
+	_, err := normalizePath("/usr/local/bin/../../etc/passwd", "test path")
+	if err == nil {
+		t.Fatal("normalizePath should reject path traversal patterns")
+	}
+	if !strings.Contains(err.Error(), "path traversal") {
+		t.Errorf("error should mention path traversal, got: %v", err)
+	}
+}
+
+func TestNormalizePath_ConsecutiveDots_ReturnsError(t *testing.T) {
+	_, err := normalizePath("/path/to/.../file", "test path")
+	if err == nil {
+		t.Fatal("normalizePath should reject consecutive dots")
+	}
+	if !strings.Contains(err.Error(), "consecutive dots") {
+		t.Errorf("error should mention consecutive dots, got: %v", err)
+	}
+}
+
+func TestNormalizePath_TooLong_ReturnsError(t *testing.T) {
+	longPath := "/path/" + strings.Repeat("a", maxPathLength+1)
+	_, err := normalizePath(longPath, "test path")
+	if err == nil {
+		t.Fatal("normalizePath should reject paths exceeding max length")
+	}
+	if !strings.Contains(err.Error(), "too long") {
+		t.Errorf("error should mention 'too long', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "Fix:") {
+		t.Errorf("error should include Fix: hint, got: %v", err)
+	}
+}
+
+func TestNormalizePath_ValidPath_ReturnsCleaned(t *testing.T) {
+	input := "/path/to/../file"
+	cleaned, err := normalizePath(input, "test path")
+	if err != nil {
+		t.Fatalf("normalizePath should accept valid path, got error: %v", err)
+	}
+	// filepath.Clean resolves .. so /path/to/../file becomes /file
+	if cleaned != "/file" {
+		t.Errorf("expected cleaned path '/file', got %q", cleaned)
+	}
+}
+
+func TestNormalizePath_RedundantSeparators_Removed(t *testing.T) {
+	input := "/path//to///file"
+	cleaned, err := normalizePath(input, "test path")
+	if err != nil {
+		t.Fatalf("normalizePath should accept path with redundant separators, got error: %v", err)
+	}
+	if cleaned != "/path/to/file" {
+		t.Errorf("expected '/path/to/file', got %q", cleaned)
+	}
+}
+
+// ── Path length validation ───────────────────────────────────────────────────
+
+func TestValidatePathLength_ExactMaxLength_Accepted(t *testing.T) {
+	path := strings.Repeat("a", maxPathLength)
+	err := validatePathLength(path, "test path")
+	if err != nil {
+		t.Errorf("path at exact max length (%d) should be accepted: %v", maxPathLength, err)
+	}
+}
+
+func TestValidatePathLength_OneOverMaxLength_Rejected(t *testing.T) {
+	path := strings.Repeat("a", maxPathLength+1)
+	err := validatePathLength(path, "test path")
+	if err == nil {
+		t.Errorf("path exceeding max length (%d) should be rejected", maxPathLength)
+	}
+	if !strings.Contains(err.Error(), "too long") {
+		t.Errorf("error should mention 'too long', got: %v", err)
+	}
+}
+
+// ── NewRegistrar path normalization integration ──────────────────────────────
+
+func TestNewRegistrar_PathWithDots_Rejected(t *testing.T) {
+	// We can't directly inject a path into NewRegistrar, but we can test the
+	// normalization logic by constructing a Registrar with a path containing ..
+	r := &Registrar{
+		executablePath: "/usr/local/bin/../../etc/passwd",
+		homeDir:        t.TempDir(),
+	}
+	err := r.validatePreRegistration()
+	if err == nil {
+		t.Error("validatePreRegistration should reject path with traversal pattern")
+	}
+	if !strings.Contains(err.Error(), "no longer exists") {
+		t.Errorf("error should mention path doesn't exist, got: %v", err)
+	}
+}
+
+func TestNewRegistrar_NormalizesHomeDir(t *testing.T) {
+	// Test that home directory with redundant separators is normalized.
+	// We construct a Registrar manually since NewRegistrar uses os.UserHomeDir().
+	homeWithDots := t.TempDir() + "/../" + filepath.Base(t.TempDir())
+	r := &Registrar{
+		executablePath: t.TempDir(),
+		homeDir:        homeWithDots,
+	}
+	// validatePreRegistration should work with the normalized path.
+	err := r.validatePreRegistration()
+	if err != nil {
+		t.Errorf("validatePreRegistration should accept normalized home dir, got: %v", err)
+	}
+}
+
 // ── Linux registration validation ────────────────────────────────────────────
 
 func TestRegisterLinux_WrapperScriptValidation(t *testing.T) {
