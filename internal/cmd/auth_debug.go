@@ -30,15 +30,37 @@ var authDebugCmd = &cobra.Command{
 	Short:   "Debug multi-signature and threshold-based authorization failures",
 	Long: `Analyze multi-signature authorization flows and identify which signatures or thresholds failed.
 
-The transaction hash, --network, and --rpc-url are all validated before any
-network call is made, so malformed input fails fast with an explicit message
-instead of a low-level RPC error.
+All inputs are validated before any network call is made:
+  • The transaction hash must be exactly 64 hexadecimal characters.
+  • --rpc-url, when provided, must use http:// or https:// and include a host.
+  • --network, when provided, must be one of: testnet, mainnet, futurenet.
 
-Examples:
-  glassbox auth-debug <tx-hash>
-  glassbox auth-debug --detailed <tx-hash>
-  glassbox auth-debug --json <tx-hash>
-  glassbox auth-debug --network testnet <tx-hash>`,
+When --network is omitted, the network is auto-detected from the transaction and
+the resolved value is printed so you can confirm it is correct.
+
+Output modes:
+  --detailed  Adds summary metrics and a list of missing signers to the text report.
+  --json      Emits the full authorization trace as machine-readable JSON on stdout.
+              Note: --detailed has no effect with --json because JSON output
+              already includes all detail.
+
+When no Soroban authorization entries are found in the transaction, a diagnostic
+warning is written to stderr explaining that the report reflects
+"no failures recorded" — not verified-successful authorization.`,
+	Example: `  # Analyze authorization (network auto-detected)
+  glassbox auth-debug 5c0a1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab
+
+  # Force a specific network
+  glassbox auth-debug --network testnet 5c0a1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab
+
+  # Show detailed analysis with summary metrics and missing signatures
+  glassbox auth-debug --detailed 5c0a1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab
+
+  # Machine-readable JSON output (full detail, --detailed flag is a no-op here)
+  glassbox auth-debug --json 5c0a1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab
+
+  # Use a custom RPC endpoint
+  glassbox auth-debug --rpc-url https://soroban-testnet.stellar.org --network testnet 5c0a1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab`,
 	Args:    cobra.ExactArgs(1),
 	PreRunE: authDebugPreRunE,
 	RunE:    authDebugRunE,
@@ -72,26 +94,20 @@ func authDebugPreRunE(cmd *cobra.Command, args []string) error {
 
 // validateAuthDebugInputs performs the input validation for the auth-debug
 // command without any network access, so it can be exercised directly in tests.
-// It rejects, in order: a malformed transaction hash, a badly formed --rpc-url,
-// and an unknown network name.
+// It delegates to the package-level ValidateAuthTraceInputs for the hash and
+// RPC URL checks (which collect all failures in a single pass), then falls
+// through to the network-name check which also accepts custom networks from
+// config.
 func validateAuthDebugInputs(txHash, network, rpcURL string) error {
-	if err := rpc.ValidateTransactionHash(txHash); err != nil {
-		return errors.WrapValidationError(fmt.Sprintf(
-			"invalid transaction hash %q: %v\n"+
-				"  Transaction hashes must be exactly 64 hexadecimal characters.\n"+
-				"  Example: glassbox auth-debug 5c0a1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab",
-			txHash, err))
+	// Use the package-level validator for hash + RPC URL — it returns all
+	// problems in a single, structured error so the user sees every issue at once.
+	if err := authtrace.ValidateAuthTraceInputs(txHash, "", rpcURL); err != nil {
+		return errors.WrapValidationError(err.Error())
 	}
 
-	if rpcURL != "" {
-		if err := validateRPCURL(rpcURL); err != nil {
-			return errors.WrapValidationError(fmt.Sprintf(
-				"--rpc-url %q is not valid: %v\n"+
-					"  Provide an http(s) URL, e.g. --rpc-url https://horizon-testnet.stellar.org",
-				rpcURL, err))
-		}
-	}
-
+	// Network is validated separately because auth-debug also accepts custom
+	// networks defined in config, which the package-level validator does not know
+	// about. An empty network is allowed here — auto-detection runs in PreRunE.
 	if err := validateNetworkName(network); err != nil {
 		return err
 	}

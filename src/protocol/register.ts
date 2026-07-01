@@ -41,8 +41,10 @@ export class ProtocolRegistrar {
     private readonly protocol = 'glassbox';
     private readonly cliPath: string;
 
-    constructor(cliPath: string = process.execPath) {
-        this.cliPath = path.resolve(cliPath);
+    constructor(cliPath?: string) {
+        // Get the absolute path to the Glassbox CLI executable
+        // In production, this would be the actual binary path
+        this.cliPath = cliPath || process.execPath;
     }
 
     /**
@@ -50,7 +52,37 @@ export class ProtocolRegistrar {
      * Fails fast with actionable errors for unsupported platforms, missing
      * binaries, non-executable paths, and missing Linux dependencies.
      */
-    async validateRegistrationPrerequisites(): Promise<void> {
+    async register(): Promise<void> {
+        if (!this.cliPath) {
+            throw new Error('Registration failed: CLI path is not defined.');
+        }
+
+        if (!path.isAbsolute(this.cliPath)) {
+            throw new Error(`Registration failed: CLI path must be absolute, got '${this.cliPath}'.`);
+        }
+
+        try {
+            await fs.access(this.cliPath);
+        } catch (err) {
+            throw new Error(`Registration failed: CLI executable not found at '${this.cliPath}'.`);
+        }
+
+        try {
+            if (os.platform() === 'win32') {
+                const ext = path.extname(this.cliPath).toLowerCase();
+                if (!['.exe', '.cmd', '.bat', '.com'].includes(ext)) {
+                    throw new Error(`Registration failed: Invalid executable extension on Windows for '${this.cliPath}'.`);
+                }
+            } else {
+                await fs.access(this.cliPath, fsConstants.X_OK);
+            }
+        } catch (err: any) {
+            if (err.message.startsWith('Registration failed')) {
+                throw err;
+            }
+            throw new Error(`Registration failed: CLI file is not executable at '${this.cliPath}'.`);
+        }
+
         const platform = os.platform();
 
         if (!SUPPORTED_PLATFORMS.has(platform)) {
@@ -103,33 +135,10 @@ export class ProtocolRegistrar {
             }
         }
 
-        if (platform === 'linux') {
-            await this.ensureLinuxDependencies();
-        }
-    }
-
-    /**
-     * Register the glassbox:// protocol handler for the current OS
-     */
-    async register(): Promise<void> {
-        await this.validateRegistrationPrerequisites();
-
-        const platform = os.platform();
-        switch (platform) {
-            case 'win32':
-                await this.registerWindows();
-                break;
-            case 'darwin':
-                await this.registerMacOS();
-                break;
-            case 'linux':
-                await this.registerLinux();
-                break;
-            default:
-                throw new ProtocolRegistrationError(
-                    `Protocol registration is not supported on ${platform}`,
-                    ['Protocol registration is only supported on Windows, macOS, and Linux.'],
-                );
+            console.log(` Protocol handler registered for ${this.protocol}://`);
+        } catch (error: any) {
+            console.error('Failed to register protocol handler:', error);
+            throw new Error(`Protocol registration failed on ${platform}: ${error.message}`);
         }
     }
 

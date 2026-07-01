@@ -210,6 +210,49 @@ func TestRunStoreDiagnostics_Summary_MentionsDegraded(t *testing.T) {
 	}
 }
 
+func TestRunStoreDiagnostics_AuditChainIssue_AppearsInReports(t *testing.T) {
+	overrideTempHome(t)
+	store, err := NewStore()
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	corrupt := makeValidSessionData(t, 0)
+	corrupt.AuditHash = strings.Repeat("a", 64)
+	corrupt.PreviousSessionHash = strings.Repeat("b", 64)
+	// Missing audit_signature makes the persisted chain incomplete.
+	if err := store.Save(ctx, corrupt); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	result, err := store.RunStoreDiagnostics(ctx)
+	if err != nil {
+		t.Fatalf("RunStoreDiagnostics: %v", err)
+	}
+	if result.DegradedSessions != 1 {
+		t.Fatalf("DegradedSessions = %d, want 1", result.DegradedSessions)
+	}
+	if len(result.Reports) != 1 {
+		t.Fatalf("expected 1 degraded report; got %d", len(result.Reports))
+	}
+
+	report := result.Reports[0]
+	foundAuditSignature := false
+	for _, issue := range report.Issues {
+		if issue.Field == "AuditSignature" {
+			foundAuditSignature = true
+			if strings.TrimSpace(issue.Hint) == "" {
+				t.Error("AuditSignature issue should carry a hint")
+			}
+		}
+	}
+	if !foundAuditSignature {
+		t.Fatalf("expected AuditSignature issue in degraded report, got: %+v", report.Issues)
+	}
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func makeValidSessionData(t *testing.T, idx int) *Data {
