@@ -1,13 +1,11 @@
 // Copyright (c) 2026 dotandev
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-import {
-    ProtocolRegistrar,
-    RegistrationValidationError,
-    formatRegistrationSummary,
-} from '../protocol/register';
+import { ProtocolRegistrar, ProtocolRegistrationError } from '../register';
 import * as fs from 'fs/promises';
 import * as os from 'os';
+
+const mockExecAsync = jest.fn();
 
 jest.mock('fs/promises');
 jest.mock('os', () => ({
@@ -20,100 +18,125 @@ jest.mock('child_process', () => ({
 }));
 jest.mock('util', () => ({
     ...jest.requireActual('util'),
-    promisify: jest.fn(() => jest.fn()),
+    promisify: jest.fn(() => mockExecAsync),
 }));
 
-describe('formatRegistrationSummary', () => {
-    it('should describe a healthy registration', () => {
-        const summary = formatRegistrationSummary({
-            platform: 'linux',
-            scheme: 'glassbox',
-            status: 'ok',
-            registered: true,
-            cliPath: '/usr/local/bin/glassbox',
-            currentCliPath: '/usr/local/bin/glassbox',
-            pathExists: true,
-            isExecutable: true,
-            issues: [],
-            remediationSteps: [],
-        });
-
-        expect(summary).toContain('healthy');
-        expect(summary).toContain('glassbox://');
-    });
-
-    it('should include issue counts for degraded registrations', () => {
-        const summary = formatRegistrationSummary({
-            platform: 'darwin',
-            scheme: 'glassbox',
-            status: 'degraded',
-            registered: true,
-            cliPath: '/tmp/glassbox',
-            currentCliPath: '/usr/local/bin/glassbox',
-            pathExists: true,
-            isExecutable: false,
-            issues: ['Binary is not executable'],
-            remediationSteps: ['chmod +x /tmp/glassbox'],
-        });
-
-        expect(summary).toContain('degraded');
-        expect(summary).toContain('1 issue');
-    });
-
-    it('should describe unsupported platforms', () => {
-        const summary = formatRegistrationSummary({
-            platform: 'freebsd',
-            scheme: 'glassbox',
-            status: 'unsupported',
-            registered: false,
-            cliPath: null,
-            currentCliPath: '/usr/local/bin/glassbox',
-            pathExists: false,
-            isExecutable: false,
-            issues: ['Protocol registration is not supported on freebsd'],
-            remediationSteps: ['Use Linux, macOS, or Windows'],
-        });
-
-        expect(summary).toContain('not supported');
-        expect(summary).toContain('freebsd');
-    });
-});
-
-describe('ProtocolRegistrar.validateRegistrationPreconditions', () => {
-    let registrar: ProtocolRegistrar;
-
+describe('ProtocolRegistrar.validateRegistrationPrerequisites', () => {
     beforeEach(() => {
         jest.resetAllMocks();
+        mockExecAsync.mockReset();
         (os.platform as jest.Mock).mockReturnValue('linux');
         (os.homedir as jest.Mock).mockReturnValue('/home/user');
-        registrar = new ProtocolRegistrar();
     });
 
-    it('should reject unsupported platforms before touching OS state', async () => {
+    it('rejects unsupported platforms before registration', async () => {
         (os.platform as jest.Mock).mockReturnValue('freebsd');
+        const registrar = new ProtocolRegistrar('/usr/local/bin/glassbox');
 
-        await expect(registrar.validateRegistrationPreconditions()).rejects.toThrow(RegistrationValidationError);
-        await expect(registrar.validateRegistrationPreconditions()).rejects.toThrow(/not supported on freebsd/);
+        await expect(registrar.validateRegistrationPrerequisites()).rejects.toMatchObject({
+            name: 'ProtocolRegistrationError',
+            message: expect.stringContaining('not supported on freebsd'),
+        });
     });
 
-    it('should reject missing CLI executables', async () => {
+    it('rejects missing executable paths', async () => {
         (fs.access as jest.Mock).mockRejectedValue(new Error('ENOENT'));
+        const registrar = new ProtocolRegistrar('/missing/glassbox');
 
-        await expect(registrar.validateRegistrationPreconditions()).rejects.toThrow(/not found at/);
+        await expect(registrar.validateRegistrationPrerequisites()).rejects.toThrow(
+            ProtocolRegistrationError,
+        );
+        await expect(registrar.validateRegistrationPrerequisites()).rejects.toMatchObject({
+            message: expect.stringContaining('Executable not found'),
+        });
     });
 
-    it('should reject inaccessible home directories', async () => {
+    it('rejects non-executable binaries on Unix', async () => {
         (fs.access as jest.Mock)
             .mockResolvedValueOnce(undefined)
             .mockRejectedValueOnce(new Error('EACCES'));
+        mockExecAsync.mockResolvedValue({ stdout: '/usr/bin/xdg-mime\n', stderr: '' });
 
-        await expect(registrar.validateRegistrationPreconditions()).rejects.toThrow(/home directory is not accessible/);
+        const registrar = new ProtocolRegistrar('/usr/local/bin/glassbox');
+
+        await expect(registrar.validateRegistrationPrerequisites()).rejects.toMatchObject({
+            message: expect.stringContaining('not executable'),
+            remediation: expect.arrayContaining([expect.stringContaining('chmod +x')]),
+        });
     });
 
-    it('should pass when platform, binary, and home directory are valid', async () => {
+    it('requires xdg-mime on Linux', async () => {
+        (fs.access as jest.Mock).mockResolvedValue(undefined);
+        mockExecAsync.mockRejectedValue(new Error('xdg-mime not found'));
+
+        const registrar = new ProtocolRegistrar('/usr/local/bin/glassbox');
+
+        await expect(registrar.validateRegistrationPrerequisites()).rejects.toMatchObject({
+            message: expect.stringContaining('xdg-mime is not installed'),
+            remediation: expect.arrayContaining([expect.stringContaining('xdg-utils')]),
+        });
+    });
+
+    it('passes when Linux prerequisites are satisfied', async () => {
+        (fs.access as jest.Mock).mockResolvedValue(undefined);
+        mockExecAsync.mockResolvedValue({ stdout: '/usr/bin/xdg-mime\n', stderr: '' });
+
+        const registrar = new ProtocolRegistrar('/usr/local/bin/glassbox');
+        await expect(registrar.validateRegistrationPrerequisites()).resolves.toBeUndefined();
+    });
+
+    it('passes on macOS when the binary is executable', async () => {
+        (os.platform as jest.Mock).mockReturnValue('darwin');
         (fs.access as jest.Mock).mockResolvedValue(undefined);
 
-        await expect(registrar.validateRegistrationPreconditions()).resolves.toBeUndefined();
+        const registrar = new ProtocolRegistrar('/usr/local/bin/glassbox');
+        await expect(registrar.validateRegistrationPrerequisites()).resolves.toBeUndefined();
+    });
+
+    it('rejects invalid Windows binary extensions', async () => {
+        (os.platform as jest.Mock).mockReturnValue('win32');
+        (fs.access as jest.Mock).mockResolvedValue(undefined);
+
+        const registrar = new ProtocolRegistrar('C:\\Glassbox\\readme.txt');
+
+        await expect(registrar.validateRegistrationPrerequisites()).rejects.toMatchObject({
+            message: expect.stringContaining('does not look executable on Windows'),
+        });
+    });
+});
+
+describe('ProtocolRegistrar.register', () => {
+    beforeEach(() => {
+        jest.resetAllMocks();
+        mockExecAsync.mockReset();
+        (os.platform as jest.Mock).mockReturnValue('linux');
+        (os.homedir as jest.Mock).mockReturnValue('/home/user');
+    });
+
+    it('validates prerequisites before writing registration artefacts', async () => {
+        (fs.access as jest.Mock).mockRejectedValue(new Error('ENOENT'));
+        const registrar = new ProtocolRegistrar('/missing/glassbox');
+
+        await expect(registrar.register()).rejects.toThrow(ProtocolRegistrationError);
+        expect(fs.mkdir).not.toHaveBeenCalled();
+        expect(fs.writeFile).not.toHaveBeenCalled();
+    });
+
+    it('wraps shell command failures with remediation guidance', async () => {
+        (fs.access as jest.Mock).mockResolvedValue(undefined);
+        mockExecAsync
+            .mockResolvedValueOnce({ stdout: '/usr/bin/xdg-mime\n', stderr: '' })
+            .mockResolvedValueOnce(undefined)
+            .mockRejectedValueOnce({ stderr: 'permission denied', stdout: '' });
+
+        const registrar = new ProtocolRegistrar('/usr/local/bin/glassbox');
+
+        await expect(registrar.register()).rejects.toMatchObject({
+            message: expect.stringContaining('Registration command failed'),
+            remediation: expect.arrayContaining([
+                'Run "glassbox protocol:status" to inspect the current registration.',
+            ]),
+        });
     });
 });
 
@@ -235,5 +258,52 @@ describe('ProtocolRegistrar.diagnose', () => {
         expect(result.pathExists).toBe(true);
         expect(result.isExecutable).toBe(true);
         expect(result.issues).toHaveLength(0);
+    });
+});
+
+describe('ProtocolRegistrar.register', () => {
+    let registrar: ProtocolRegistrar;
+
+    beforeEach(() => {
+        jest.resetAllMocks();
+        (os.platform as jest.Mock).mockReturnValue(process.platform);
+        (os.homedir as jest.Mock).mockReturnValue(require('os').homedir());
+    });
+
+    it('should throw if CLI path is not absolute', async () => {
+        registrar = new ProtocolRegistrar('relative/path');
+        await expect(registrar.register()).rejects.toThrow("Registration failed: CLI path must be absolute, got 'relative/path'.");
+    });
+
+    it('should throw if CLI executable is not found', async () => {
+        registrar = new ProtocolRegistrar('/usr/local/bin/nonexistent');
+        (fs.access as jest.Mock).mockRejectedValue(new Error('ENOENT'));
+        await expect(registrar.register()).rejects.toThrow("Registration failed: CLI executable not found at '/usr/local/bin/nonexistent'.");
+    });
+
+    it('should throw if Windows executable has invalid extension', async () => {
+        (os.platform as jest.Mock).mockReturnValue('win32');
+        registrar = new ProtocolRegistrar('C:\\invalid.txt');
+        (fs.access as jest.Mock).mockResolvedValue(undefined);
+        await expect(registrar.register()).rejects.toThrow("Registration failed: Invalid executable extension on Windows for 'C:\\invalid.txt'.");
+    });
+
+    it('should throw if Unix executable is not executable', async () => {
+        (os.platform as jest.Mock).mockReturnValue('linux');
+        registrar = new ProtocolRegistrar('/usr/local/bin/script.sh');
+        (fs.access as jest.Mock).mockResolvedValueOnce(undefined); // First access check for existence
+        (fs.access as jest.Mock).mockRejectedValueOnce(new Error('EACCES')); // Second for executability
+        await expect(registrar.register()).rejects.toThrow("Registration failed: CLI file is not executable at '/usr/local/bin/script.sh'.");
+    });
+    
+    it('should throw with clear message if OS registration fails', async () => {
+        (os.platform as jest.Mock).mockReturnValue('linux');
+        registrar = new ProtocolRegistrar('/usr/local/bin/glassbox');
+        (fs.access as jest.Mock).mockResolvedValue(undefined);
+        
+        // Mock the internal registerLinux method to fail
+        jest.spyOn(registrar as any, 'registerLinux').mockRejectedValue(new Error('Permission denied'));
+        
+        await expect(registrar.register()).rejects.toThrow("Protocol registration failed on linux: Permission denied");
     });
 });

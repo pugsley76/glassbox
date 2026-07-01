@@ -137,3 +137,89 @@ func (c *Checkpoint) IsOrphaned() bool {
 	}
 	return !processAlive(c.PID)
 }
+
+// CheckpointIssue describes a single problem found during checkpoint validation.
+type CheckpointIssue struct {
+	// Field is the checkpoint field that is invalid or missing.
+	Field string
+	// Description explains what is wrong.
+	Description string
+	// Hint is an optional actionable suggestion for the user.
+	Hint string
+}
+
+// CheckpointReport is the output of ValidateCheckpoint.
+type CheckpointReport struct {
+	// OK is true when no issues were found.
+	OK bool
+	// Issues lists every validation problem found.
+	Issues []CheckpointIssue
+}
+
+// ValidateCheckpoint checks a Checkpoint record for completeness and
+// consistency before it is trusted for crash-recovery purposes. It validates:
+//
+//   - SessionID is non-empty
+//   - TxHash is non-empty
+//   - Network is a recognised Stellar network value
+//   - StartedAt is non-zero
+//   - PID is positive
+//
+// The function never modifies the checkpoint and is safe to call concurrently.
+func ValidateCheckpoint(cp *Checkpoint) *CheckpointReport {
+	report := &CheckpointReport{}
+
+	if cp.SessionID == "" {
+		report.Issues = append(report.Issues, CheckpointIssue{
+			Field:       "SessionID",
+			Description: "checkpoint is missing the session ID",
+			Hint:        "The checkpoint file is corrupt. Delete ~/.Glassbox/active_session.json and re-run 'glassbox debug <tx-hash>'.",
+		})
+	}
+
+	if cp.TxHash == "" {
+		report.Issues = append(report.Issues, CheckpointIssue{
+			Field:       "TxHash",
+			Description: "checkpoint is missing the transaction hash",
+			Hint:        "Re-run 'glassbox debug <tx-hash>' to create a valid checkpoint.",
+		})
+	}
+
+	if cp.Network == "" {
+		report.Issues = append(report.Issues, CheckpointIssue{
+			Field:       "Network",
+			Description: "checkpoint is missing the network",
+			Hint:        "Re-run 'glassbox debug <tx-hash> --network <testnet|mainnet|futurenet>'.",
+		})
+	} else {
+		validNetworks := map[string]bool{
+			"testnet": true, "mainnet": true, "futurenet": true,
+		}
+		if !validNetworks[cp.Network] {
+			report.Issues = append(report.Issues, CheckpointIssue{
+				Field:       "Network",
+				Description: "checkpoint network value " + cp.Network + " is not a recognised Stellar network",
+				Hint:        "Accepted values are: testnet, mainnet, futurenet.",
+			})
+		}
+	}
+
+	if cp.StartedAt.IsZero() {
+		report.Issues = append(report.Issues, CheckpointIssue{
+			Field:       "StartedAt",
+			Description: "checkpoint has a zero started_at timestamp",
+			Hint:        "The checkpoint was written by an incompatible Glassbox version. Delete it and re-run 'glassbox debug'.",
+		})
+	}
+
+	if cp.PID <= 0 {
+		report.Issues = append(report.Issues, CheckpointIssue{
+			Field:       "PID",
+			Description: fmt.Sprintf("checkpoint has an invalid PID: %d", cp.PID),
+			Hint:        "The checkpoint was created by an incompatible Glassbox version. Delete ~/.Glassbox/active_session.json.",
+		})
+	}
+
+	report.OK = len(report.Issues) == 0
+	return report
+}

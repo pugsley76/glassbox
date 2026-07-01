@@ -51,4 +51,10 @@ export interface AuditSigner {
    * Software signers return undefined.
    */
   attestation_chain?(): Promise<HardwareAttestation | undefined>;
+
+  /**
+   * Releases any provider-specific resources, such as a persistent PKCS#11
+   * session or external client handle.
+   */
+  close?(): Promise<void> | void;
 }

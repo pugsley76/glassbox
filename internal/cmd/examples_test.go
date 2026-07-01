@@ -188,3 +188,159 @@ func TestWasmDiffCmd_LongDescriptionMentionsSourceMapping(t *testing.T) {
 		t.Error("wasm-diff Long description should mention source mapping")
 	}
 }
+
+// ── Protocol command help output and examples ─────────────────────────────────
+
+// TestProtocolCommandExamples verifies that all protocol:* subcommands expose
+// non-empty Example fields so that --help output includes usage guidance.
+func TestProtocolCommandExamples(t *testing.T) {
+	cases := []struct {
+		name    string
+		example string
+	}{
+		{"protocol:register", protocolRegisterCmd.Example},
+		{"protocol:unregister", protocolUnregisterCmd.Example},
+		{"protocol:status", protocolStatusCmd.Example},
+		{"protocol:verify", protocolVerifyCmd.Example},
+		{"protocol:handle", protocolHandlerCmd.Example},
+		{"protocol:diagnose", protocolDiagnoseCmd.Example},
+		{"protocol:repair", protocolRepairCmd.Example},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if strings.TrimSpace(tc.example) == "" {
+				t.Errorf("command %q has no Example field; add usage examples to reduce onboarding friction", tc.name)
+			}
+		})
+	}
+}
+
+// TestProtocolCommandLongDescriptions verifies that all protocol:* subcommands
+// have non-empty Long descriptions.
+func TestProtocolCommandLongDescriptions(t *testing.T) {
+	cases := []struct {
+		name string
+		long string
+	}{
+		{"protocol:register", protocolRegisterCmd.Long},
+		{"protocol:unregister", protocolUnregisterCmd.Long},
+		{"protocol:status", protocolStatusCmd.Long},
+		{"protocol:verify", protocolVerifyCmd.Long},
+		{"protocol:handle", protocolHandlerCmd.Long},
+		{"protocol:diagnose", protocolDiagnoseCmd.Long},
+		{"protocol:repair", protocolRepairCmd.Long},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if strings.TrimSpace(tc.long) == "" {
+				t.Errorf("command %q has no Long description; add one to improve help output", tc.name)
+			}
+		})
+	}
+}
+
+// TestProtocolCommandExampleContent verifies that each protocol command's
+// Example field references the command name and relevant flags/params.
+func TestProtocolCommandExampleContent(t *testing.T) {
+	cases := []struct {
+		name        string
+		example     string
+		mustContain []string
+	}{
+		{
+			name:        "protocol:register",
+			example:     protocolRegisterCmd.Example,
+			mustContain: []string{"glassbox protocol:register", "--dry-run"},
+		},
+		{
+			name:        "protocol:unregister",
+			example:     protocolUnregisterCmd.Example,
+			mustContain: []string{"glassbox protocol:unregister"},
+		},
+		{
+			name:        "protocol:status",
+			example:     protocolStatusCmd.Example,
+			mustContain: []string{"glassbox protocol:status"},
+		},
+		{
+			name:        "protocol:verify",
+			example:     protocolVerifyCmd.Example,
+			mustContain: []string{"glassbox protocol:verify", "--probe"},
+		},
+		{
+			name:        "protocol:handle",
+			example:     protocolHandlerCmd.Example,
+			mustContain: []string{"glassbox protocol:handle", "glassbox://debug/", "network="},
+		},
+		{
+			name:        "protocol:diagnose",
+			example:     protocolDiagnoseCmd.Example,
+			mustContain: []string{"glassbox protocol:diagnose", "--json", "--format"},
+		},
+		{
+			name:        "protocol:repair",
+			example:     protocolRepairCmd.Example,
+			mustContain: []string{"glassbox protocol:repair"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, substr := range tc.mustContain {
+				if !strings.Contains(tc.example, substr) {
+					t.Errorf("command %q Example missing expected content %q", tc.name, substr)
+				}
+			}
+		})
+	}
+}
+
+// TestProtocolHandleCmd_LongDescribesURIFormat verifies the protocol:handle Long
+// description documents the URI format so users can construct valid deep links.
+func TestProtocolHandleCmd_LongDescribesURIFormat(t *testing.T) {
+	long := protocolHandlerCmd.Long
+	for _, required := range []string{
+		"glassbox://debug/",
+		"network",
+		"testnet", "mainnet", "futurenet",
+		"op",
+		"view",
+	} {
+		if !strings.Contains(long, required) {
+			t.Errorf("protocol:handle Long description should document %q; got:\n%s", required, long)
+		}
+	}
+}
+
+// TestProtocolRegisterCmd_LongDescribesDryRun verifies the Long description
+// explains the --dry-run flag so users know it is available.
+func TestProtocolRegisterCmd_LongDescribesDryRun(t *testing.T) {
+	if !strings.Contains(protocolRegisterCmd.Long, "--dry-run") {
+		t.Error("protocol:register Long description should mention --dry-run")
+	}
+}
+
+// TestProtocolDiagnoseCmd_LongDescribesExitCodes verifies that the protocol:diagnose
+// Long description documents the exit codes so scripts can rely on them.
+func TestProtocolDiagnoseCmd_LongDescribesExitCodes(t *testing.T) {
+	long := protocolDiagnoseCmd.Long
+	if !strings.Contains(long, "0") || !strings.Contains(long, "1") {
+		t.Error("protocol:diagnose Long description should document exit codes 0 and 1")
+	}
+	if !strings.Contains(long, "Exit") {
+		t.Error("protocol:diagnose Long description should include an 'Exit codes' section")
+	}
+}
+
+// TestProtocolRepairCmd_LongDescribesPlatforms verifies the repair Long
+// description names all three supported platforms.
+func TestProtocolRepairCmd_LongDescribesPlatforms(t *testing.T) {
+	long := protocolRepairCmd.Long
+	for _, platform := range []string{"Linux", "macOS", "Windows"} {
+		if !strings.Contains(long, platform) {
+			t.Errorf("protocol:repair Long description should mention platform %q; got:\n%s", platform, long)
+		}
+	}
+}

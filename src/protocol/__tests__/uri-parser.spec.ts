@@ -121,4 +121,40 @@ describe('URIParser', () => {
             expect(sanitized.length).toBeLessThanOrEqual(500);
         });
     });
+
+    describe('new parameters for regression and mock harness', () => {
+        it('should parse valid protocol-version, mock-ledger-manifest, and mock-ledger-entry', () => {
+            const uri = 'glassbox://debug/a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdeff?network=testnet&protocol-version=22&mock-ledger-manifest=/path/to/manifest.json&mock-ledger-entry=key1:AAAA&mock-ledger-entry=key2:BBBB';
+
+            const result = parser.parse(uri);
+
+            expect(result.protocolVersion).toBe(22);
+            expect(result.mockLedgerManifest).toBe('/path/to/manifest.json');
+            expect(result.mockLedgerEntries).toEqual(['key1:AAAA', 'key2:BBBB']);
+        });
+
+        it('should throw error for invalid protocol-version', () => {
+            const uri1 = 'glassbox://debug/a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdeff?network=testnet&protocol-version=-5';
+            expect(() => parser.parse(uri1)).toThrow('Invalid protocol-version: must be a positive integer');
+
+            const uri2 = 'glassbox://debug/a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdeff?network=testnet&protocol-version=99';
+            expect(() => parser.parse(uri2)).toThrow('Invalid protocol-version: unsupported version');
+        });
+
+        it('should throw error for invalid mock-ledger-manifest containing null bytes', () => {
+            const uri = 'glassbox://debug/a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdeff?network=testnet&mock-ledger-manifest=/path/to\0manifest.json';
+            expect(() => parser.parse(uri)).toThrow('Invalid mock-ledger-manifest: cannot contain null bytes');
+        });
+
+        it('should throw error for invalid mock-ledger-entry format or values', () => {
+            const uri1 = 'glassbox://debug/a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdeff?network=testnet&mock-ledger-entry=invalid';
+            expect(() => parser.parse(uri1)).toThrow('Invalid mock-ledger-entry format');
+
+            const uri2 = 'glassbox://debug/a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdeff?network=testnet&mock-ledger-entry=key:';
+            expect(() => parser.parse(uri2)).toThrow('Invalid mock-ledger-entry value');
+
+            const uri3 = 'glassbox://debug/a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdeff?network=testnet&mock-ledger-entry=key:invalid_base64_!@#$';
+            expect(() => parser.parse(uri3)).toThrow('Invalid mock-ledger-entry value');
+        });
+    });
 });

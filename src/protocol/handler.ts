@@ -146,7 +146,10 @@ export class ProtocolHandler {
             transactionHash: parsed.transactionHash,
             network: parsed.network,
             operation: parsed.operation,
-        });
+            protocolVersion: parsed.protocolVersion,
+            mockLedgerManifest: parsed.mockLedgerManifest,
+            mockLedgerEntries: parsed.mockLedgerEntries,
+        } as any);
 
         await session.start();
     }

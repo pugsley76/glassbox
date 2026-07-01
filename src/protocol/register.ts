@@ -10,9 +10,7 @@ import { promisify } from 'util';
 
 const execAsync = promisify(exec);
 
-const SUPPORTED_PLATFORMS = ['win32', 'darwin', 'linux'] as const;
-
-export type ProtocolRegistrationStatus = 'ok' | 'degraded' | 'not_registered' | 'unsupported';
+const SUPPORTED_PLATFORMS = new Set(['win32', 'darwin', 'linux']);
 
 export interface ProtocolDiagnostics {
     platform: string;
@@ -61,6 +59,20 @@ export function formatRegistrationSummary(diag: ProtocolDiagnostics): string {
 }
 
 /**
+ * Thrown when protocol registration prerequisites fail validation.
+ * Carries optional remediation steps for CLI output.
+ */
+export class ProtocolRegistrationError extends Error {
+    readonly remediation: string[];
+
+    constructor(message: string, remediation: string[] = []) {
+        super(message);
+        this.name = 'ProtocolRegistrationError';
+        this.remediation = remediation;
+    }
+}
+
+/**
  * ProtocolRegistrar handles the registration and unregistration of the
  * custom URI protocol handler (glassbox://) across different operating systems.
  */
@@ -68,88 +80,104 @@ export class ProtocolRegistrar {
     private readonly protocol = 'glassbox';
     private readonly cliPath: string;
 
-    constructor() {
-        this.cliPath = process.execPath;
+    constructor(cliPath?: string) {
+        // Get the absolute path to the Glassbox CLI executable
+        // In production, this would be the actual binary path
+        this.cliPath = cliPath || process.execPath;
     }
 
     /**
-     * Validate inputs before writing OS registration artefacts.
+     * Validate prerequisites before touching OS registration state.
+     * Fails fast with actionable errors for unsupported platforms, missing
+     * binaries, non-executable paths, and missing Linux dependencies.
      */
-    async validateRegistrationPreconditions(): Promise<void> {
+    async register(): Promise<void> {
+        if (!this.cliPath) {
+            throw new Error('Registration failed: CLI path is not defined.');
+        }
+
+        if (!path.isAbsolute(this.cliPath)) {
+            throw new Error(`Registration failed: CLI path must be absolute, got '${this.cliPath}'.`);
+        }
+
+        try {
+            await fs.access(this.cliPath);
+        } catch (err) {
+            throw new Error(`Registration failed: CLI executable not found at '${this.cliPath}'.`);
+        }
+
+        try {
+            if (os.platform() === 'win32') {
+                const ext = path.extname(this.cliPath).toLowerCase();
+                if (!['.exe', '.cmd', '.bat', '.com'].includes(ext)) {
+                    throw new Error(`Registration failed: Invalid executable extension on Windows for '${this.cliPath}'.`);
+                }
+            } else {
+                await fs.access(this.cliPath, fsConstants.X_OK);
+            }
+        } catch (err: any) {
+            if (err.message.startsWith('Registration failed')) {
+                throw err;
+            }
+            throw new Error(`Registration failed: CLI file is not executable at '${this.cliPath}'.`);
+        }
+
         const platform = os.platform();
 
-        if (!SUPPORTED_PLATFORMS.includes(platform as typeof SUPPORTED_PLATFORMS[number])) {
-            throw new RegistrationValidationError(
-                `Protocol registration is not supported on ${platform}.\n` +
-                '  Fix: use Linux, macOS, or Windows to register the glassbox:// handler.',
+        if (!SUPPORTED_PLATFORMS.has(platform)) {
+            throw new ProtocolRegistrationError(
+                `Protocol registration is not supported on ${platform}`,
+                [
+                    'Protocol registration is only supported on Windows, macOS, and Linux.',
+                    'Use the native glassbox CLI (Go build) for platform registration on this OS.',
+                ],
             );
         }
 
-        if (!this.cliPath || this.cliPath.trim() === '') {
-            throw new RegistrationValidationError(
-                'Cannot register: CLI executable path is empty.\n' +
-                '  Fix: invoke Glassbox from the installed binary, not a transient script.',
-            );
-        }
-
-        if (this.cliPath.includes('\0')) {
-            throw new RegistrationValidationError(
-                'Cannot register: CLI executable path contains a null byte.\n' +
-                '  Fix: reinstall Glassbox from a trusted source.',
+        if (!this.cliPath || this.cliPath.includes('\0')) {
+            throw new ProtocolRegistrationError(
+                'Executable path is invalid or contains a null byte and cannot be trusted',
+                ['Ensure the Glassbox binary is installed correctly.'],
             );
         }
 
         try {
             await fs.access(this.cliPath);
         } catch {
-            throw new RegistrationValidationError(
-                `Cannot register: CLI executable not found at ${this.cliPath}.\n` +
-                '  Fix: reinstall Glassbox or verify the binary path is correct.',
+            throw new ProtocolRegistrationError(
+                `Executable not found at ${this.cliPath}`,
+                [
+                    'Ensure the glassbox binary is installed correctly and the path is not a broken symlink.',
+                    'Re-run registration from the installed binary rather than via a transient path.',
+                ],
             );
         }
 
-        try {
-            await fs.access(os.homedir());
-        } catch {
-            throw new RegistrationValidationError(
-                `Cannot register: home directory is not accessible (${os.homedir()}).\n` +
-                '  Fix: ensure your user home directory exists and is readable.',
-            );
-        }
-    }
-
-    /**
-     * Register the glassbox:// protocol handler for the current OS
-     */
-    async register(): Promise<void> {
-        await this.validateRegistrationPreconditions();
-        const platform = os.platform();
-
-        try {
-            switch (platform) {
-                case 'win32':
-                    await this.registerWindows();
-                    break;
-                case 'darwin':
-                    await this.registerMacOS();
-                    break;
-                case 'linux':
-                    await this.registerLinux();
-                    break;
-                default:
-                    throw new RegistrationValidationError(
-                        `Protocol registration is not supported on ${platform}.\n` +
-                        '  Fix: use Linux, macOS, or Windows to register the glassbox:// handler.',
-                    );
+        if (platform === 'win32') {
+            const ext = path.extname(this.cliPath).toLowerCase();
+            if (ext !== '' && !['.exe', '.cmd', '.bat', '.com'].includes(ext)) {
+                throw new ProtocolRegistrationError(
+                    `Registered binary ${this.cliPath} does not look executable on Windows`,
+                    [
+                        'Ensure the registered file is a runnable .exe, .cmd, .bat, or .com binary.',
+                    ],
+                );
             }
+        } else {
+            try {
+                await fs.access(this.cliPath, fsConstants.X_OK);
+            } catch {
+                throw new ProtocolRegistrationError(
+                    `Binary at ${this.cliPath} is not executable`,
+                    [`Restore execute permissions, for example: chmod +x ${this.cliPath}`],
+                );
+            }
+        }
 
             console.log(` Protocol handler registered for ${this.protocol}://`);
-        } catch (error) {
-            if (error instanceof RegistrationValidationError) {
-                throw error;
-            }
+        } catch (error: any) {
             console.error('Failed to register protocol handler:', error);
-            throw error;
+            throw new Error(`Protocol registration failed on ${platform}: ${error.message}`);
         }
     }
 
@@ -166,7 +194,7 @@ export class ProtocolRegistrar {
         ];
 
         for (const cmd of commands) {
-            await execAsync(cmd);
+            await this.runShellCommand(cmd);
         }
     }
 
@@ -178,7 +206,7 @@ export class ProtocolRegistrar {
             os.homedir(),
             'Library',
             'LaunchAgents',
-            `com.glassbox.protocol.plist`,
+            'com.glassbox.protocol.plist',
         );
 
         const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
@@ -213,7 +241,7 @@ export class ProtocolRegistrar {
 </plist>`;
 
         await fs.writeFile(plistPath, plistContent, 'utf8');
-        await execAsync(`launchctl load ${plistPath}`);
+        await this.runShellCommand(`launchctl load ${plistPath}`);
     }
 
     /**
@@ -240,8 +268,10 @@ Terminal=false`;
         await fs.mkdir(path.dirname(desktopPath), { recursive: true });
         await fs.writeFile(desktopPath, desktopContent, 'utf8');
 
-        await execAsync(`xdg-mime default glassbox-protocol.desktop x-scheme-handler/${this.protocol}`);
-        await execAsync('update-desktop-database ~/.local/share/applications/');
+        await this.runShellCommand(
+            `xdg-mime default glassbox-protocol.desktop x-scheme-handler/${this.protocol}`,
+        );
+        await this.runShellCommand('update-desktop-database ~/.local/share/applications/');
     }
 
     /**
@@ -250,35 +280,41 @@ Terminal=false`;
     async unregister(): Promise<void> {
         const platform = os.platform();
 
-        if (!SUPPORTED_PLATFORMS.includes(platform as typeof SUPPORTED_PLATFORMS[number])) {
-            throw new RegistrationValidationError(
-                `Protocol unregistration is not supported on ${platform}.\n` +
-                '  Fix: manually remove any custom protocol handler configuration on this platform.',
+        if (!SUPPORTED_PLATFORMS.has(platform)) {
+            throw new ProtocolRegistrationError(
+                `Protocol unregistration is not supported on ${platform}`,
+                ['Protocol registration is only supported on Windows, macOS, and Linux.'],
             );
         }
 
-        try {
-            switch (platform) {
-                case 'win32':
-                    await execAsync(`reg delete "HKEY_CURRENT_USER\\Software\\Classes\\${this.protocol}" /f`);
-                    break;
-                case 'darwin': {
-                    const plistPath = path.join(os.homedir(), 'Library', 'LaunchAgents', 'com.glassbox.protocol.plist');
-                    await execAsync(`launchctl unload ${plistPath}`);
-                    await fs.unlink(plistPath);
-                    break;
-                }
-                case 'linux': {
-                    const desktopPath = path.join(os.homedir(), '.local', 'share', 'applications', 'glassbox-protocol.desktop');
-                    await fs.unlink(desktopPath);
-                    break;
-                }
+        switch (platform) {
+            case 'win32':
+                await this.runShellCommand(
+                    `reg delete "HKEY_CURRENT_USER\\Software\\Classes\\${this.protocol}" /f`,
+                );
+                break;
+            case 'darwin': {
+                const plistPath = path.join(
+                    os.homedir(),
+                    'Library',
+                    'LaunchAgents',
+                    'com.glassbox.protocol.plist',
+                );
+                await this.runShellCommand(`launchctl unload ${plistPath}`);
+                await fs.unlink(plistPath);
+                break;
             }
-
-            console.log(' Protocol handler unregistered');
-        } catch (error) {
-            console.error('Failed to unregister protocol handler:', error);
-            throw error;
+            case 'linux': {
+                const desktopPath = path.join(
+                    os.homedir(),
+                    '.local',
+                    'share',
+                    'applications',
+                    'glassbox-protocol.desktop',
+                );
+                await fs.unlink(desktopPath);
+                break;
+            }
         }
     }
 
@@ -295,16 +331,29 @@ Terminal=false`;
         try {
             switch (platform) {
                 case 'win32': {
-                    const { stdout } = await execAsync(`reg query "HKEY_CURRENT_USER\\Software\\Classes\\${this.protocol}"`);
+                    const { stdout } = await execAsync(
+                        `reg query "HKEY_CURRENT_USER\\Software\\Classes\\${this.protocol}"`,
+                    );
                     return stdout.includes('URL Protocol');
                 }
                 case 'darwin': {
-                    const plistPath = path.join(os.homedir(), 'Library', 'LaunchAgents', 'com.glassbox.protocol.plist');
+                    const plistPath = path.join(
+                        os.homedir(),
+                        'Library',
+                        'LaunchAgents',
+                        'com.glassbox.protocol.plist',
+                    );
                     await fs.access(plistPath);
                     return true;
                 }
                 case 'linux': {
-                    const desktopPath = path.join(os.homedir(), '.local', 'share', 'applications', 'glassbox-protocol.desktop');
+                    const desktopPath = path.join(
+                        os.homedir(),
+                        '.local',
+                        'share',
+                        'applications',
+                        'glassbox-protocol.desktop',
+                    );
                     await fs.access(desktopPath);
                     return true;
                 }
@@ -323,22 +372,31 @@ Terminal=false`;
             switch (platform) {
                 case 'win32': {
                     const { stdout } = await execAsync(
-                        `reg query "HKEY_CURRENT_USER\\Software\\Classes\\${this.protocol}\\shell\\open\\command" /ve`
+                        `reg query "HKEY_CURRENT_USER\\Software\\Classes\\${this.protocol}\\shell\\open\\command" /ve`,
                     );
                     const match = stdout.match(/"([^"]+)"\s+protocol-handler/);
                     return match ? match[1] : null;
                 }
                 case 'darwin': {
                     const plistPath = path.join(
-                        os.homedir(), 'Library', 'LaunchAgents', 'com.glassbox.protocol.plist'
+                        os.homedir(),
+                        'Library',
+                        'LaunchAgents',
+                        'com.glassbox.protocol.plist',
                     );
                     const content = await fs.readFile(plistPath, 'utf8');
-                    const match = content.match(/<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]+)<\/string>/);
+                    const match = content.match(
+                        /<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]+)<\/string>/,
+                    );
                     return match ? match[1] : null;
                 }
                 case 'linux': {
                     const desktopPath = path.join(
-                        os.homedir(), '.local', 'share', 'applications', 'glassbox-protocol.desktop'
+                        os.homedir(),
+                        '.local',
+                        'share',
+                        'applications',
+                        'glassbox-protocol.desktop',
                     );
                     const content = await fs.readFile(desktopPath, 'utf8');
                     const match = content.match(/^Exec=(.+)\s+protocol-handler/m);
@@ -429,5 +487,42 @@ Terminal=false`;
 
         base.status = 'ok';
         return base;
+    }
+
+    private async ensureLinuxDependencies(): Promise<void> {
+        try {
+            await execAsync('command -v xdg-mime');
+        } catch {
+            throw new ProtocolRegistrationError(
+                'xdg-mime is not installed: cannot register the glassbox:// MIME handler',
+                [
+                    'Install xdg-utils — try one of:',
+                    '  sudo apt install xdg-utils   (Debian/Ubuntu)',
+                    '  sudo dnf install xdg-utils   (Fedora/RHEL)',
+                    '  sudo pacman -S xdg-utils     (Arch Linux)',
+                ],
+            );
+        }
+    }
+
+    private async runShellCommand(command: string): Promise<void> {
+        try {
+            await execAsync(command);
+        } catch (error: unknown) {
+            const execError = error as {
+                message?: string;
+                stderr?: string;
+                stdout?: string;
+            };
+            const detail = (execError.stderr || execError.stdout || execError.message || '').trim();
+            const summary = detail
+                ? `Registration command failed: ${detail}`
+                : `Registration command failed while running: ${command}`;
+
+            throw new ProtocolRegistrationError(summary, [
+                'Run "glassbox protocol:status" to inspect the current registration.',
+                'If registration remains broken, unregister and register again.',
+            ]);
+        }
     }
 }

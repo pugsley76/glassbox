@@ -352,6 +352,22 @@ func (t *Tracker) GenerateTrace() *AuthTrace {
 		trace.Success = true
 	}
 
+	// Populate AccountID and SignerCount from the first initialized account context
+	// so that ValidateAuthTrace and report consumers have account metadata available.
+	for accountID, ctx := range t.accountContexts {
+		if trace.AccountID == "" {
+			trace.AccountID = accountID
+		}
+		trace.SignerCount += uint32(len(ctx.Signers))
+		for _, kw := range ctx.Signers {
+			trace.SignatureWeights = append(trace.SignatureWeights, KeyWeight{
+				PublicKey: kw.SignerKey,
+				Weight:    kw.Weight,
+				Type:      kw.SignerType,
+			})
+		}
+	}
+
 	for _, event := range events {
 		if event.EventType == "signature_verification" && event.Status == "valid" {
 			trace.ValidSignatures++
@@ -384,9 +400,10 @@ func (t *Tracker) GenerateTrace() *AuthTrace {
 		diags.EmptyTraceReason = "auth failures were detected but no detailed auth events were recorded — " +
 			"suggesting auth checks may have been bypassed or the simulator failed to capture them."
 	}
-	if diags.EmptyTraceReason != "" || diags.SourceMappingHint != "" {
-		trace.Diagnostics = diags
-	}
+
+	// Always attach diagnostics so callers can inspect coverage metadata even
+	// when the trace is healthy and fully source-mapped.
+	trace.Diagnostics = diags
 
 	return trace
 }
