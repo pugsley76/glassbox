@@ -27,6 +27,7 @@ import (
 	"github.com/dotandev/glassbox/internal/lto"
 	"github.com/dotandev/glassbox/internal/perfmetrics"
 	"github.com/dotandev/glassbox/internal/profile"
+	"github.com/dotandev/glassbox/internal/progress"
 	"github.com/dotandev/glassbox/internal/replay"
 	"github.com/dotandev/glassbox/internal/rpc"
 	"github.com/dotandev/glassbox/internal/security"
@@ -646,6 +647,11 @@ Local WASM Replay Mode:
 	RunE: func(cmd *cobra.Command, cmdArgs []string) error {
 		perfCollector := perfmetrics.NewCollector()
 
+		// Build progress sink — NopSink unless --progress-json is active.
+		progSink := buildDebugSink()
+		progEm := progress.NewEmitter(progSink)
+		progEm.Start(progress.PhaseInit, "debug command starting")
+
 		if verbose {
 			logger.SetLevel(slog.LevelInfo)
 		} else {
@@ -655,6 +661,7 @@ Local WASM Replay Mode:
 		// Dry-run: validate inputs and environment without executing replay
 		if debugDryRunFlag {
 			if demoMode || wasmPath != "" || loadSnapshotsFlag != "" || xdrFileFlag != "" || jsonFileFlag != "" {
+				progEm.Error(progress.PhaseInit, "--dry-run combined with incompatible flag", "invalid_dry_run_flags")
 				return errors.WrapValidationError(
 					"--dry-run cannot be combined with --demo, --wasm, --load-snapshots, or local envelope input; " +
 						"--dry-run only validates the network transaction path")
@@ -739,6 +746,8 @@ Local WASM Replay Mode:
 			}
 			defer cleanup()
 		}
+
+		progEm.Complete(progress.PhaseInit, "initialization complete")
 
 		// Start root span
 		tracer := telemetry.GetTracer()
@@ -899,6 +908,7 @@ Local WASM Replay Mode:
 			if localInputNetwork != "" && !cmd.Flags().Changed("network") {
 				networkFlag = localInputNetwork
 			}
+			emitFetchSkipped(progEm, "local envelope input — no network fetch required")
 			fmt.Printf("Loaded local transaction envelope from %s\n", func() string {
 				if xdrFileFlag != "" {
 					return xdrFileFlag
@@ -908,15 +918,17 @@ Local WASM Replay Mode:
 			fmt.Printf("Envelope size: %d bytes\n", len(resp.EnvelopeXdr))
 		} else {
 			fmt.Printf("Fetching transaction: %s\n", txHash)
+			emitFetchStart(progEm, txHash, networkFlag)
 			_t0 := time.Now()
 			resp, err = client.GetTransaction(ctx, txHash)
 			if showMetricsFlag {
 				perfCollector.RecordRPC("getTransaction", time.Since(_t0), err != nil)
 			}
 			if err != nil {
+				emitFetchError(progEm, err)
 				return errors.WrapRPCConnectionFailed(err)
 			}
-
+			emitFetchComplete(progEm, txHash, networkFlag, len(resp.EnvelopeXdr))
 			fmt.Printf("Transaction fetched successfully. Envelope size: %d bytes\n", len(resp.EnvelopeXdr))
 		}
 		keys, err := extractLedgerKeys(resp.ResultMetaXdr)
@@ -1071,13 +1083,21 @@ Local WASM Replay Mode:
 				if showMetricsFlag {
 					perfCollector.StartSim()
 				}
+				emitSimulateStart(progEm, networkFlag, len(ledgerEntries))
 				simResp, err = runner.Run(ctx, simReq)
 				if showMetricsFlag {
 					perfCollector.StopSim()
 				}
 				if err != nil {
+					emitSimulateError(progEm, err)
 					return errors.WrapSimulationFailed(err, "")
 				}
+				emitSimulateComplete(progEm, networkFlag, func() string {
+					if simResp != nil {
+						return simResp.Status
+					}
+					return "unknown"
+				}())
 				printSimulationResult(networkFlag, simResp)
 				// Budget usage is already rendered inside printSimulationResult; skip duplicate block.
 
@@ -1278,6 +1298,7 @@ Local WASM Replay Mode:
 		}
 
 		// Analysis: Security
+		emitAnalyzeStart(progEm)
 		fmt.Printf("\n=== Security Analysis ===\n")
 		secDetector := security.NewDetector()
 		findings := secDetector.Analyze(resp.EnvelopeXdr, resp.ResultMetaXdr, lastSimResp.Events, lastSimResp.Logs)
@@ -1290,6 +1311,7 @@ Local WASM Replay Mode:
 			}
 		}
 		printSecurityFindings(findings)
+		emitAnalyzeComplete(progEm)
 
 		// Analysis: Token Flows
 		hasTokenFlows := false
@@ -1422,7 +1444,9 @@ Local WASM Replay Mode:
 				}
 				fmt.Fprintf(os.Stderr, "Exporting %d-step trace as %s to %s...\n",
 					len(execTrace.States), targetFmt, outPath)
+				emitExportStart(progEm, outPath)
 				if err := trace.ExportWithCompatibility(execTrace, targetFmt, outPath, trace.ExportOptions{}, trace.DefaultCompatibilityOptions()); err != nil {
+					emitExportError(progEm, outPath, err)
 					fmt.Fprintf(os.Stderr,
 						"%s Trace export failed: %v\n"+
 							"  Fix: check that the output directory exists and you have write permissions.\n"+
@@ -1430,6 +1454,7 @@ Local WASM Replay Mode:
 						visualizer.Symbol("error"), err, outPath,
 					)
 				} else {
+					emitExportComplete(progEm, outPath)
 					sizeStr := traceExportedFileSize(outPath)
 					fmt.Printf("%s Trace exported to: %s%s\n", visualizer.Symbol("success"), outPath, sizeStr)
 				}
@@ -1502,6 +1527,7 @@ Local WASM Replay Mode:
 			}
 		}
 
+		emitDone(progEm)
 		return nil
 	},
 }
