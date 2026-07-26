@@ -479,9 +479,3 @@ func validateModuleExtension(path string) string {
 	}
 	return ""
 }
-
-	if hint, ok := hints[path]; ok {
-		return hint
-	}
-	return fmt.Sprintf("verify the path %q is correct for your platform and HSM vendor; check vendor documentation for the module location", path)
-}
