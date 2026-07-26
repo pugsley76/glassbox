@@ -161,6 +161,8 @@ Example:
 }
 
 func (d *DebugCommand) runDebug(cmd *cobra.Command, cmdArgs []string) error {
+	ctx, _ := telemetry.EnsureCorrelationID(cmd.Context())
+	cmd.SetContext(ctx)
 	txHash := cmdArgs[0]
 
 	token := rpcTokenFlag
@@ -649,6 +651,9 @@ Local WASM Replay Mode:
 		return nil
 	},
 	RunE: func(cmd *cobra.Command, cmdArgs []string) error {
+		ctx, corrID := telemetry.EnsureCorrelationID(cmd.Context())
+		cmd.SetContext(ctx)
+
 		perfCollector := perfmetrics.NewCollector()
 		// diagCollector is active only when --timings is set; otherwise it is a
 		// zero-cost no-op so the hot path is not affected.
@@ -658,6 +663,7 @@ Local WASM Replay Mode:
 		} else {
 			diagCollector = diagnostics.Noop()
 		}
+		diagCollector.SetCorrelationID(corrID)
 
 		if verbose {
 			logger.SetLevel(slog.LevelInfo)
