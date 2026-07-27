@@ -12,10 +12,10 @@ package trace
 
 import (
 	"bufio"
-	"hash/crc32"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 )
