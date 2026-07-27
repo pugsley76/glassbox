@@ -8,7 +8,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/dotandev/glassbox/internal/config"
 )
 
 func TestConfigShowJSONOutput(t *testing.T) {
@@ -117,12 +120,12 @@ func TestResolveConfigSource(t *testing.T) {
 }
 
 func TestBuildConfigOutput(t *testing.T) {
-	cfg := &mockConfig{
-		RpcUrl:     "https://test.example.com",
-		Network:    "testnet",
-		LogLevel:   "debug",
-		CachePath:  "/tmp/cache",
-		Telemetry:  true,
+	cfg := &config.Config{
+		RpcUrl:    "https://test.example.com",
+		Network:   "testnet",
+		LogLevel:  "debug",
+		CachePath: "/tmp/cache",
+		Telemetry: true,
 	}
 
 	output := buildConfigOutput(cfg, "/test/config.toml")
@@ -159,12 +162,67 @@ func containsAt(s, substr string) bool {
 	return false
 }
 
-// mockConfig is a minimal mock for testing config output building.
-type mockConfig struct {
-	RpcUrl     string
-	Network    string
-	LogLevel   string
-	CachePath  string
-	Telemetry  bool
-	RPCToken   string
+// ── stripURLCredentials ───────────────────────────────────────────────────────
+
+func TestStripURLCredentials_RemovesUserInfo(t *testing.T) {
+	urls := []string{"https://user:pass@rpc.example.com/api"}
+	got := stripURLCredentials(urls)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(got))
+	}
+	if strings.Contains(got[0], "user") || strings.Contains(got[0], "pass") {
+		t.Errorf("credentials should be stripped, got: %q", got[0])
+	}
+	if !strings.Contains(got[0], "rpc.example.com") {
+		t.Errorf("host should be preserved, got: %q", got[0])
+	}
+}
+
+func TestStripURLCredentials_NoCredentials_Unchanged(t *testing.T) {
+	urls := []string{"https://rpc.example.com/api", "http://localhost:8000"}
+	got := stripURLCredentials(urls)
+	for i, u := range got {
+		if u != urls[i] {
+			t.Errorf("URL without credentials should be unchanged: got %q, want %q", u, urls[i])
+		}
+	}
+}
+
+func TestStripURLCredentials_InvalidURL_ReplacedWithPlaceholder(t *testing.T) {
+	urls := []string{"not a valid url %%"}
+	got := stripURLCredentials(urls)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(got))
+	}
+	if got[0] != "[invalid url]" {
+		t.Errorf("invalid URL should produce placeholder, got: %q", got[0])
+	}
+}
+
+func TestStripURLCredentials_EmptySlice_ReturnsEmpty(t *testing.T) {
+	got := stripURLCredentials(nil)
+	if len(got) != 0 {
+		t.Errorf("empty input should return empty slice, got: %v", got)
+	}
+}
+
+func TestStripURLCredentials_MixedSlice_AllProcessed(t *testing.T) {
+	urls := []string{
+		"https://user:secret@rpc1.example.com",
+		"https://rpc2.example.com",
+		"not-a-url%%",
+	}
+	got := stripURLCredentials(urls)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(got))
+	}
+	if strings.Contains(got[0], "secret") {
+		t.Errorf("first URL credentials should be stripped, got: %q", got[0])
+	}
+	if got[1] != "https://rpc2.example.com" {
+		t.Errorf("second URL should be unchanged, got: %q", got[1])
+	}
+	if got[2] != "[invalid url]" {
+		t.Errorf("invalid URL should be placeholder, got: %q", got[2])
+	}
 }

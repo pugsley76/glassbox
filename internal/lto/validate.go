@@ -46,6 +46,12 @@ func ValidateCargoProject(dir string) ([]ValidationResult, error) {
 	var results []ValidationResult
 
 	rootToml := filepath.Join(dir, "Cargo.toml")
+	if _, err := os.Stat(rootToml); err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("no Cargo.toml found in %s", dir)
+		}
+		return nil, fmt.Errorf("cannot read %s: %w", rootToml, err)
+	}
 	data, err := os.ReadFile(rootToml)
 	if err != nil {
 		return nil, fmt.Errorf("cannot read %s: %w", rootToml, err)
@@ -168,6 +174,7 @@ func checkLTO(path, profName string, ps *profileSettings) []ValidationResult {
 		return nil
 	}
 	kind := ParseLTOValue(ps.ltoValue)
+	normalized := strings.Trim(strings.TrimSpace(ps.ltoValue), "\"'")
 	switch kind {
 	case LTOFat:
 		return []ValidationResult{{
@@ -193,6 +200,21 @@ func checkLTO(path, profName string, ps *profileSettings) []ValidationResult {
 				profName, ps.ltoValue,
 			),
 			Fix: "Consider setting lto = false in [profile." + profName + "] for reliable source-level debugging",
+		}}
+	case LTONone:
+		if normalized == "" || normalized == "false" || normalized == "off" {
+			return nil
+		}
+		return []ValidationResult{{
+			File:     path,
+			Profile:  profName,
+			Field:    "lto",
+			Severity: "error",
+			Message: fmt.Sprintf(
+				"[%s] lto = %s — unsupported value; expected one of: false, off, true, fat, thin",
+				profName, ps.ltoValue,
+			),
+			Fix: "Set lto = false or remove the lto key in [profile." + profName + "]",
 		}}
 	}
 	return nil
@@ -226,7 +248,20 @@ func checkDebug(path, profName string, ps *profileSettings) []ValidationResult {
 			Fix: "Set debug = 1 (line tables) or debug = 2 (full DWARF) in [profile.release]",
 		}}
 	}
-	return nil
+	if dv == "true" || dv == "1" || dv == "2" {
+		return nil
+	}
+	return []ValidationResult{{
+		File:     path,
+		Profile:  profName,
+		Field:    "debug",
+		Severity: "error",
+		Message: fmt.Sprintf(
+			"[%s] debug = %s — unsupported value; expected one of: true, false, 0, 1, 2",
+			profName, ps.debugValue,
+		),
+		Fix: "Set debug = 1 (line tables) or debug = 2 (full DWARF) in [profile.release]",
+	}}
 }
 
 func checkCodegenUnits(path, profName string, ps *profileSettings) []ValidationResult {

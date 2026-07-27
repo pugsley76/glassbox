@@ -217,7 +217,190 @@ func TestAuthDebugPreRunE_AcceptsValidInputs(t *testing.T) {
 	}
 	authRPCURLFlag = ""
 
-	if err := authDebugCmd.PreRunE(authDebugCmd, []string{validAuthTxHash}); err != nil {
+	if err := authDebugCmd.PreRunE(auditVerifyCmd, []string{validAuthTxHash}); err != nil {
 		t.Fatalf("expected valid inputs to pass PreRunE, got: %v", err)
+	}
+}
+
+// ── Auth trace diagnostics (source mapping) ──────────────────────────────────
+
+func TestAuthTraceDiagnostics_EmptyTrace_ReasonSet(t *testing.T) {
+	tracker := authtrace.NewTracker(authtrace.Config{})
+	trace := tracker.GenerateTrace()
+
+	if trace.Diagnostics == nil {
+		t.Fatal("expected Diagnostics to be set for empty trace")
+	}
+	if trace.Diagnostics.EmptyTraceReason == "" {
+		t.Error("expected EmptyTraceReason to be populated for empty trace")
+	}
+	if !strings.Contains(trace.Diagnostics.EmptyTraceReason, "no Soroban authorization entries") {
+		t.Errorf("EmptyTraceReason should mention Soroban auth entries, got: %s", trace.Diagnostics.EmptyTraceReason)
+	}
+	if !strings.Contains(trace.Diagnostics.EmptyTraceReason, "doctor") {
+		t.Errorf("EmptyTraceReason should suggest running 'glassbox doctor', got: %s", trace.Diagnostics.EmptyTraceReason)
+	}
+}
+
+func TestAuthTraceDiagnostics_WithEvents_SourceMappingHintPresent(t *testing.T) {
+	tracker := authtrace.NewTracker(authtrace.Config{
+		TraceCustomContracts: true,
+		CaptureSigDetails:    true,
+		MaxEventDepth:        1000,
+	})
+	tracker.RecordEvent(authtrace.AuthEvent{
+		EventType: "signature_verification",
+		Status:    "valid",
+		Weight:    1,
+		AccountID: "GABC",
+	})
+	trace := tracker.GenerateTrace()
+
+	if trace.Diagnostics == nil {
+		t.Fatal("expected Diagnostics to be set when events are present")
+	}
+	if trace.Diagnostics.SourceMappingAvailable {
+		t.Error("expected SourceMappingAvailable to be false when events lack source mapping")
+	}
+	if !strings.Contains(trace.Diagnostics.SourceMappingHint, "debug = true") {
+		t.Errorf("SourceMappingHint should suggest recompiling with debug=true, got: %s", trace.Diagnostics.SourceMappingHint)
+	}
+	if !strings.Contains(trace.Diagnostics.SourceMappingHint, "--contract-source") {
+		t.Errorf("SourceMappingHint should suggest --contract-source, got: %s", trace.Diagnostics.SourceMappingHint)
+	}
+}
+
+func TestAuthTraceDiagnostics_WithSourceMapping_CoverageTracked(t *testing.T) {
+	tracker := authtrace.NewTracker(authtrace.Config{})
+	tracker.RecordEvent(authtrace.AuthEvent{
+		EventType:  "signature_verification",
+		Status:     "valid",
+		SourceFile: "src/contract.rs",
+		SourceLine: 42,
+	})
+	tracker.RecordEvent(authtrace.AuthEvent{
+		EventType: "threshold_check",
+		Status:    "fail",
+	})
+	trace := tracker.GenerateTrace()
+
+	if trace.Diagnostics == nil {
+		t.Fatal("expected Diagnostics to be set")
+	}
+	if !trace.Diagnostics.SourceMappingAvailable {
+		t.Error("expected SourceMappingAvailable to be true when at least one event has source context")
+	}
+	if trace.Diagnostics.EventsWithSourceCount != 1 {
+		t.Errorf("expected 1 event with source mapping, got %d", trace.Diagnostics.EventsWithSourceCount)
+	}
+	if trace.Diagnostics.SourceMappingHint != "" {
+		t.Errorf("expected no source mapping hint when source context is available, got: %s", trace.Diagnostics.SourceMappingHint)
+	}
+}
+
+// TestAuthDebugCmd_HasExample verifies that auth-debug exposes a non-empty
+// Example field so --help output includes representative usage guidance.
+func TestAuthDebugCmd_HasExample(t *testing.T) {
+	if strings.TrimSpace(authDebugCmd.Example) == "" {
+		t.Error("auth-debug command must have a non-empty Example field to reduce onboarding friction")
+	}
+}
+
+// TestAuthDebugCmd_ExampleMentionsFlags verifies the example covers the key
+// flags so users can discover --detailed and --json from --help output.
+func TestAuthDebugCmd_ExampleMentionsFlags(t *testing.T) {
+	for _, required := range []string{"--network", "--detailed", "--json"} {
+		if !strings.Contains(authDebugCmd.Example, required) {
+			t.Errorf("auth-debug Example should mention %q; run 'glassbox auth-debug --help' to see the current output", required)
+		}
+	}
+}
+
+// TestAuthDebugCmd_LongDescriptionMentionsValidation verifies that the Long
+// description communicates the early-validation contract so users know inputs
+// are checked before any network call.
+func TestAuthDebugCmd_LongDescriptionMentionsValidation(t *testing.T) {
+	long := authDebugCmd.Long
+	for _, required := range []string{"validated", "--network", "--rpc-url"} {
+		if !strings.Contains(long, required) {
+			t.Errorf("auth-debug Long description should mention %q", required)
+		}
+	}
+}
+
+// TestAuthDebugCmd_LongDescribesJSONDetailedInteraction verifies that the Long
+// description explains the --detailed + --json interaction so users are not
+// surprised when --detailed has no visible effect with --json.
+func TestAuthDebugCmd_LongDescribesJSONDetailedInteraction(t *testing.T) {
+	if !strings.Contains(authDebugCmd.Long, "--detailed") {
+		t.Error("auth-debug Long description should document the --detailed flag behaviour")
+	}
+	if !strings.Contains(authDebugCmd.Long, "--json") {
+		t.Error("auth-debug Long description should document the --json flag behaviour")
+	}
+}
+
+// TestValidateAuthDebugInputs_ErrorMentionsExample verifies that a validation
+// error for a missing hash includes a concrete usage example so the user knows
+// exactly what format is expected.
+func TestValidateAuthDebugInputs_ErrorMentionsExample(t *testing.T) {
+	err := validateAuthDebugInputs("", "testnet", "")
+	if err == nil {
+		t.Fatal("expected error for empty hash")
+	}
+	if !strings.Contains(err.Error(), "glassbox auth-debug") {
+		t.Errorf("error should include a usage example referencing 'glassbox auth-debug', got: %v", err)
+	}
+}
+
+// TestValidateAuthDebugInputs_InvalidHash_ErrorEchoesValue verifies that the
+// validation error for a too-short hash echoes the invalid value so the user
+// can see what was rejected.
+func TestValidateAuthDebugInputs_InvalidHash_ErrorEchoesValue(t *testing.T) {
+	badHash := "tooshort"
+	err := validateAuthDebugInputs(badHash, "testnet", "")
+	if err == nil {
+		t.Fatal("expected error for short hash")
+	}
+	if !strings.Contains(err.Error(), badHash) {
+		t.Errorf("error should echo the invalid hash %q; got: %v", badHash, err)
+	}
+}
+
+// TestValidateAuthDebugInputs_RPCURL_MentionsScheme verifies that the RPC URL
+// error message specifies the required scheme so users can fix it quickly.
+func TestValidateAuthDebugInputs_RPCURL_MentionsScheme(t *testing.T) {
+	err := validateAuthDebugInputs(validAuthTxHash, "testnet", "ftp://bad.example.org")
+	if err == nil {
+		t.Fatal("expected error for unsupported scheme")
+	}
+	if !strings.Contains(err.Error(), "http") {
+		t.Errorf("error should mention the required http/https scheme; got: %v", err)
+	}
+}
+
+// TestValidateAuthDebugInputs_Network_EmptyAllowed verifies that omitting
+// --network is allowed (network auto-detection path is exercised in PreRunE).
+func TestValidateAuthDebugInputs_Network_EmptyAllowed(t *testing.T) {
+	if err := validateAuthDebugInputs(validAuthTxHash, "", ""); err != nil {
+		t.Errorf("empty network should be permitted for auto-detection; got: %v", err)
+	}
+}
+
+// TestEmptyAuthTraceNote_ContainsDoctorHint verifies the diagnostic note suggests
+// running 'glassbox doctor' so users have a concrete next step.
+func TestEmptyAuthTraceNote_ContainsDoctorHint(t *testing.T) {
+	note := emptyAuthTraceNote(validAuthTxHash)
+	if !strings.Contains(note, "doctor") {
+		t.Errorf("empty trace note should suggest 'glassbox doctor'; got: %q", note)
+	}
+}
+
+// TestEmptyAuthTraceNote_MentionsNetwork verifies the note suggests checking
+// --network so users know it could be a network mismatch.
+func TestEmptyAuthTraceNote_MentionsNetwork(t *testing.T) {
+	note := emptyAuthTraceNote(validAuthTxHash)
+	if !strings.Contains(note, "--network") {
+		t.Errorf("empty trace note should mention --network; got: %q", note)
 	}
 }

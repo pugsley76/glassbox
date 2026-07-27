@@ -5,7 +5,9 @@ package telemetry
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,7 +19,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
-	"go.opentelemetry.io/otel/sdk/trace"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
@@ -54,10 +56,10 @@ var (
 // silentSpanExporter wraps a SpanExporter and swallows all export errors so
 // collector outages never block or log. Core SDK paths must not depend on telemetry.
 type silentSpanExporter struct {
-	delegate trace.SpanExporter
+	delegate sdktrace.SpanExporter
 }
 
-func (s *silentSpanExporter) ExportSpans(ctx context.Context, spans []trace.ReadOnlySpan) error {
+func (s *silentSpanExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
 	_ = s.delegate.ExportSpans(ctx, spans)
 	return nil
 }
@@ -77,11 +79,11 @@ func Init(ctx context.Context, config Config) (func(), error) {
 
 	// Initialize environment metadata
 	envMetadata = EnvMetadata{
-		Version:     getVersion(),
-		Platform:    runtime.GOOS,
-		Arch:        runtime.GOARCH,
+		Version:      getVersion(),
+		Platform:     runtime.GOOS,
+		Arch:         runtime.GOARCH,
 		FeatureFlags: getFeatureFlags(),
-		Anonymized:  config.Anonymized,
+		Anonymized:   config.Anonymized,
 	}
 
 	if !config.Enabled {
@@ -96,7 +98,7 @@ func Init(ctx context.Context, config Config) (func(), error) {
 	)
 	if err != nil {
 		// Collector unreachable at init: use no-op so core paths are unaffected
-		otel.SetTracerProvider(trace.NewTracerProvider())
+		otel.SetTracerProvider(sdktrace.NewTracerProvider())
 		return func() {}, nil
 	}
 
@@ -109,7 +111,7 @@ func Init(ctx context.Context, config Config) (func(), error) {
 	)
 	if err != nil {
 		_ = exporter.Shutdown(ctx)
-		otel.SetTracerProvider(trace.NewTracerProvider())
+		otel.SetTracerProvider(sdktrace.NewTracerProvider())
 		return func() {}, nil
 	}
 
@@ -117,9 +119,9 @@ func Init(ctx context.Context, config Config) (func(), error) {
 	silent := &silentSpanExporter{delegate: exporter}
 
 	// Create trace provider with silent exporter so collector downtime doesn't block or log
-	tp := trace.NewTracerProvider(
-		trace.WithBatcher(silent),
-		trace.WithResource(res),
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(silent),
+		sdktrace.WithResource(res),
 	)
 
 	otel.SetTracerProvider(tp)
@@ -142,8 +144,9 @@ func getVersion() string {
 
 // getFeatureFlags returns a list of enabled feature flags.
 // Only non-sensitive, user-facing flags are included.
+// Always returns a non-nil slice (may be empty).
 func getFeatureFlags() []string {
-	var flags []string
+	flags := make([]string, 0)
 
 	// Check for optional features that are enabled
 	// These are intentionally limited to avoid exposing sensitive data
@@ -163,9 +166,29 @@ func getFeatureFlags() []string {
 	return flags
 }
 
+// IsTelemetryEnabled returns the current effective telemetry enabled state using
+// the consent resolution hierarchy:
+//
+//  1. GLASSBOX_TELEMETRY environment variable (takes highest precedence)
+//  2. ~/.Glassbox/telemetry_consent.json consent file
+//  3. Runtime flag set via Init() (for backwards-compat with --telemetry flag)
+//  4. Default: disabled
+//
+// This is the single authoritative check used by RecordCommandUsage and
+// should be used wherever code needs to decide whether to emit telemetry.
+func IsTelemetryEnabled() bool {
+	ec := ResolveConsent()
+	// Env or consent file takes precedence over the runtime flag.
+	if ec.Source != ConsentSourceDefault {
+		return ec.Enabled
+	}
+	// Fall back to the runtime flag set during Init().
+	return commandTelemetryEnabled
+}
+
 // RecordCommandUsage emits a lightweight command usage event with environment metadata.
 func RecordCommandUsage(ctx context.Context, command string) {
-	if !commandTelemetryEnabled {
+	if !IsTelemetryEnabled() {
 		return
 	}
 
@@ -177,11 +200,21 @@ func RecordCommandUsage(ctx context.Context, command string) {
 		command = "unknown"
 	}
 
+	// Sanitize the command name: truncate at 64 chars and strip any characters
+	// that are not alphanumeric, dash, colon, or underscore. This prevents
+	// user-controlled input (e.g. a malformed deep-link subcommand) from leaking
+	// arbitrary data to the OTLP collector.
+	command = sanitizeCommandName(command)
+
 	// Set core command attributes
-	span.SetAttributes(
+	attrs := []attribute.KeyValue{
 		attribute.String("command.name", command),
 		attribute.Bool("telemetry.anonymized", commandTelemetryAnonymized),
-	)
+	}
+	if corrID := CorrelationIDFromContext(ctx); corrID != "" {
+		attrs = append(attrs, attribute.String("correlation_id", corrID))
+	}
+	span.SetAttributes(attrs...)
 
 	// Add environment metadata (only if not anonymized)
 	if !commandTelemetryAnonymized {
@@ -202,6 +235,47 @@ func RecordCommandUsage(ctx context.Context, command string) {
 	span.AddEvent("command.usage")
 }
 
+type correlationKey struct{}
+
+// WithCorrelationID returns a new Context carrying the given correlation ID.
+func WithCorrelationID(ctx context.Context, id string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, correlationKey{}, id)
+}
+
+// CorrelationIDFromContext extracts the correlation ID from ctx, returning "" if not found.
+func CorrelationIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if id, ok := ctx.Value(correlationKey{}).(string); ok {
+		return id
+	}
+	return ""
+}
+
+// NewCorrelationID generates a unique per-operation correlation ID.
+func NewCorrelationID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("corr-%x", b)
+}
+
+// EnsureCorrelationID returns a Context with a correlation ID and the correlation ID string itself.
+// If ctx already has a correlation ID, it returns ctx unchanged along with that ID.
+func EnsureCorrelationID(ctx context.Context) (context.Context, string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if id := CorrelationIDFromContext(ctx); id != "" {
+		return ctx, id
+	}
+	id := NewCorrelationID()
+	return WithCorrelationID(ctx, id), id
+}
+
 // GetEnvMetadata returns the current environment metadata.
 // This is useful for testing and debugging.
 func GetEnvMetadata() EnvMetadata {
@@ -209,13 +283,18 @@ func GetEnvMetadata() EnvMetadata {
 }
 
 // GetTracer returns the global tracer instance
-func GetTracer() otel.Tracer {
-	return otel.Tracer("glassbox")
+func GetTracer() oteltrace.Tracer {
+	tp := otel.GetTracerProvider()
+	return tp.Tracer("glassbox")
 }
 
 // SanitizeValue returns a privacy-preserving representation for telemetry.
-// Identifiers (hash, tx, contract) are hashed client-side. Paths are reduced
-// to their basename. Long strings are truncated.
+// Identifiers (hash, tx, contract) are fingerprinted client-side using
+// SHA-256 and represented as a 32-character hex prefix (16 bytes of the
+// digest). This is intentionally lossy — full hash recovery is not possible
+// from the fingerprint, and birthday collisions at 16 bytes are acceptable for
+// telemetry aggregation (not cryptographic) use.
+// Paths are reduced to their basename. Long strings are truncated at 128 chars.
 func SanitizeValue(key, v string) string {
 	if v == "" {
 		return ""
@@ -224,7 +303,8 @@ func SanitizeValue(key, v string) string {
 	switch {
 	case strings.Contains(lk, "hash") || strings.Contains(lk, "tx") || strings.Contains(lk, "contract"):
 		h := sha256.Sum256([]byte(v))
-		// transmit a short deterministic fingerprint only
+		// Transmit only a short deterministic fingerprint — not the full hash.
+		// "sha256:" prefix (7 chars) + 25 hex chars = 32 chars total.
 		return fmt.Sprintf("sha256:%x", h)[:32]
 	case strings.Contains(v, string(filepath.Separator)) || strings.Contains(v, "/"):
 		return filepath.Base(v)
@@ -240,4 +320,24 @@ func SanitizeValue(key, v string) string {
 // telemetry export.
 func Attr(key, v string) attribute.KeyValue {
 	return attribute.String(key, SanitizeValue(key, v))
+}
+
+// sanitizeCommandName returns a safe, bounded representation of a CLI command
+// name for telemetry. It accepts alphanumerics, dash, colon, and underscore —
+// the characters used by all built-in glassbox commands — and replaces
+// anything else with "_". The result is capped at 64 characters.
+func sanitizeCommandName(name string) string {
+	if len(name) > 64 {
+		name = name[:64]
+	}
+	var b strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == ':' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
 }

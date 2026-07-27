@@ -21,7 +21,7 @@ that may compromise source mapping accuracy and DWARF extraction.
 
 Checks performed:
   • lto            — fat LTO breaks DWARF offsets; thin LTO degrades accuracy
-  • debug          — must be enabled (1 or 2) in the release profile
+  • debug          — must be enabled (1 or 2) in the release profile; unsupported values are reported as errors
   • codegen-units  — single unit (= 1) required for deterministic DWARF
   • split-debuginfo — "off" or "packed" may limit debuginfo availability
   • workspace      — discovers workspace members and validates each manifest

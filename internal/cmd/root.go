@@ -20,8 +20,11 @@ import (
 	"github.com/dotandev/glassbox/internal/protocolreg"
 	"github.com/dotandev/glassbox/internal/shutdown"
 	"github.com/dotandev/glassbox/internal/telemetry"
+	"github.com/dotandev/glassbox/internal/termctx"
+	"github.com/dotandev/glassbox/internal/trace"
 	"github.com/dotandev/glassbox/internal/updater"
 	"github.com/dotandev/glassbox/internal/version"
+	"github.com/dotandev/glassbox/internal/visualizer"
 	"github.com/spf13/cobra"
 )
 
@@ -35,6 +38,8 @@ var (
 	VersionFlag bool
 	LogLevelFlag string
 	VerboseFlag  bool
+	NoColorFlag  bool
+	NonInteractiveFlag bool
 
 	AuditLogPathFlag string
 	AuditLogProviderFlag string
@@ -78,6 +83,31 @@ Get started with 'Glassbox debug --help' or visit the documentation.`,
 		if VersionFlag {
 			fmt.Println(version.Version)
 			os.Exit(0)
+		}
+
+		// Disable ANSI colours when --no-color is set or GLASSBOX_NO_COLOR is in the
+		// environment. NO_COLOR (https://no-color.org) is also honoured by each
+		// subsystem individually; this block provides the global CLI-flag path.
+		if NoColorFlag || os.Getenv("GLASSBOX_NO_COLOR") != "" {
+			_ = os.Setenv("NO_COLOR", "1") // propagate to child processes
+			visualizer.SetNoColor(true)
+			trace.SetNoColor(true)
+		}
+
+		// Activate non-interactive mode when --non-interactive is set, or when
+		// a CI / pipe environment is detected. This is done before any subsystem
+		// initialises so that every subsequent termctx.New() call inherits it.
+		// The flag takes explicit precedence; env / pipe detection is handled
+		// inside termctx.New() automatically.
+		if NonInteractiveFlag {
+			termctx.SetGlobalNonInteractive(true)
+		} else {
+			// Auto-detect: build a context against the real stdout so that
+			// pipe / redirect / CI env vars are resolved once at startup.
+			tc := termctx.New(termctx.Options{})
+			if !tc.IsInteractive() {
+				termctx.SetGlobalNonInteractive(true)
+			}
 		}
 
 		// Apply log verbosity from CLI flags before any subsystem initialises.
@@ -336,6 +366,20 @@ func init() {
 	)
 
 	rootCmd.PersistentFlags().BoolVar(
+		&NoColorFlag,
+		"no-color",
+		false,
+		"Disable ANSI color output (also honoured via NO_COLOR or GLASSBOX_NO_COLOR env vars)",
+	)
+
+	rootCmd.PersistentFlags().BoolVar(
+		&NonInteractiveFlag,
+		"non-interactive",
+		false,
+		"Disable prompts, spinners, and terminal control sequences (auto-detected in CI/pipes)",
+	)
+
+	rootCmd.PersistentFlags().BoolVar(
 		&TelemetryFlag,
 		"telemetry",
 		false,
@@ -389,4 +433,9 @@ func init() {
 
 	// Register commands
 	rootCmd.AddCommand(statsCmd)
+
+	// Register completion for persistent (root-level) enum flags so every
+	// subcommand inherits correct suggestions for --log-level and --profile-format.
+	_ = rootCmd.RegisterFlagCompletionFunc("log-level", completeLogLevelFlag)
+	_ = rootCmd.RegisterFlagCompletionFunc("profile-format", completeProfileFormatFlag)
 }

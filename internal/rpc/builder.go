@@ -31,6 +31,13 @@ type clientBuilder struct {
 	failureThreshold int
 	retryTimeout     int
 	failoverPolicy   *FailoverPolicy
+	// poolConfig, when non-nil, overrides the default ProviderPool settings.
+	poolConfig *PoolConfig
+	// replayPinnedURL, when set, locks the ProviderPool to a single endpoint
+	// for deterministic replay (disables silent failover).
+	replayPinnedURL string
+	// responsePayloadLimit caps response body reads; 0 means DefaultResponsePayloadLimit.
+	responsePayloadLimit int64
 }
 
 const defaultHTTPTimeout = 15 * time.Second
@@ -219,6 +226,72 @@ func WithFailoverPolicy(policy FailoverPolicy) ClientOption {
 	}
 }
 
+// WithPoolConfig sets a custom ProviderPool configuration. The pool is used for
+// ordered provider selection with health tracking, per-request deadlines, and an
+// explicit retry policy. If not called, DefaultPoolConfig() is used.
+func WithPoolConfig(cfg PoolConfig) ClientOption {
+	return func(b *clientBuilder) error {
+		b.poolConfig = &cfg
+		return nil
+	}
+}
+
+// WithMaxRetries overrides the maximum number of provider attempts in the pool
+// retry policy. Minimum 1; values ≤ 0 are ignored.
+func WithMaxRetries(n int) ClientOption {
+	return func(b *clientBuilder) error {
+		if n > 0 {
+			if b.poolConfig == nil {
+				cfg := DefaultPoolConfig()
+				b.poolConfig = &cfg
+			}
+			b.poolConfig.MaxRetries = n
+		}
+		return nil
+	}
+}
+
+// WithRequestDeadline sets a per-attempt context deadline for every provider
+// request. Each attempt gets its own deadline independently of the parent context.
+// A zero value disables the per-attempt deadline (parent context governs only).
+func WithRequestDeadline(d time.Duration) ClientOption {
+	return func(b *clientBuilder) error {
+		if b.poolConfig == nil {
+			cfg := DefaultPoolConfig()
+			b.poolConfig = &cfg
+		}
+		b.poolConfig.RequestDeadline = d
+		return nil
+	}
+}
+
+// WithResponsePayloadLimit sets the maximum number of bytes the client will
+// read from any Soroban RPC response body before returning a
+// PayloadTooLargeError. Use 0 to keep the default (DefaultResponsePayloadLimit,
+// currently 32 MiB). Values below 1 KiB are silently clamped to 1 KiB to
+// prevent accidental breakage.
+func WithResponsePayloadLimit(n int64) ClientOption {
+	return func(b *clientBuilder) error {
+		const minLimit = 1024
+		if n > 0 && n < minLimit {
+			n = minLimit
+		}
+		b.responsePayloadLimit = n
+		return nil
+	}
+}
+
+// WithReplayPinProvider locks the provider pool to a single endpoint URL for
+// deterministic replay. When pinned, silent failover is disabled: if the pinned
+// provider fails the error is returned immediately with an explicit message.
+// Pass an empty string to disable pinning.
+func WithReplayPinProvider(url string) ClientOption {
+	return func(b *clientBuilder) error {
+		b.replayPinnedURL = url
+		return nil
+	}
+}
+
 func NewClient(opts ...ClientOption) (*Client, error) {
 	builder := newBuilder()
 
@@ -329,6 +402,29 @@ func (b *clientBuilder) build() (*Client, error) {
 	hc := NewHealthCollector()
 	selector := NewEndpointSelector(policy, hc)
 
+	// Build the ProviderPool for ordered failover with health tracking.
+	poolCfg := DefaultPoolConfig()
+	if b.poolConfig != nil {
+		poolCfg = *b.poolConfig
+	}
+	if b.requestTimeout > 0 && poolCfg.RequestDeadline == 0 {
+		poolCfg.RequestDeadline = b.requestTimeout
+	}
+	if b.replayPinnedURL != "" {
+		poolCfg.PinnedURL = b.replayPinnedURL
+	}
+
+	// The pool governs Soroban endpoints; seed it from sorobanAltURLs (or the
+	// single sorobanURL when only one endpoint is configured).
+	poolURLs := b.sorobanAltURLs
+	if len(poolURLs) == 0 && b.sorobanURL != "" {
+		poolURLs = []string{b.sorobanURL}
+	}
+	if len(poolURLs) == 0 {
+		poolURLs = []string{b.getDefaultSorobanURL(b.network)}
+	}
+	pool := NewProviderPool(poolURLs, poolCfg)
+
 	return &Client{
 		HorizonURL: b.horizonURL,
 		Horizon: &horizonclient.Client{
@@ -349,8 +445,10 @@ func (b *clientBuilder) build() (*Client, error) {
 		FailureThreshold: b.failureThreshold,
 		RetryTimeout:     b.retryTimeout,
 		middlewares:      b.middlewares,
-		healthCollector:  hc,
-		selector:         selector,
-		failoverPolicy:   policy,
+		healthCollector:      hc,
+		selector:             selector,
+		failoverPolicy:       policy,
+		providerPool:         pool,
+		ResponsePayloadLimit: b.responsePayloadLimit,
 	}, nil
 }

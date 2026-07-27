@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -42,20 +41,54 @@ func checkpointPath() (string, error) {
 
 // WriteCheckpoint persists an active-session checkpoint for crash recovery.
 // Call this when a debug session starts and ClearCheckpoint when it ends cleanly.
+//
+// The checkpoint fields are validated before writing so that incomplete or
+// inconsistent checkpoints are rejected early with a clear diagnostic instead
+// of silently creating a corrupt recovery file.
 func WriteCheckpoint(cp *Checkpoint) error {
+	if cp == nil {
+		return fmt.Errorf("checkpoint must not be nil")
+	}
+	if cp.SessionID == "" {
+		return fmt.Errorf(
+			"checkpoint requires a session ID\n" +
+				"  Fix: ensure the session is created before writing the checkpoint",
+		)
+	}
+	if cp.TxHash == "" {
+		return fmt.Errorf(
+			"checkpoint requires a transaction hash\n" +
+				"  Fix: provide the transaction hash when starting the debug session",
+		)
+	}
+	if cp.Network == "" {
+		return fmt.Errorf(
+			"checkpoint requires a network\n" +
+				"  Fix: provide the network when starting the debug session",
+		)
+	}
+	validNetworks := map[string]bool{"testnet": true, "mainnet": true, "futurenet": true}
+	if !validNetworks[cp.Network] {
+		return fmt.Errorf(
+			"unsupported network %q in checkpoint — must be one of: testnet, mainnet, futurenet\n"+
+				"  Fix: use a valid network when starting the debug session",
+			cp.Network,
+		)
+	}
+	if cp.StartedAt.IsZero() {
+		cp.StartedAt = time.Now()
+	}
+
 	path, err := checkpointPath()
 	if err != nil {
 		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return fmt.Errorf("failed to create checkpoint directory: %w", err)
 	}
 	cp.PID = os.Getpid()
 	data, err := json.MarshalIndent(cp, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal checkpoint: %w", err)
 	}
-	return os.WriteFile(path, data, 0600)
+	return writeFileAtomic(path, data, 0600)
 }
 
 // ClearCheckpoint removes the crash-recovery checkpoint after a clean session exit.
@@ -99,10 +132,91 @@ func (c *Checkpoint) IsOrphaned() bool {
 	if c.PID <= 0 {
 		return true
 	}
-	// syscall.Kill(pid, 0) probes process existence on POSIX systems:
-	//   nil   → process exists and is accessible
-	//   ESRCH → no such process (orphaned)
-	//   EPERM → process exists but we lack permission (not orphaned)
-	err := syscall.Kill(c.PID, 0)
-	return err == syscall.ESRCH
+	return !processAlive(c.PID)
+}
+
+// CheckpointIssue describes a single problem found during checkpoint validation.
+type CheckpointIssue struct {
+	// Field is the checkpoint field that is invalid or missing.
+	Field string
+	// Description explains what is wrong.
+	Description string
+	// Hint is an optional actionable suggestion for the user.
+	Hint string
+}
+
+// CheckpointReport is the output of ValidateCheckpoint.
+type CheckpointReport struct {
+	// OK is true when no issues were found.
+	OK bool
+	// Issues lists every validation problem found.
+	Issues []CheckpointIssue
+}
+
+// ValidateCheckpoint checks a Checkpoint record for completeness and
+// consistency before it is trusted for crash-recovery purposes. It validates:
+//
+//   - SessionID is non-empty
+//   - TxHash is non-empty
+//   - Network is a recognised Stellar network value
+//   - StartedAt is non-zero
+//   - PID is positive
+//
+// The function never modifies the checkpoint and is safe to call concurrently.
+func ValidateCheckpoint(cp *Checkpoint) *CheckpointReport {
+	report := &CheckpointReport{}
+
+	if cp.SessionID == "" {
+		report.Issues = append(report.Issues, CheckpointIssue{
+			Field:       "SessionID",
+			Description: "checkpoint is missing the session ID",
+			Hint:        "The checkpoint file is corrupt. Delete ~/.Glassbox/active_session.json and re-run 'glassbox debug <tx-hash>'.",
+		})
+	}
+
+	if cp.TxHash == "" {
+		report.Issues = append(report.Issues, CheckpointIssue{
+			Field:       "TxHash",
+			Description: "checkpoint is missing the transaction hash",
+			Hint:        "Re-run 'glassbox debug <tx-hash>' to create a valid checkpoint.",
+		})
+	}
+
+	if cp.Network == "" {
+		report.Issues = append(report.Issues, CheckpointIssue{
+			Field:       "Network",
+			Description: "checkpoint is missing the network",
+			Hint:        "Re-run 'glassbox debug <tx-hash> --network <testnet|mainnet|futurenet>'.",
+		})
+	} else {
+		validNetworks := map[string]bool{
+			"testnet": true, "mainnet": true, "futurenet": true,
+		}
+		if !validNetworks[cp.Network] {
+			report.Issues = append(report.Issues, CheckpointIssue{
+				Field:       "Network",
+				Description: "checkpoint network value " + cp.Network + " is not a recognised Stellar network",
+				Hint:        "Accepted values are: testnet, mainnet, futurenet.",
+			})
+		}
+	}
+
+	if cp.StartedAt.IsZero() {
+		report.Issues = append(report.Issues, CheckpointIssue{
+			Field:       "StartedAt",
+			Description: "checkpoint has a zero started_at timestamp",
+			Hint:        "The checkpoint was written by an incompatible Glassbox version. Delete it and re-run 'glassbox debug'.",
+		})
+	}
+
+	if cp.PID <= 0 {
+		report.Issues = append(report.Issues, CheckpointIssue{
+			Field:       "PID",
+			Description: fmt.Sprintf("checkpoint has an invalid PID: %d", cp.PID),
+			Hint:        "The checkpoint was created by an incompatible Glassbox version. Delete ~/.Glassbox/active_session.json.",
+		})
+	}
+
+	report.OK = len(report.Issues) == 0
+	return report
 }

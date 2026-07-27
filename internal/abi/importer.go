@@ -91,7 +91,7 @@ func jsonSpecToContractSpec(js *jsonSpec) (*ContractSpec, error) {
 	}
 
 	for _, js2 := range js.Structs {
-		s := xdr.ScSpecUdtStructV0{Name: xdr.ScSymbol(js2.Name), Doc: js2.Doc}
+		s := xdr.ScSpecUdtStructV0{Name: js2.Name, Doc: js2.Doc}
 		for _, f := range js2.Fields {
 			td, err := parseTypeDef(f.Type)
 			if err != nil {
@@ -103,7 +103,7 @@ func jsonSpecToContractSpec(js *jsonSpec) (*ContractSpec, error) {
 	}
 
 	for _, je := range js.Enums {
-		e := xdr.ScSpecUdtEnumV0{Name: xdr.ScSymbol(je.Name), Doc: je.Doc}
+		e := xdr.ScSpecUdtEnumV0{Name: je.Name, Doc: je.Doc}
 		for _, c := range je.Cases {
 			e.Cases = append(e.Cases, xdr.ScSpecUdtEnumCaseV0{
 				Name:  c.Name,
@@ -114,7 +114,7 @@ func jsonSpecToContractSpec(js *jsonSpec) (*ContractSpec, error) {
 	}
 
 	for _, ju := range js.Unions {
-		u := xdr.ScSpecUdtUnionV0{Name: xdr.ScSymbol(ju.Name), Doc: ju.Doc}
+		u := xdr.ScSpecUdtUnionV0{Name: ju.Name, Doc: ju.Doc}
 		for _, c := range ju.Cases {
 			if len(c.Types) == 0 {
 				u.Cases = append(u.Cases, xdr.ScSpecUdtUnionCaseV0{
@@ -143,7 +143,7 @@ func jsonSpecToContractSpec(js *jsonSpec) (*ContractSpec, error) {
 	}
 
 	for _, je := range js.ErrorEnums {
-		e := xdr.ScSpecUdtErrorEnumV0{Name: xdr.ScSymbol(je.Name), Doc: je.Doc}
+		e := xdr.ScSpecUdtErrorEnumV0{Name: je.Name, Doc: je.Doc}
 		for _, c := range je.Cases {
 			e.Cases = append(e.Cases, xdr.ScSpecUdtErrorEnumCaseV0{
 				Name:  c.Name,

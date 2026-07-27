@@ -13,6 +13,7 @@ const (
 	ErstUnknown          ErstErrorCode = "UNKNOWN"
 	ErstValidationFailed ErstErrorCode = "VALIDATION_FAILED"
 	ErstConfigFailed     ErstErrorCode = "CONFIG_ERROR"
+	ErstArgumentRequired ErstErrorCode = "ARGUMENT_REQUIRED"
 	// RPC
 	ErstRPCConnectionFailed ErstErrorCode = "RPC_CONNECTION_FAILED"
 	ErstRPCTimeout          ErstErrorCode = "RPC_TIMEOUT"

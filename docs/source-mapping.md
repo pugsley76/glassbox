@@ -64,6 +64,7 @@ The `--contract-source` path is validated before any network or simulator work b
 | Path does not exist | `--contract-source: directory not found: "<path>"` |
 | Path is a file, not a directory | `--contract-source: "<path>" is a file, not a directory` |
 | Path is not accessible | `--contract-source: cannot access "<path>": <os error>` |
+| Empty or whitespace-only value | `--contract-source: value must not be empty or whitespace` |
 
 Each error includes a remediation hint so you know exactly what to fix.
 
@@ -114,6 +115,8 @@ cargo build --target wasm32-unknown-unknown --release
 ```
 
 See [docs/debug-symbols-guide.md](debug-symbols-guide.md) for more details.
+
+For Cargo manifests specifically, run `glassbox validate-cargo` to surface unsupported `lto` or `debug` values and receive actionable fixes before you build or replay a contract.
 
 ## Cross-repository source links
 
@@ -179,6 +182,69 @@ If the build directory is missing, Glassbox logs a debug-level message and
 continues without local symbols. The message includes a suggestion to run
 `cargo build` if local symbols are needed.
 
+### WASM file validation during discovery
+
+Files found in the build output directory are validated before indexing:
+
+- Files named `.wasm` but not starting with the WASM magic bytes (`\0asm`) are
+  **skipped with a warning** rather than silently hashed. This prevents corrupt
+  or misnamed files (e.g. ELF binaries accidentally named `.wasm`) from
+  polluting the hash table with useless entries.
+- Files shorter than 4 bytes cannot contain a valid magic number and are also
+  skipped with a warning.
+
+**Example warning:**
+```
+"./target/wasm32-unknown-unknown/release/old_build.wasm" does not have a valid
+WASM magic number (\0asm) — skipped
+  Rebuild with 'cargo build --release --target wasm32-unknown-unknown'
+  to ensure the file is a proper WASM binary.
+```
+
+### Path safety
+
+Any path supplied to source-mapping functions is validated for null bytes before
+filesystem access begins. Null bytes in file paths are a shell-injection risk and
+produce obscure OS errors deep in the path layer:
+
+| Input | Error |
+|-------|-------|
+| `--contract-source /path\x00bad` | `--contract-source: path contains null bytes and cannot be used` |
+| `--source-alias /path\x00bad.json` | `--source-alias: path contains null bytes and cannot be used` |
+| `GLASSBOX_SOURCE_MAP_CACHE=/path\x00bad` | `GLASSBOX_SOURCE_MAP_CACHE=... contains null bytes and cannot be used` |
+
+Each error includes a `Fix:` hint and the offending flag name so you know
+exactly what to correct.
+
+### Fallback mapper input guard
+
+`FallbackMapper.Resolve` now guards against nil or abnormally small WASM data
+(fewer than 8 bytes). Previously, passing nil data would silently fall through
+all stages and return a no-context unknown result. The new behavior returns an
+explicit `MappingQualityUnknown` result with a descriptive warning:
+
+```
+[sourcemap] WASM data is nil or too small (0 bytes) to contain valid content —
+source location for address 0x100 cannot be resolved.
+Recompile with 'cargo build --release --target wasm32-unknown-unknown'
+and ensure the binary is fully uploaded.
+```
+### Hash mismatch diagnostic
+
+When the local WASM binary's SHA-256 hash differs from the on-chain contract
+hash, Glassbox surfaces a `build mismatch` warning rather than the previous
+misleading `opt-level mismatch` message (the hash can differ for many reasons
+beyond opt-level — an outdated build, a different contract, or different
+compilation flags):
+
+```
+build mismatch: local WASM hash "a1b2c3..." does not match on-chain hash "d4e5f6..." (path: ./target/.../my_contract.wasm)
+  The local binary differs from the deployed contract — it may be outdated,
+  built with different flags, or be a completely different contract.
+  Hint: rebuild with 'cargo build --release --target wasm32-unknown-unknown'
+  and verify --opt-level matches the on-chain deployment.
+```
+
 ## `--source-alias` Alias Mapping
 
 When source file paths embedded in DWARF symbols don't match your local
@@ -198,7 +264,8 @@ The alias file must be a flat JSON object:
 ```
 
 **Validation:** The file must be readable and contain valid JSON. Invalid JSON
-produces an explicit error:
+produces an explicit error, and each alias entry must have a non-empty name and
+non-empty target path:
 
 ```
 --source-alias: failed to parse "<path>" as JSON: <detail>

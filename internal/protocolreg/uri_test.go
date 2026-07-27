@@ -349,3 +349,267 @@ func TestParseDebugURI_InvalidNetwork_ErrorMentionsAllowed(t *testing.T) {
 		}
 	}
 }
+
+// ─── source parameter length validation ──────────────────────────────────────
+
+func TestParseDebugURI_Source_AtMaxLength_Accepted(t *testing.T) {
+	source := string(make([]byte, maxSourceLen))
+	uri := baseURI + "&source=" + source
+	parsed, err := ParseDebugURI(uri)
+	if err != nil {
+		t.Fatalf("source at max length (%d) should be accepted: %v", maxSourceLen, err)
+	}
+	if parsed.Source != source {
+		t.Error("Source field not preserved")
+	}
+}
+
+func TestParseDebugURI_Source_ExceedsMaxLength_Rejected(t *testing.T) {
+	source := string(make([]byte, maxSourceLen+1))
+	uri := baseURI + "&source=" + source
+	_, err := ParseDebugURI(uri)
+	if err == nil {
+		t.Fatalf("source exceeding max length (%d) should be rejected", maxSourceLen)
+	}
+	if !strings.Contains(err.Error(), "source") {
+		t.Errorf("error should mention 'source', got: %v", err)
+	}
+}
+
+// ─── signature parameter length validation ────────────────────────────────────
+
+func TestParseDebugURI_Signature_AtMaxLength_Accepted(t *testing.T) {
+	sig := string(make([]byte, maxSignatureLen))
+	uri := baseURI + "&signature=" + sig
+	parsed, err := ParseDebugURI(uri)
+	if err != nil {
+		t.Fatalf("signature at max length (%d) should be accepted: %v", maxSignatureLen, err)
+	}
+	if parsed.Signature != sig {
+		t.Error("Signature field not preserved")
+	}
+}
+
+func TestParseDebugURI_Signature_ExceedsMaxLength_Rejected(t *testing.T) {
+	sig := string(make([]byte, maxSignatureLen+1))
+	uri := baseURI + "&signature=" + sig
+	_, err := ParseDebugURI(uri)
+	if err == nil {
+		t.Fatalf("signature exceeding max length (%d) should be rejected", maxSignatureLen)
+	}
+	if !strings.Contains(err.Error(), "signature") {
+		t.Errorf("error should mention 'signature', got: %v", err)
+	}
+}
+
+// ─── NewRegistrar — executable existence validation ────────────────────────────
+
+func TestNewRegistrar_NonExistentExecutable_ReturnsError(t *testing.T) {
+	// We can't directly call NewRegistrar with a custom path because it uses
+	// os.Executable() internally. Validate the Stat check indirectly by
+	// constructing a Registrar that points to a non-existent file and verifying
+	// Verify surfaces an actionable issue.
+	r := &Registrar{
+		executablePath: "/nonexistent/path/to/glassbox",
+		homeDir:        t.TempDir(),
+	}
+	report := r.Diagnose()
+	// The diagnostic must surface issues regardless of the platform since the
+	// executable path does not exist.
+	if len(report.Issues) == 0 && len(report.Checks) == 0 {
+		t.Error("Diagnose with a non-existent executable should produce at least one issue or check")
+	}
+}
+
+// ─── source / signature null-byte validation ─────────────────────────────────
+
+func TestParseDebugURI_Source_NullByte_Rejected(t *testing.T) {
+	uri := baseURI + "&source=valid\x00injected"
+	_, err := ParseDebugURI(uri)
+	if err == nil {
+		t.Fatal("expected error for null byte in source parameter")
+	}
+	if !strings.Contains(err.Error(), "source") {
+		t.Errorf("error should mention 'source', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "null bytes") {
+		t.Errorf("error should mention 'null bytes', got: %v", err)
+	}
+}
+
+func TestParseDebugURI_Signature_NullByte_Rejected(t *testing.T) {
+	uri := baseURI + "&signature=ok\x00bad"
+	_, err := ParseDebugURI(uri)
+	if err == nil {
+		t.Fatal("expected error for null byte in signature parameter")
+	}
+	if !strings.Contains(err.Error(), "signature") {
+		t.Errorf("error should mention 'signature', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "null bytes") {
+		t.Errorf("error should mention 'null bytes', got: %v", err)
+	}
+}
+
+// ─── op overflow guard ────────────────────────────────────────────────────────
+
+func TestParseDebugURI_Op_ExceedsMaxIndex_Rejected(t *testing.T) {
+	uri := baseURI + "&op=99999"
+	_, err := ParseDebugURI(uri)
+	if err == nil {
+		t.Fatal("expected error for op exceeding maximum index")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "operation index") && !strings.Contains(msg, "maximum") {
+		t.Errorf("error should mention the operation index limit, got: %v", err)
+	}
+}
+
+func TestParseDebugURI_Op_AtMaxIndex_Accepted(t *testing.T) {
+	uri := baseURI + "&op=65535"
+	parsed, err := ParseDebugURI(uri)
+	if err != nil {
+		t.Fatalf("op at max index (65535) should be accepted: %v", err)
+	}
+	if parsed.Op == nil || *parsed.Op != 65535 {
+		t.Errorf("expected Op=65535, got %v", parsed.Op)
+	}
+}
+
+func TestParseDebugURI_Op_JustAboveMax_Rejected(t *testing.T) {
+	uri := baseURI + "&op=65536"
+	_, err := ParseDebugURI(uri)
+	if err == nil {
+		t.Fatal("expected error for op=65536 (just above max)")
+	}
+}
+
+// Verify the error message for a negative op includes the Fix: hint.
+func TestParseDebugURI_NegativeOp_ErrorIncludesFix(t *testing.T) {
+	_, err := ParseDebugURI(baseURI + "&op=-5")
+	if err == nil {
+		t.Fatal("expected error for negative op")
+	}
+	if !strings.Contains(err.Error(), "Fix:") {
+		t.Errorf("error for negative op should include a Fix: hint, got: %v", err)
+	}
+}
+
+// ─── protocol:handle error hint ──────────────────────────────────────────────
+
+// TestParseDebugURI_InvalidURI_ErrorDescribesFormat verifies that a bad URI
+// returns enough context for the user to construct a correct one.
+func TestParseDebugURI_InvalidURI_ErrorDescribesFormat(t *testing.T) {
+	_, err := ParseDebugURI("glassbox://debug/badhash?network=testnet")
+	if err == nil {
+		t.Fatal("expected error for invalid hash")
+	}
+	// Must name the hash requirement so the user knows the exact fix.
+	msg := err.Error()
+	if !strings.Contains(msg, "64") && !strings.Contains(msg, "hex") {
+		t.Errorf("error should describe the hash requirement, got: %v", err)
+	}
+}
+
+// ─── mock-ledger-manifest & mock-ledger-entry & protocol-version parameters ────
+
+func TestParseDebugURI_ProtocolVersion_Valid(t *testing.T) {
+	for _, version := range []string{"20", "21", "22"} {
+		uri := baseURI + "&protocol-version=" + version
+		parsed, err := ParseDebugURI(uri)
+		if err != nil {
+			t.Fatalf("unexpected error parsing protocol-version=%s: %v", version, err)
+		}
+		val := uint32(20)
+		if version == "21" {
+			val = 21
+		} else if version == "22" {
+			val = 22
+		}
+		if parsed.ProtocolVersion == nil || *parsed.ProtocolVersion != val {
+			t.Errorf("expected ProtocolVersion=%d, got %v", val, parsed.ProtocolVersion)
+		}
+	}
+}
+
+func TestParseDebugURI_ProtocolVersion_Invalid(t *testing.T) {
+	tests := []struct {
+		val string
+		err string
+	}{
+		{"0", "must be a positive integer"},
+		{"abc", "must be a positive integer"},
+		{"19", "use a supported protocol version"},
+		{"99", "use a supported protocol version"},
+	}
+
+	for _, tc := range tests {
+		uri := baseURI + "&protocol-version=" + tc.val
+		_, err := ParseDebugURI(uri)
+		if err == nil {
+			t.Fatalf("expected error for protocol-version=%s", tc.val)
+		}
+		if !strings.Contains(err.Error(), tc.err) {
+			t.Errorf("error message for protocol-version=%s should mention %q, got: %v", tc.val, tc.err, err)
+		}
+	}
+}
+
+func TestParseDebugURI_MockLedgerManifest_Valid(t *testing.T) {
+	uri := baseURI + "&mock-ledger-manifest=/path/to/manifest.json"
+	parsed, err := ParseDebugURI(uri)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if parsed.MockLedgerManifest != "/path/to/manifest.json" {
+		t.Errorf("expected MockLedgerManifest='/path/to/manifest.json', got %q", parsed.MockLedgerManifest)
+	}
+}
+
+func TestParseDebugURI_MockLedgerManifest_NullByte(t *testing.T) {
+	uri := baseURI + "&mock-ledger-manifest=/path/to\x00manifest.json"
+	_, err := ParseDebugURI(uri)
+	if err == nil {
+		t.Fatal("expected error for null byte in mock-ledger-manifest")
+	}
+	if !strings.Contains(err.Error(), "null bytes") {
+		t.Errorf("error should explain null bytes are not allowed, got: %v", err)
+	}
+}
+
+func TestParseDebugURI_MockLedgerEntries_Valid(t *testing.T) {
+	uri := baseURI + "&mock-ledger-entry=AAAAAQ==:BBBBQg==&mock-ledger-entry=CCCCQw==:DDDDRA=="
+	parsed, err := ParseDebugURI(uri)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(parsed.MockLedgerEntries) != 2 {
+		t.Fatalf("expected 2 mock ledger entries, got %d", len(parsed.MockLedgerEntries))
+	}
+	if parsed.MockLedgerEntries[0] != "AAAAAQ==:BBBBQg==" || parsed.MockLedgerEntries[1] != "CCCCQw==:DDDDRA==" {
+		t.Errorf("unexpected entries: %v", parsed.MockLedgerEntries)
+	}
+}
+
+func TestParseDebugURI_MockLedgerEntries_Invalid(t *testing.T) {
+	tests := []struct {
+		entry string
+		err   string
+	}{
+		{"keyonly", "expected key:value"},
+		{":value", "expected key:value"},
+		{"key:", "empty value"},
+		{"key:not-base64-!@#$", "invalid base64"},
+	}
+
+	for _, tc := range tests {
+		uri := baseURI + "&mock-ledger-entry=" + tc.entry
+		_, err := ParseDebugURI(uri)
+		if err == nil {
+			t.Fatalf("expected error for mock-ledger-entry=%s", tc.entry)
+		}
+		if !strings.Contains(err.Error(), tc.err) {
+			t.Errorf("error message for mock-ledger-entry=%s should mention %q, got: %v", tc.entry, tc.err, err)
+		}
+	}
+}

@@ -194,3 +194,51 @@ func TestPkcs11ConfigFromEnv_ValidConfig(t *testing.T) {
 		t.Fatalf("unexpected key ID hex: %s", cfg.KeyIDHex)
 	}
 }
+
+// ---- Improved error message tests for issue #303 ----
+
+func TestPkcs11ConfigFromEnv_MissingModuleHasRemediation(t *testing.T) {
+	t.Setenv("GLASSBOX_PKCS11_MODULE", "")
+	t.Setenv("GLASSBOX_PKCS11_PIN", "1234")
+
+	_, err := Pkcs11ConfigFromEnv()
+	if err == nil {
+		t.Fatal("expected error when GLASSBOX_PKCS11_MODULE is empty")
+	}
+	if !containsSubstring(err.Error(), "remediation") {
+		t.Errorf("error should include remediation hint: %v", err)
+	}
+}
+
+func TestPkcs11ConfigFromEnv_MissingPINHasRemediation(t *testing.T) {
+	t.Setenv("GLASSBOX_PKCS11_MODULE", "/usr/lib/softhsm/libsofthsm2.so")
+	t.Setenv("GLASSBOX_PKCS11_PIN", "")
+
+	_, err := Pkcs11ConfigFromEnv()
+	if err == nil {
+		t.Fatal("expected error when GLASSBOX_PKCS11_PIN is empty")
+	}
+	if !containsSubstring(err.Error(), "remediation") {
+		t.Errorf("error should include remediation hint: %v", err)
+	}
+}
+
+func TestNewPkcs11Signer_EmptyModulePathReturnsError(t *testing.T) {
+	_, err := NewPkcs11Signer(Pkcs11Config{})
+	if err == nil {
+		t.Fatal("expected error for empty module path")
+	}
+	if !containsSubstring(err.Error(), "remediation") {
+		t.Errorf("error should include remediation hint: %v", err)
+	}
+}
+
+// containsSubstring reports whether s contains sub as a substring.
+func containsSubstring(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}

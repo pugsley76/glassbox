@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +25,12 @@ The archive contains all replay inputs, simulation results, and metadata
 required to reproduce the session on another machine. Load the archive with
 'Glassbox session load <archive>'.
 
-If no session-id is provided, the currently active session is archived.`,
+If no session-id is provided, the currently active session is archived.
+
+Validation:
+  The session data is validated before export so that corrupt or incomplete
+  sessions are rejected early with a clear diagnostic rather than silently
+  producing an archive that cannot be imported on the other side.`,
 	Example: `  # Export the active session
   Glassbox session share
 
@@ -35,6 +41,13 @@ If no session-id is provided, the currently active session is archived.`,
 		ctx := cmd.Context()
 
 		outputFlag, _ := cmd.Flags().GetString("output")
+		redactFlag, _ := cmd.Flags().GetString("redact")
+		previewFlag, _ := cmd.Flags().GetBool("preview")
+
+		profile, err := session.ParseRedactionProfile(redactFlag)
+		if err != nil {
+			return errors.WrapValidationError(err.Error())
+		}
 
 		var data *session.Data
 
@@ -48,7 +61,7 @@ If no session-id is provided, the currently active session is archived.`,
 			}
 		} else {
 			// Load a saved session by ID.
-			store, err := session.NewStore()
+			store, err := openSessionStore()
 			if err != nil {
 				return errors.WrapValidationError(fmt.Sprintf("failed to open session store: %v", err))
 			}
@@ -74,7 +87,20 @@ If no session-id is provided, the currently active session is archived.`,
 			}
 		}
 
-		if err := session.ExportArchive(data, dest); err != nil {
+		redacted, report, err := session.RedactSession(data, profile)
+		if err != nil {
+			return fmt.Errorf("failed to apply redaction profile: %w", err)
+		}
+
+		if previewFlag {
+			printRedactionReport(cmd.OutOrStdout(), report)
+			return nil
+		}
+		if report.Profile != session.RedactionFull {
+			printRedactionReport(cmd.OutOrStdout(), report)
+		}
+
+		if err := session.ExportArchive(redacted, dest); err != nil {
 			return fmt.Errorf("failed to export session archive: %w", err)
 		}
 
@@ -88,6 +114,7 @@ If no session-id is provided, the currently active session is archived.`,
 		fmt.Printf("  Session ID:  %s\n", data.ID)
 		fmt.Printf("  Transaction: %s\n", data.TxHash)
 		fmt.Printf("  Network:     %s\n", data.Network)
+		fmt.Printf("  Redaction:   %s\n", report.Profile)
 		fmt.Printf("  Archive:     %s (%d bytes)\n", dest, size)
 		fmt.Printf("\nTo load on another machine:\n")
 		fmt.Printf("  Glassbox session load %s\n", dest)
@@ -119,6 +146,28 @@ the archive are available immediately without re-fetching from the network.`,
 			return fmt.Errorf("failed to load session archive: %w", err)
 		}
 
+		if schemaErr := session.ValidateSchemaVersion(data.SchemaVersion, data.ID); schemaErr != nil {
+			return schemaErr
+		}
+		if upgraded, upgradeErr := session.UpgradeSessionData(data); upgradeErr != nil {
+			return upgradeErr
+		} else if upgraded {
+			fmt.Fprintf(os.Stderr, "Session schema upgraded to version %d.\n", session.SchemaVersion)
+		}
+
+		report := session.ValidateIntegrity(data)
+		if !report.OK {
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("loaded session failed integrity validation (%d issue(s)):\n", len(report.Issues)))
+			for i, issue := range report.Issues {
+				sb.WriteString(fmt.Sprintf("  %d. [%s] %s\n", i+1, issue.Field, issue.Description))
+				if issue.Hint != "" {
+					sb.WriteString(fmt.Sprintf("     Hint: %s\n", issue.Hint))
+				}
+			}
+			return fmt.Errorf("%s", sb.String())
+		}
+
 		// Mark as active session.
 		data.Status = "resumed"
 		data.LastAccessAt = time.Now()
@@ -140,8 +189,34 @@ the archive are available immediately without re-fetching from the network.`,
 	},
 }
 
+// printRedactionReport renders a RedactionReport as a preview the operator
+// can review before an archive is written — or, when redaction was applied
+// silently to a real export, as a record of what changed.
+func printRedactionReport(w io.Writer, report *session.RedactionReport) {
+	fmt.Fprintf(w, "Redaction profile: %s\n", report.Profile)
+	for _, f := range report.Fields {
+		status := "kept"
+		switch f.Policy {
+		case session.PolicyRedact:
+			status = "removed"
+		case session.PolicyPseudonymize:
+			status = "pseudonymized"
+		}
+		if !f.Applied {
+			fmt.Fprintf(w, "  - %-22s %s (nothing to change)\n", f.Field, status)
+			continue
+		}
+		fmt.Fprintf(w, "  - %-22s %s: %s\n", f.Field, status, f.Sample)
+	}
+	if report.IdentifiersPseudonymized > 0 {
+		fmt.Fprintf(w, "%d unique identifier(s) pseudonymized.\n", report.IdentifiersPseudonymized)
+	}
+}
+
 func init() {
 	sessionShareCmd.Flags().StringP("output", "o", "", "Output archive path (default: auto-generated .gbx file)")
+	sessionShareCmd.Flags().String("redact", "full", "Redaction profile applied before export: strict, balanced, or full (default: full, unredacted)")
+	sessionShareCmd.Flags().Bool("preview", false, "Show what --redact would remove without writing an archive")
 
 	sessionCmd.AddCommand(sessionShareCmd)
 	sessionCmd.AddCommand(sessionLoadCmd)

@@ -96,7 +96,7 @@ func runValidate(cmd *cobra.Command, args []string) error {
 
 	report := ValidationReport{
 		Version:   version.Version,
-		Timestamp: version.BuildTime,
+		Timestamp: version.BuildDate,
 		Results:   []ValidationResult{},
 	}
 

@@ -111,6 +111,34 @@ func TestValidateManifest_DebugValid_NoWarning(t *testing.T) {
 	}
 }
 
+func TestValidateManifest_InvalidLTOValue_Error(t *testing.T) {
+	content := `
+[profile.release]
+lto = "unsupported"
+debug = 1
+`
+	results := validateManifest("Cargo.toml", content)
+	ltoRes := filterByField(results, "lto")
+	require.Len(t, ltoRes, 1)
+	assert.Equal(t, "error", ltoRes[0].Severity)
+	assert.Contains(t, ltoRes[0].Message, "unsupported")
+	assert.Contains(t, ltoRes[0].Fix, "lto = false")
+}
+
+func TestValidateManifest_InvalidDebugValue_Error(t *testing.T) {
+	content := `
+[profile.release]
+lto = false
+debug = "full"
+`
+	results := validateManifest("Cargo.toml", content)
+	dbgRes := filterByField(results, "debug")
+	require.Len(t, dbgRes, 1)
+	assert.Equal(t, "error", dbgRes[0].Severity)
+	assert.Contains(t, dbgRes[0].Message, "unsupported")
+	assert.Contains(t, dbgRes[0].Fix, "debug = 1")
+}
+
 func TestValidateManifest_DebugNotCheckedForDev(t *testing.T) {
 	content := `
 [profile.dev]
@@ -243,7 +271,8 @@ func TestValidateCargoProject_SingleManifest(t *testing.T) {
 
 func TestValidateCargoProject_MissingRoot(t *testing.T) {
 	_, err := ValidateCargoProject(t.TempDir())
-	assert.Error(t, err, "should fail when root Cargo.toml is absent")
+	require.Error(t, err, "should fail when root Cargo.toml is absent")
+	assert.Contains(t, err.Error(), "no Cargo.toml")
 }
 
 func TestValidateCargoProject_WorkspaceMemberIssue(t *testing.T) {
