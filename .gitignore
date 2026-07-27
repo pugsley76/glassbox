@@ -122,3 +122,24 @@ Resource.rc
 *.msi
 *.msix
 *.cab
+
+# --- Test snapshots and artefacts ---
+*.snap
+__snapshots__/
+test/snapshots/
+tests/snapshots/
+integration/snapshots/
+
+# --- Coverage and profiling ---
+coverage.out
+coverage.html
+coverage/
+*.prof
+
+# --- IDE / editor artefacts ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.~lock.*
