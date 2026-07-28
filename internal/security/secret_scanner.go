@@ -48,18 +48,38 @@ const (
 
 // SecretScanner detects secrets in export data
 type SecretScanner struct {
-	mode          ScannerMode
-	overrides     map[string]bool // Paths that are allowed to contain secrets
-	customPatterns map[string]*regexp.Regexp
+	mode               ScannerMode
+	overrides          map[string]bool // Paths that are allowed to contain secrets
+	customPatterns     map[string]*regexp.Regexp
+	suppressionRegistry *SuppressionRegistry
+	scopeValue         string // Contract ID, path, or transaction hash for scoped suppressions
 }
 
 // NewSecretScanner creates a new secret scanner
 func NewSecretScanner(mode ScannerMode) *SecretScanner {
 	return &SecretScanner{
-		mode:          mode,
-		overrides:     make(map[string]bool),
-		customPatterns: make(map[string]*regexp.Regexp),
+		mode:               mode,
+		overrides:          make(map[string]bool),
+		customPatterns:     make(map[string]*regexp.Regexp),
+		suppressionRegistry: NewSuppressionRegistry(),
 	}
+}
+
+// NewSecretScannerWithSuppression creates a new secret scanner with a suppression registry.
+func NewSecretScannerWithSuppression(mode ScannerMode, registry *SuppressionRegistry, scopeValue string) *SecretScanner {
+	return &SecretScanner{
+		mode:               mode,
+		overrides:          make(map[string]bool),
+		customPatterns:     make(map[string]*regexp.Regexp),
+		suppressionRegistry: registry,
+		scopeValue:         scopeValue,
+	}
+}
+
+// SetSuppressionRegistry sets the suppression registry for this scanner.
+func (s *SecretScanner) SetSuppressionRegistry(registry *SuppressionRegistry, scopeValue string) {
+	s.suppressionRegistry = registry
+	s.scopeValue = scopeValue
 }
 
 // AddOverride adds a path that is allowed to contain secrets (for test fixtures)
@@ -161,6 +181,26 @@ func (s *SecretScanner) ScanStruct(data interface{}, prefix string) ScanResult {
 // ShouldBlockExport returns true if the scanner is in strict mode and secrets were found
 func (s *SecretScanner) ShouldBlockExport(result ScanResult) bool {
 	return s.mode == ModeStrict && result.HasSecrets
+}
+
+// GetScanResultWithSuppression returns active and suppressed findings.
+func (s *SecretScanner) GetScanResultWithSuppression(result ScanResult) ScanResultWithSuppression {
+	if s.suppressionRegistry == nil {
+		return ScanResultWithSuppression{
+			ActiveFindings:     result.Findings,
+			SuppressedFindings: []SuppressedSecretFinding{},
+			HasSecrets:         result.HasSecrets,
+		}
+	}
+	
+	scopeValue := NormalizeScopeValue(s.scopeValue)
+	active, suppressed := s.suppressionRegistry.ApplyToSecretFindings(result.Findings, scopeValue)
+	
+	return ScanResultWithSuppression{
+		ActiveFindings:     active,
+		SuppressedFindings: suppressed,
+		HasSecrets:         len(active) > 0,
+	}
 }
 
 // GetErrorMessage returns a formatted error message for blocking exports
