@@ -495,6 +495,14 @@ glassbox protocol:repair
 glassbox protocol:register
 ```
 
+`protocol:register` validates prerequisites **before** writing any OS registration state:
+
+- The Glassbox binary path must exist and be executable (or a runnable Windows extension).
+- Linux requires `xdg-mime` from the `xdg-utils` package.
+- Unsupported platforms are rejected immediately with remediation guidance.
+
+On failure the command prints explicit `[FAIL]` diagnostics and numbered fix steps. After a successful registration, run `glassbox protocol:status` to confirm the registered binary path is usable.
+
 `protocol:repair` runs `protocol:diagnose` first, then overwrites the registration with the current binary. A post-repair verification confirms the fix succeeded.
 
 **JSON output** for CI pipelines:
@@ -533,12 +541,43 @@ invalid network "devnet": must be one of testnet, mainnet, futurenet
 
 ### `protocol:repair` pre-condition validation
 
-`protocol:repair` validates that the registrar's executable path is non-empty before attempting any write. Running repair via `go run` or from a stripped build without a resolved executable fails immediately with:
+`protocol:repair` validates that the registrar's executable path is non-empty and that the binary still exists before attempting any write. Running repair via `go run` or from a stripped build without a resolved executable fails immediately with:
 
 ```
 cannot repair: executable path is empty
   Fix: ensure glassbox is invoked from a valid binary path, not via 'go run'
 ```
+
+### Enhanced registration validation
+
+All protocol registration operations (`protocol:register`, `protocol:unregister`, `protocol:verify`, `protocol:diagnose`, `protocol:repair`) now perform pre-flight validation:
+
+- **Executable path checks**: Rejects empty paths, non-existent binaries, and system root directories
+- **Permission checks**: On Unix, validates that the binary has execute permissions
+- **Home directory checks**: Ensures the home directory is accessible before writing registration artefacts
+- **Tool availability**: Validates that required system tools (`xdg-mime`, `reg`, `lsregister`) are present before attempting registration
+- **Post-write validation**: After writing files, reads them back to confirm they reference the correct executable and contain the expected scheme declarations
+
+When validation fails, errors include actionable `Fix:` hints to guide users toward resolution.
+
+### Path normalization and safety
+
+All filesystem paths used during protocol registration are normalized and validated to prevent security issues and improve robustness:
+
+- **Path normalization**: Removes redundant separators, resolves `.` and `..` components, and rejects suspicious patterns
+- **Path traversal protection**: Rejects paths containing `..` sequences that could indicate directory traversal attempts
+- **Consecutive dots**: Rejects paths with `...` which may indicate attempts to hide files or create ambiguous paths
+- **Length limits**: Enforces a maximum path length of 255 characters (conservative limit for cross-platform compatibility)
+- **Null byte detection**: Rejects paths containing null bytes before any filesystem operations
+- **Post-symlink validation**: After resolving symlinks, the resulting path is re-validated to ensure it remains safe
+
+**Examples of rejected paths:**
+- `/usr/local/bin/../../etc/passwd` — path traversal pattern
+- `/path/to/.../file` — consecutive dots
+- Paths exceeding 255 characters
+- Paths containing null bytes (`\x00`)
+
+When a path fails validation, the error message explains what was wrong and suggests a fix, such as moving the binary to a shorter path or using a direct path without `..` components.
 
 ### `protocol:diagnose --format` validation
 
@@ -547,6 +586,12 @@ The `--format` flag accepts only `text` (default) or `json`. Any other value is 
 ```
 invalid --format "xml": must be 'text' or 'json'
 ```
+
+### Registration summaries
+
+`protocol:diagnose`, `protocol:status`, and `protocol:verify` now print a one-line **Summary** before detailed checks. The summary reflects the overall registration state (`ok`, `degraded`, `not_registered`, or `error`) and the number of detected issues.
+
+`protocol:register` validates the current binary path and platform support **before** writing any OS registration artefacts. Invalid inputs fail immediately with actionable remediation text instead of low-level OS errors.
 
 ---
 
@@ -616,6 +661,11 @@ To re-debug:   glassbox debug  --network testnet
 | `LastAccessAt` | Non-zero and not before `CreatedAt` |
 | `SchemaVersion` | ≤ current `SchemaVersion` constant |
 | `EnvelopeXdr` | Non-empty when `SimRequestJSON` is set |
+| `AuditHash` | 64-character SHA-256 hex string when set; required when `AuditSignature` or `PreviousSessionHash` is set |
+| `AuditSignature` | 128-character hex-encoded Ed25519 signature when set; required when `AuditHash` or `PreviousSessionHash` is set |
+| `PreviousSessionHash` | 64-character SHA-256 hex string when set; must differ from `AuditHash` |
+
+`glassbox session save` now runs the same integrity validation before writing to the session store. That means malformed audit-chain fields such as a missing `AuditSignature`, a bad `PreviousSessionHash`, or a self-referential chain link are rejected immediately with field-specific hints instead of being persisted and only discovered later during resume or recovery.
 
 ### `session save` — `--pin-endpoint`
 

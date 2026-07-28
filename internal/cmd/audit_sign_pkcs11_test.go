@@ -99,7 +99,10 @@ func TestEffectivePKCS11Config_FlagOverridesEnv(t *testing.T) {
 	auditSignPKCS11Module = "/flag/module.so"
 	defer resetAuditSignFlags()
 
-	cfg := effectivePKCS11Config()
+	cfg, err := effectivePKCS11Config()
+	if err != nil {
+		t.Fatalf("effectivePKCS11Config returned error: %v", err)
+	}
 	if cfg.ModulePath != "/flag/module.so" {
 		t.Errorf("flag should override env: got ModulePath=%q", cfg.ModulePath)
 	}
@@ -108,6 +111,37 @@ func TestEffectivePKCS11Config_FlagOverridesEnv(t *testing.T) {
 	}
 	if cfg.SlotIndex != 3 {
 		t.Errorf("SlotIndex from env not parsed: got %d", cfg.SlotIndex)
+	}
+}
+
+func TestEffectivePKCS11Config_InvalidSlotRejected(t *testing.T) {
+	resetAuditSignFlags()
+	clearPKCS11Env(t)
+	t.Setenv("GLASSBOX_PKCS11_SLOT", "not-a-number")
+	defer resetAuditSignFlags()
+
+	_, err := effectivePKCS11Config()
+	if err == nil {
+		t.Fatal("expected invalid GLASSBOX_PKCS11_SLOT to be rejected")
+	}
+	if !strings.Contains(err.Error(), "GLASSBOX_PKCS11_SLOT") {
+		t.Errorf("error should mention GLASSBOX_PKCS11_SLOT, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "non-negative integer") {
+		t.Errorf("error should explain the required slot format, got %q", err.Error())
+	}
+}
+
+func TestResolveProviderAndConfig_UsesEnvSlotIndex(t *testing.T) {
+	resetAuditSignFlags()
+	clearPKCS11Env(t)
+	auditSignProvider = "pkcs11"
+	t.Setenv("GLASSBOX_PKCS11_SLOT", "4")
+	defer resetAuditSignFlags()
+
+	_, cfg := resolveProviderAndConfig()
+	if cfg.PKCS11SlotIndex != 4 {
+		t.Fatalf("expected resolveProviderAndConfig to carry PKCS11SlotIndex=4, got %d", cfg.PKCS11SlotIndex)
 	}
 }
 
@@ -181,6 +215,26 @@ func TestAuditSignPreRunE_ValidateOnlySkipsRequiredCheck(t *testing.T) {
 
 	if err := auditSignPreRunE(auditSignCmd, nil); err != nil {
 		t.Fatalf("--validate-only should skip the hard required-input check, got: %v", err)
+	}
+}
+
+func TestAuditSignPreRunE_ValidateOnlyStillRejectsInvalidSlotEnv(t *testing.T) {
+	resetAuditSignFlags()
+	clearPKCS11Env(t)
+	auditSignProvider = "pkcs11"
+	auditSignValidateOnly = true
+	t.Setenv("GLASSBOX_PKCS11_SLOT", "-1")
+	defer func() {
+		resetAuditSignFlags()
+		auditSignValidateOnly = false
+	}()
+
+	err := auditSignPreRunE(auditSignCmd, nil)
+	if err == nil {
+		t.Fatal("expected invalid GLASSBOX_PKCS11_SLOT to be rejected during PreRunE")
+	}
+	if !strings.Contains(err.Error(), "GLASSBOX_PKCS11_SLOT") {
+		t.Errorf("error should mention GLASSBOX_PKCS11_SLOT, got %q", err.Error())
 	}
 }
 

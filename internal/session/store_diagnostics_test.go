@@ -141,10 +141,14 @@ func TestRunStoreDiagnostics_DegradedSession_AppearsInReports(t *testing.T) {
 		t.Fatalf("Save healthy session: %v", err)
 	}
 
-	// Save one corrupt session (empty TxHash).
+	// Save one corrupt session (empty TxHash). SavePreservingSchemaVersion is
+	// used here because Save() now rejects a missing TxHash outright; this
+	// simulates a session that was already corrupt on disk (e.g. written by
+	// an older, less strict version of Glassbox) so RunStoreDiagnostics has
+	// something degraded to detect.
 	corrupt := makeValidSessionData(t, 1)
 	corrupt.TxHash = "" // integrity violation
-	if err := store.Save(ctx, corrupt); err != nil {
+	if err := store.SavePreservingSchemaVersion(ctx, corrupt); err != nil {
 		t.Fatalf("Save corrupt session: %v", err)
 	}
 
@@ -195,8 +199,8 @@ func TestRunStoreDiagnostics_Summary_MentionsDegraded(t *testing.T) {
 
 	ctx := context.Background()
 	corrupt := makeValidSessionData(t, 0)
-	corrupt.Network = "devnet" // invalid
-	if err := store.Save(ctx, corrupt); err != nil {
+	corrupt.Network = "devnet" // invalid — see SavePreservingSchemaVersion note above
+	if err := store.SavePreservingSchemaVersion(ctx, corrupt); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -207,6 +211,49 @@ func TestRunStoreDiagnostics_Summary_MentionsDegraded(t *testing.T) {
 	s := result.Summary()
 	if !strings.Contains(s, "degraded") {
 		t.Errorf("Summary() should mention 'degraded' when issues exist; got: %q", s)
+	}
+}
+
+func TestRunStoreDiagnostics_AuditChainIssue_AppearsInReports(t *testing.T) {
+	overrideTempHome(t)
+	store, err := NewStore()
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	corrupt := makeValidSessionData(t, 0)
+	corrupt.AuditHash = strings.Repeat("a", 64)
+	corrupt.PreviousSessionHash = strings.Repeat("b", 64)
+	// Missing audit_signature makes the persisted chain incomplete.
+	if err := store.Save(ctx, corrupt); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	result, err := store.RunStoreDiagnostics(ctx)
+	if err != nil {
+		t.Fatalf("RunStoreDiagnostics: %v", err)
+	}
+	if result.DegradedSessions != 1 {
+		t.Fatalf("DegradedSessions = %d, want 1", result.DegradedSessions)
+	}
+	if len(result.Reports) != 1 {
+		t.Fatalf("expected 1 degraded report; got %d", len(result.Reports))
+	}
+
+	report := result.Reports[0]
+	foundAuditSignature := false
+	for _, issue := range report.Issues {
+		if issue.Field == "AuditSignature" {
+			foundAuditSignature = true
+			if strings.TrimSpace(issue.Hint) == "" {
+				t.Error("AuditSignature issue should carry a hint")
+			}
+		}
+	}
+	if !foundAuditSignature {
+		t.Fatalf("expected AuditSignature issue in degraded report, got: %+v", report.Issues)
 	}
 }
 

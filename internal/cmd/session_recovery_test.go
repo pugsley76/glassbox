@@ -505,6 +505,61 @@ func TestSessionResume_ValidSession_SetsCurrentSession(t *testing.T) {
 	}
 }
 
+func TestSessionSave_InvalidAuditChain_IsRejected(t *testing.T) {
+	homeDir := overrideHome(t)
+	prevID, prevName, prevPin := sessionIDFlag, sessionNameFlag, sessionPinEndpointFlag
+	prevCurrent := GetCurrentSession()
+	t.Cleanup(func() {
+		sessionIDFlag = prevID
+		sessionNameFlag = prevName
+		sessionPinEndpointFlag = prevPin
+		SetCurrentSession(prevCurrent)
+	})
+
+	SetCurrentSession(&session.Data{
+		TxHash:              "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+		Network:             "testnet",
+		HorizonURL:          "https://horizon-testnet.stellar.org",
+		Status:              "active",
+		CreatedAt:           time.Now().Add(-time.Hour),
+		LastAccessAt:        time.Now(),
+		SchemaVersion:       session.SchemaVersion,
+		AuditHash:           strings.Repeat("a", 64),
+		PreviousSessionHash: strings.Repeat("b", 64),
+		// Missing audit_signature should fail validation before persistence.
+	})
+
+	var out bytes.Buffer
+	sessionSaveCmd.SetOut(&out)
+	sessionSaveCmd.SetErr(&out)
+
+	err := sessionSaveCmd.RunE(sessionSaveCmd, []string{})
+	if err == nil {
+		t.Fatal("expected session save to reject invalid audit-chain state")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "AuditSignature") {
+		t.Errorf("error should mention AuditSignature, got: %v", err)
+	}
+	if !strings.Contains(msg, "Hint:") {
+		t.Errorf("error should include a remediation hint, got: %v", err)
+	}
+
+	store, openErr := session.NewStore()
+	if openErr != nil {
+		t.Fatalf("open store: %v", openErr)
+	}
+	defer store.Close()
+
+	sessions, listErr := store.List(context.Background(), 10)
+	if listErr != nil {
+		t.Fatalf("list sessions: %v", listErr)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("invalid session should not have been persisted; found %d session(s) in %s", len(sessions), homeDir)
+	}
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func itoa(n int) string {

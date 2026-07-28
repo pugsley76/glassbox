@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/dotandev/glassbox/internal/errors"
+	"github.com/dotandev/glassbox/internal/plan"
 	"github.com/dotandev/glassbox/internal/signer"
 	"github.com/spf13/cobra"
 )
@@ -30,6 +31,9 @@ var (
 	// auditSignJSONFlag wraps the signed audit log output in a schema-versioned
 	// JSON envelope (currently a no-op pass-through; reserved for future envelope).
 	auditSignJSONFlag bool
+
+	// auditSignPlanFlag prints the execution plan without performing any signing.
+	auditSignPlanFlag bool
 
 	// auditSignSoftwareKey accepts a PKCS#8 PEM Ed25519 private key (literal
 	// PEM text or a file path). Equivalent to GLASSBOX_AUDIT_PRIVATE_KEY_PEM.
@@ -117,6 +121,7 @@ SIGNING PROVIDERS
             Optional: --pkcs11-token-label / GLASSBOX_PKCS11_TOKEN_LABEL
                       --pkcs11-key-label   / GLASSBOX_PKCS11_KEY_LABEL
                       --pkcs11-key-id      / GLASSBOX_PKCS11_KEY_ID
+                      GLASSBOX_PKCS11_SLOT (non-negative integer, default 0)
             Flags take precedence over the matching environment variable. The
             required inputs are validated up front; use --validate-only to run a
             full preflight (module load, slot, PIN, key, test-sign) without
@@ -161,7 +166,7 @@ EXAMPLES
 //
 // Provenance flags are also validated here so problems with --previous-signature-hash
 // format or a missing --cert-chain file are caught before any signing work begins.
-func auditSignPreRunE(cmd *cobra.Command, args []string) error {
+func auditSignPreRunE(cmd *cobra.Command, _ []string) error {
 	if err := validateAuditSignArgs(auditSignPayload, auditSignPayloadFile, auditSignProvider); err != nil {
 		return err
 	}
@@ -173,8 +178,14 @@ func auditSignPreRunE(cmd *cobra.Command, args []string) error {
 	}
 
 	name, _ := resolveProviderAndConfig()
-	if strings.EqualFold(name, "pkcs11") && !auditSignValidateOnly {
-		return validatePKCS11SignInputs(effectivePKCS11Config())
+	if strings.EqualFold(name, "pkcs11") {
+		cfg, err := effectivePKCS11Config()
+		if err != nil {
+			return err
+		}
+		if !auditSignValidateOnly {
+			return validatePKCS11SignInputs(cfg)
+		}
 	}
 	return nil
 }
@@ -210,6 +221,8 @@ func init() {
 		"Run PKCS#11 preflight checks and exit without signing")
 	auditSignCmd.Flags().BoolVar(&auditSignJSONFlag, "json", false,
 		"Wrap signed audit log output in a schema-versioned JSON envelope")
+	auditSignCmd.Flags().BoolVar(&auditSignPlanFlag, "plan", false,
+		"Print the execution plan (files, signing provider, outputs) without performing any signing")
 
 	// Provenance flags
 	auditSignCmd.Flags().StringVar(&auditSignSignerIdentity, "signer-identity", "",
@@ -228,6 +241,38 @@ func runAuditSign(cmd *cobra.Command, args []string) error {
 	// --validate-only: run PKCS#11 preflight checks and exit without signing.
 	if auditSignValidateOnly {
 		return runPkcs11Preflight(cmd)
+	}
+
+	// --plan: print execution plan without signing.
+	if auditSignPlanFlag {
+		providerName, cfg := resolveProviderAndConfig()
+		keyID := auditSignKeyID
+		if keyID == "" {
+			// Use a provider-appropriate placeholder.
+			switch providerName {
+			case "pkcs11":
+				keyID = firstNonEmpty(cfg.PKCS11KeyLabel, cfg.PKCS11KeyIDHex, "pkcs11-key")
+			default:
+				keyID = "(software key)"
+			}
+		}
+		execPlan := plan.BuildAuditPlan(plan.AuditPlanOptions{
+			PayloadFile:   auditSignPayloadFile,
+			ProviderName:  providerName,
+			KeyIdentifier: keyID,
+			Algorithm:     "ed25519",
+			CertChainFile: auditSignCertChainFile,
+		})
+		if auditSignJSONFlag {
+			jsonOut, jsonErr := execPlan.RenderJSON()
+			if jsonErr != nil {
+				return fmt.Errorf("failed to render plan: %w", jsonErr)
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), jsonOut)
+		} else {
+			fmt.Fprint(cmd.OutOrStdout(), execPlan.RenderText())
+		}
+		return nil
 	}
 
 	if auditSignPayload != "" && auditSignPayloadFile != "" {
@@ -322,6 +367,9 @@ func resolveProviderAndConfig() (string, signer.ProviderConfig) {
 		PKCS11KeyLabel:   auditSignPKCS11KeyLabel,
 		PKCS11KeyIDHex:   auditSignPKCS11KeyIDHex,
 	}
+	if slot, err := resolvePKCS11SlotIndex(); err == nil {
+		cfg.PKCS11SlotIndex = slot
+	}
 
 	// Determine provider name
 	name := auditSignProvider
@@ -397,7 +445,10 @@ func runPkcs11Preflight(cmd *cobra.Command) error {
 
 	// Build the config from flags merged over environment so --pkcs11-* overrides
 	// are honored (the validator itself reports any still-missing values).
-	cfg := effectivePKCS11Config()
+	cfg, err := effectivePKCS11Config()
+	if err != nil {
+		return err
+	}
 	vcfg := signer.DefaultValidatorConfig()
 	validator := signer.NewPkcs11Validator(cfg, vcfg, &signer.OsPkcs11Provider{})
 
@@ -428,7 +479,7 @@ func runPkcs11Preflight(cmd *cobra.Command) error {
 // applying CLI flags over the corresponding GLASSBOX_PKCS11_* environment
 // variables (flags take precedence). It is the single source of truth for both
 // preflight validation and the early required-input checks.
-func effectivePKCS11Config() signer.Pkcs11Config {
+func effectivePKCS11Config() (signer.Pkcs11Config, error) {
 	cfg := signer.Pkcs11Config{
 		ModulePath: firstNonEmpty(auditSignPKCS11Module, os.Getenv("GLASSBOX_PKCS11_MODULE")),
 		PIN:        firstNonEmpty(auditSignPKCS11PIN, os.Getenv("GLASSBOX_PKCS11_PIN")),
@@ -436,12 +487,38 @@ func effectivePKCS11Config() signer.Pkcs11Config {
 		KeyLabel:   firstNonEmpty(auditSignPKCS11KeyLabel, os.Getenv("GLASSBOX_PKCS11_KEY_LABEL")),
 		KeyIDHex:   firstNonEmpty(auditSignPKCS11KeyIDHex, os.Getenv("GLASSBOX_PKCS11_KEY_ID")),
 	}
-	if slot := os.Getenv("GLASSBOX_PKCS11_SLOT"); slot != "" {
-		if idx, err := strconv.Atoi(slot); err == nil {
-			cfg.SlotIndex = idx
-		}
+	slotIndex, err := resolvePKCS11SlotIndex()
+	if err != nil {
+		return signer.Pkcs11Config{}, err
 	}
-	return cfg
+	cfg.SlotIndex = slotIndex
+	return cfg, nil
+}
+
+func resolvePKCS11SlotIndex() (int, error) {
+	raw := strings.TrimSpace(os.Getenv("GLASSBOX_PKCS11_SLOT"))
+	if raw == "" {
+		return 0, nil
+	}
+
+	idx, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, errors.WrapValidationError(fmt.Sprintf(
+			"GLASSBOX_PKCS11_SLOT must be a non-negative integer, got %q\n"+
+				"  Fix: set GLASSBOX_PKCS11_SLOT to a numeric slot index such as 0 or 1, or unset it to use the default slot\n"+
+				"  Tip: run 'glassbox audit:sign --validate-only --signing-provider pkcs11' to inspect available slot diagnostics",
+			raw,
+		))
+	}
+	if idx < 0 {
+		return 0, errors.WrapValidationError(fmt.Sprintf(
+			"GLASSBOX_PKCS11_SLOT must be a non-negative integer, got %d\n"+
+				"  Fix: set GLASSBOX_PKCS11_SLOT to 0 or a higher slot index, or unset it to use the default slot\n"+
+				"  Tip: run 'glassbox audit:sign --validate-only --signing-provider pkcs11' to inspect available slot diagnostics",
+			idx,
+		))
+	}
+	return idx, nil
 }
 
 // validatePKCS11SignInputs rejects an incomplete PKCS#11 configuration before any
@@ -502,7 +579,6 @@ func validatePKCS11SignInputs(cfg signer.Pkcs11Config) error {
 		return errors.WrapValidationError(
 			"pkcs11 signing requires one of --pkcs11-key-label (CKA_LABEL) or --pkcs11-key-id (hex CKA_ID)\n" +
 				"  Fix: set GLASSBOX_PKCS11_KEY_LABEL or GLASSBOX_PKCS11_KEY_ID, or use the corresponding --pkcs11-* flag")
-	}
 	}
 
 	return nil

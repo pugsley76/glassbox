@@ -3,7 +3,8 @@
 
 import { Command } from 'commander';
 import { ProtocolHandler } from '../protocol/handler';
-import { ProtocolRegistrar } from '../protocol/register';
+import { ProtocolRegistrar, ProtocolRegistrationError } from '../protocol/register';
+import { ExitCode } from '../exit-codes';
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -88,6 +89,35 @@ function releaseLock(): void {
     }
 }
 
+function formatRegistrationSummary(diag: { status: string }): string {
+    switch (diag.status) {
+        case 'ok': return 'OK';
+        case 'degraded': return 'DEGRADED';
+        case 'unsupported': return 'UNSUPPORTED';
+        default: return diag.status.toUpperCase();
+    }
+}
+
+function printProtocolRegistrationFailure(action: string, error: unknown): void {
+    if (error instanceof ProtocolRegistrationError) {
+        console.error(`[FAIL] ${action} failed: ${error.message}`);
+        if (error.remediation.length > 0) {
+            console.error('Fix:');
+            for (const step of error.remediation) {
+                console.error(`  - ${step}`);
+            }
+        }
+        return;
+    }
+
+    if (error instanceof Error) {
+        console.error(`[FAIL] ${action} failed: ${error.message}`);
+        return;
+    }
+
+    console.error(`[FAIL] ${action} failed: An unknown error occurred`);
+}
+
 /**
  * registerProtocolCommands adds protocol-related commands to the Glassbox CLI.
  * These include the internal handler called by the OS and user-facing 
@@ -121,13 +151,13 @@ export function registerProtocolCommands(program: Command): void {
                     `[WARN] Another protocol handler instance is running${lockDetail}. ` +
                     `Use --force to override, or wait for it to finish.`
                 );
-                process.exit(1);
+                process.exit(ExitCode.RESOURCE_ERROR);
             }
 
             const cleanup = (): void => { releaseLock(); };
             process.on('exit', cleanup);
-            process.on('SIGINT', () => { cleanup(); process.exit(130); });
-            process.on('SIGTERM', () => { cleanup(); process.exit(143); });
+            process.on('SIGINT', () => { cleanup(); process.exit(ExitCode.SIGINT); });
+            process.on('SIGTERM', () => { cleanup(); process.exit(ExitCode.SIGTERM); });
 
             try {
                 const handler = new ProtocolHandler({
@@ -142,7 +172,7 @@ export function registerProtocolCommands(program: Command): void {
                 } else {
                     console.error('[FAIL] Protocol handler error: An unknown error occurred');
                 }
-                process.exit(1);
+                process.exit(ExitCode.UNKNOWN_ERROR);
             } finally {
                 releaseLock();
             }
@@ -151,7 +181,7 @@ export function registerProtocolCommands(program: Command): void {
     // 2. Protocol Registration
     program
         .command('protocol:register')
-        .description('Register the glassbox:// protocol handler in the operating system')
+        .description('Register the glassbox:// protocol handler in the operating system (validates CLI path exists and is executable)')
         .action(async () => {
             try {
                 const registrar = new ProtocolRegistrar();
@@ -159,20 +189,18 @@ export function registerProtocolCommands(program: Command): void {
                 const isRegistered = await registrar.isRegistered();
                 if (isRegistered) {
                     console.log('[WARN]  Protocol handler is already registered.');
-                    console.log('To refresh registration, run: GLASSBOX Protocol:unregister && GLASSBOX Protocol:register');
+                    console.log('To refresh registration, run: glassbox protocol:unregister && glassbox protocol:register');
+                    console.log('Tip: run "glassbox protocol:status" to verify the registered binary path.');
                     return;
                 }
 
                 await registrar.register();
                 console.log(' Successfully registered GLASSBOX Protocol handler');
                 console.log('You can now launch Glassbox directly from supported dashboards via glassbox:// links.');
+                console.log('Tip: run "glassbox protocol:status" to confirm the registration is working.');
             } catch (error) {
-                if (error instanceof Error) {
-                    console.error(`[FAIL] Registration failed: ${error.message}`);
-                } else {
-                    console.error('[FAIL] Registration failed: An unknown error occurred');
-                }
-                process.exit(1);
+                printProtocolRegistrationFailure('Registration', error);
+                process.exit(ExitCode.CONFIGURATION_ERROR);
             }
         });
 
@@ -186,82 +214,83 @@ export function registerProtocolCommands(program: Command): void {
                 await registrar.unregister();
                 console.log(' Successfully unregistered GLASSBOX Protocol handler');
             } catch (error) {
-                if (error instanceof Error) {
-                    console.error(`[FAIL] Unregistration failed: ${error.message}`);
-                } else {
-                    console.error('[FAIL] Unregistration failed: An unknown error occurred');
-                }
-                process.exit(1);
+                printProtocolRegistrationFailure('Unregistration', error);
+                process.exit(ExitCode.CONFIGURATION_ERROR);
             }
         });
 
     // 4. Registration Status
     program
         .command('protocol:status')
-        .description('Check current registration status of the glassbox:// protocol handler')
+        .description('Check registration status and print a diagnostic summary for glassbox://')
         .action(async () => {
             try {
                 const registrar = new ProtocolRegistrar();
                 const diag = await registrar.diagnose();
-                const executableFix = process.platform === 'win32'
-                    ? 'Ensure the registered file is a runnable .exe, .cmd, .bat, or .com binary'
-                    : `Restore execute permissions, for example: chmod +x ${diag.cliPath ?? '<path>'}`;
 
                 console.log('GLASSBOX Protocol Handler Status');
                 console.log('----------------------------');
+                console.log(`Summary:         ${formatRegistrationSummary(diag)}`);
+                console.log(`Platform:        ${diag.platform}`);
                 console.log(`Registered Path: ${diag.cliPath ?? '(not registered)'}`);
+                console.log(`Current Binary:  ${diag.currentCliPath}`);
+
+                if (diag.status === 'unsupported') {
+                    console.log('Registration:    UNSUPPORTED PLATFORM');
+                    console.log('');
+                    for (const issue of diag.issues) {
+                        console.log(`[FAIL] ${issue}`);
+                    }
+                    console.log('');
+                    console.log('Fix:');
+                    for (const fix of diag.remediationSteps) {
+                        console.log(`  - ${fix}`);
+                    }
+                    process.exit(ExitCode.CONFIGURATION_ERROR);
+                }
 
                 if (!diag.registered) {
                     console.log('Registration:    NOT REGISTERED');
                     console.log('Path Exists:     No');
                     console.log('Executable:      No');
                     console.log('');
+                    for (const issue of diag.issues) {
+                        console.log(`[FAIL] ${issue}`);
+                    }
+                    console.log('');
                     console.log('Fix:');
-                    console.log('  - Run "GLASSBOX Protocol:register" to enable dashboard integration');
-                    return;
+                    for (const fix of diag.remediationSteps) {
+                        console.log(`  - ${fix}`);
+                    }
+                    process.exit(ExitCode.CONFIGURATION_ERROR);
                 }
 
-                console.log('Registration:    REGISTERED');
+                console.log(`Registration:    ${diag.status === 'ok' ? 'REGISTERED' : 'REGISTERED (DEGRADED)'}`);
                 console.log(`Path Exists:     ${diag.pathExists ? 'Yes' : 'No'}`);
                 console.log(`Executable:      ${!diag.pathExists ? 'No' : diag.isExecutable ? 'Yes' : 'No'}`);
 
-                const issues: string[] = [];
-                const fixes: string[] = [];
-
-                if (!diag.cliPath) {
-                    issues.push('Could not determine registered CLI path');
-                    fixes.push('Re-run "GLASSBOX Protocol:register" to refresh registration');
-                } else if (!diag.pathExists) {
-                    issues.push(`Binary not found at ${diag.cliPath}`);
-                    fixes.push(`Ensure the Glassbox binary exists at ${diag.cliPath}`);
-                    fixes.push('Re-run "GLASSBOX Protocol:register" to update the registered path');
-                } else if (!diag.isExecutable) {
-                    issues.push(`Binary at ${diag.cliPath} is not executable`);
-                    fixes.push(executableFix);
-                    fixes.push('Re-run "GLASSBOX Protocol:register" if the binary moved or was replaced');
-                }
-
-                if (issues.length === 0) {
+                if (diag.status === 'ok') {
                     console.log('[OK] Registered CLI is usable.');
                     return;
                 }
 
                 console.log('');
-                for (const issue of issues) {
+                for (const issue of diag.issues) {
                     console.log(`[FAIL] ${issue}`);
                 }
                 console.log('');
                 console.log('Fix:');
-                for (const fix of fixes) {
+                for (const fix of diag.remediationSteps) {
                     console.log(`  - ${fix}`);
                 }
+                process.exit(ExitCode.CONFIGURATION_ERROR);
             } catch (error) {
                 if (error instanceof Error) {
                     console.error(`[FAIL] Status check failed: ${error.message}`);
                 } else {
                     console.error('[FAIL] Status check failed: An unknown error occurred');
                 }
-                process.exit(1);
+                process.exit(ExitCode.UNKNOWN_ERROR);
             }
         });
 }

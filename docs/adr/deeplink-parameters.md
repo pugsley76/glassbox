@@ -11,7 +11,7 @@ validates all parameters and produces actionable error messages for malformed li
 ## URI Format
 
 ```
-glassbox://debug/<txhash>?network=<network>[&op=<index>][&view=<mode>][&source=<id>][&signature=<hint>]
+glassbox://debug/<txhash>?network=<network>[&op=<index>][&view=<mode>][&source=<id>][&signature=<hint>][&protocol-version=<ver>][&mock-ledger-manifest=<path>][&mock-ledger-entry=<key:val>]
 ```
 
 ### Components
@@ -26,6 +26,9 @@ glassbox://debug/<txhash>?network=<network>[&op=<index>][&view=<mode>][&source=<
 | `view` | no | Initial view mode to open. See [View Modes](#view-modes) below. |
 | `source` | no | Free-form source identifier (e.g. `"dashboard"`, `"ci"`). Not validated. |
 | `signature` | no | Free-form signature hint. Not validated. |
+| `protocol-version` | no | Protocol version override for simulation. One of: `20`, `21`, `22`. |
+| `mock-ledger-manifest` | no | Path to a JSON manifest containing ledger_entries for override state. |
+| `mock-ledger-entry` | no | Override ledger entries before simulation (repeatable, format: `key:value`). |
 
 ---
 
@@ -86,6 +89,18 @@ beyond URL encoding.
 
 A free-form hint string. Not validated. Reserved for future use.
 
+### `protocol-version` (optional)
+
+Overrides the Soroban protocol version for simulation. Must be a supported protocol version (e.g. `20`, `21`, `22`).
+
+### `mock-ledger-manifest` (optional)
+
+Specifies a path to a JSON manifest containing `ledger_entries` for override state. Rejects paths containing null bytes.
+
+### `mock-ledger-entry` (optional, repeatable)
+
+Enables overriding specific ledger entries using `key:value` pairs before simulation. Each override must be a non-empty key and a valid base64-encoded value.
+
 ---
 
 ## Examples
@@ -102,7 +117,7 @@ glassbox://debug/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde
 
 **Full example — all parameters:**
 ```
-glassbox://debug/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef?network=futurenet&op=2&view=flamegraph&source=ci
+glassbox://debug/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef?network=futurenet&op=2&view=flamegraph&source=ci&protocol-version=22&mock-ledger-manifest=/path/to/manifest.json&mock-ledger-entry=AAAAAQ==:BBBBQg==
 ```
 
 ---
@@ -123,6 +138,10 @@ The parser produces specific, actionable errors for each class of invalid input:
 | Negative op | `invalid operation index "-1": must be a non-negative integer` |
 | Non-numeric op | `invalid operation index "abc": must be a non-negative integer` |
 | Invalid view | `invalid view "raw": must be one of trace, flamegraph, events, auth, budget, storage` |
+| Invalid protocol-version | `invalid protocol-version "99": unsupported version` |
+| Null byte in mock-ledger-manifest | `mock-ledger-manifest parameter contains null bytes and cannot be used` |
+| Invalid mock-ledger-entry format | `invalid mock-ledger-entry format "keyonly" — expected key:value` |
+| Invalid mock-ledger-entry base64 | `mock-ledger-entry "key:value" has an invalid base64 value` |
 
 ---
 

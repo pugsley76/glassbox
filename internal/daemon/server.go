@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/dotandev/glassbox/internal/errors"
+	"github.com/dotandev/glassbox/internal/health"
 	"github.com/dotandev/glassbox/internal/logger"
 	stellarrpc "github.com/dotandev/glassbox/internal/rpc"
 	"github.com/dotandev/glassbox/internal/simulator"
@@ -23,9 +24,10 @@ import (
 
 // Server represents the JSON-RPC daemon server
 type Server struct {
-	rpcClient *stellarrpc.Client
-	simulator *simulator.Runner
-	authToken string
+	rpcClient     *stellarrpc.Client
+	simulator     *simulator.Runner
+	authToken     string
+	healthHandler *health.Handler
 }
 
 // Config holds daemon configuration
@@ -93,11 +95,30 @@ func NewServer(config Config) (*Server, error) {
 		return nil, errors.WrapSimulatorNotFound(err.Error())
 	}
 
-	return &Server{
+	h := &Server{
 		rpcClient: client,
 		simulator: sim,
 		authToken: config.AuthToken,
-	}, nil
+	}
+
+	// Build health handler and register lightweight checks.
+	// These checks are read-only and never trigger expensive replay work.
+	hh := health.NewHandler()
+
+	// Simulator availability check: verify the runner binary can be located.
+	hh.Register(health.NewChecker("simulator", func(_ context.Context) error {
+		_, checkErr := simulator.NewRunner("", false)
+		return checkErr
+	}))
+
+	// RPC connectivity check: verify the configured RPC endpoint is reachable.
+	hh.Register(health.NewChecker("rpc", func(ctx context.Context) error {
+		_, checkErr := client.GetHealth(ctx)
+		return checkErr
+	}))
+
+	h.healthHandler = hh
+	return h, nil
 }
 
 // authenticate validates the authorization token
@@ -211,29 +232,39 @@ func (s *Server) GetContractCode(r *http.Request, req *GetContractCodeRequest, r
 
 // Start starts the JSON-RPC server
 func (s *Server) Start(ctx context.Context, port string) error {
-	server := rpc.NewServer()
-	server.RegisterCodec(json2.NewCodec(), "application/json")
-	server.RegisterCodec(json2.NewCodec(), "application/json;charset=UTF-8")
+	rpcServer := rpc.NewServer()
+	rpcServer.RegisterCodec(json2.NewCodec(), "application/json")
+	rpcServer.RegisterCodec(json2.NewCodec(), "application/json;charset=UTF-8")
 
-	if err := server.RegisterService(s, ""); err != nil {
+	if err := rpcServer.RegisterService(s, ""); err != nil {
 		return errors.WrapValidationError(fmt.Sprintf("failed to register service: %v", err))
 	}
 
-	http.Handle("/rpc", server)
+	// Use a dedicated mux so we don't pollute the global http.DefaultServeMux.
+	mux := http.NewServeMux()
+	mux.Handle("/rpc", rpcServer)
 
-	// Health check endpoint
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	// Legacy /health endpoint for backwards compatibility.
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
+	// Structured health endpoints (liveness, readiness, aggregate status).
+	checker := NewHealthChecker()
+	checker.WithSimulatorProbe(DefaultSimulatorProbe(func() bool {
+		return s.simulator != nil
+	}))
+	RegisterHealthRoutes(mux, checker)
+
 	// Prometheus metrics endpoint
-	http.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/metrics", promhttp.Handler())
 
 	logger.Logger.Info("Starting JSON-RPC server", "port", port)
 
 	srv := &http.Server{
-		Addr: ":" + port,
+		Addr:    ":" + port,
+		Handler: mux,
 	}
 
 	// Start server in goroutine
@@ -243,8 +274,9 @@ func (s *Server) Start(ctx context.Context, port string) error {
 		}
 	}()
 
-	// Wait for context cancellation
+	// Wait for context cancellation; signal readiness probe before shutdown begins.
 	<-ctx.Done()
+	checker.MarkShuttingDown()
 	logger.Logger.Info("Shutting down JSON-RPC server")
 	return srv.Shutdown(context.Background())
 }

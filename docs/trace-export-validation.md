@@ -464,6 +464,59 @@ invalid --trace-verbosity "extreme" — must be one of: summary, normal, verbose
   Fix: supply metadata as key=value pairs, e.g. --meta env=testnet --meta version=1.2
 ```
 
+### `--verify-export`
+
+Verifies the integrity of an existing trace export file and exits. No trace
+file argument is required — the command only reads the export artifact and its
+companion `.meta.json` file.
+
+```sh
+glassbox trace --verify-export ./artifacts/trace.json
+```
+
+**Checks performed (in order):**
+
+1. Metadata file exists (`.meta.json` alongside the export)
+2. Metadata is valid JSON
+3. `version` field in metadata is a recognized schema version
+4. File checksum matches the SHA-256 digest recorded at export time
+5. Step count in the trace file matches the count recorded in metadata (JSON format only)
+6. File extension matches the declared format
+
+**Success output:**
+
+```
+✓ Export integrity verified: ./artifacts/trace.json
+```
+
+**Failure output examples:**
+
+```
+export integrity check failed for "trace.json":
+  checksum mismatch
+    Expected: 3b4c5d...
+    Actual:   9f2c41...
+    The trace file may have been modified or corrupted
+    Fix: re-export the trace with 'glassbox trace --export <file> --format <fmt> <trace>'
+```
+
+```
+export integrity check failed for "trace.json":
+  metadata file records unsupported schema_version "99.0"
+    Supported versions: "1.0"
+    Fix: re-export the trace with the current CLI version, or upgrade Glassbox
+```
+
+`--verify-export` exits with a non-zero code on any failure, making it suitable
+for CI gates:
+
+```sh
+glassbox trace --verify-export ./artifacts/trace.json && echo "artifact OK"
+```
+
+**Validation:** The path must exist and be readable. A missing file is caught
+in `PreRunE` alongside other flag errors.
+
 ### Multiple Validation Errors (`glassbox trace`)
 
 All failures are collected and reported together:
@@ -722,9 +775,22 @@ if err := trace.VerifyExport("./output/trace.json"); err != nil {
 |-------|----------------|
 | Metadata file missing | Descriptive note that the file can still be used but integrity cannot be verified |
 | Metadata file corrupt | `failed to parse metadata file` with corruption hint |
+| Metadata `version` field unsupported | `metadata file records unsupported schema_version` with supported list and upgrade hint |
 | Checksum mismatch | `checksum mismatch` with expected/actual values and re-export hint |
 | Step count mismatch (JSON only) | `step count mismatch` with recorded vs actual count and truncation hint |
 | Format/extension mismatch | `format mismatch` with re-export hint |
+
+**Metadata version error example:**
+
+```
+metadata file records unsupported schema_version "99.0"
+  Supported versions: "1.0"
+  Fix: re-export the trace with the current CLI version, or upgrade Glassbox
+```
+
+Metadata files produced before schema versioning was introduced carry an empty
+`version` field.  These are accepted without error — the integrity checks
+(checksum, step count, format) still apply.
 
 **Step count mismatch error example:**
 
@@ -758,6 +824,160 @@ for _, w := range warnings {
 ```
 
 **Only JSON format exports can be recovered.** HTML, Markdown, and Text are presentation-only formats and cannot be parsed back to an `ExecutionTrace`. Always export in JSON format when recovery capability is required.
+
+---
+
+## Versioned JSON Export and Metadata
+
+Glassbox provides a first-class versioned JSON envelope for trace exports that
+embeds schema version and generation metadata.  Use this format when you need
+reliable round-trip loading, schema compatibility checking, or audit trails.
+
+### ExportJSON — Versioned Envelope Format
+
+`(*ExecutionTrace).ExportJSON(schemaVersion string, generatedAt time.Time) ([]byte, error)`
+
+Produces a JSON envelope of the form:
+
+```json
+{
+  "schema_version": "1.0",
+  "generated_at":   "2026-06-01T12:00:00Z",
+  "trace": {
+    "transaction_hash": "sha256:3b4c5d...",
+    "start_time":       "2026-06-01T11:59:55Z",
+    "end_time":         "2026-06-01T12:00:00Z",
+    "states":           [ ... ],
+    ...
+  }
+}
+```
+
+**Key properties:**
+
+| Property | Detail |
+|---|---|
+| `schema_version` | Must be a `MAJOR.MINOR` string (e.g. `"1.0"`). Use `CurrentJSONSchemaVersion` in production code. Validated before writing — an invalid or unsupported version is rejected immediately. |
+| `generated_at` | Truncated to second precision in UTC for deterministic output. |
+| `trace.transaction_hash` | SHA-256 fingerprinted (`"sha256:<64 hex chars>"`) — the raw hash never appears in the file. |
+| Determinism | Calling `ExportJSON` twice with identical inputs produces identical bytes. |
+| Write-side validation | `schemaVersion` is validated with `ValidateJSONSchemaVersion` before any bytes are written, so callers learn about unsupported versions immediately. |
+
+**Example (Go):**
+
+```go
+data, err := trace.ExportJSON(CurrentJSONSchemaVersion, time.Now())
+if err != nil {
+    return err
+}
+if err := os.WriteFile("trace.json", data, 0o644); err != nil {
+    return err
+}
+```
+
+**Write-side validation error example:**
+
+```
+ExportJSON called with invalid schema_version "99.0": schema_version "99.0" is not supported
+  Supported versions: "1.0"
+  Fix: use trace.CurrentJSONSchemaVersion as the schemaVersion argument
+```
+
+> **Note for tests:** If you need to deliberately produce a file with an
+> unsupported schema version (e.g. to exercise error-handling paths in
+> `LoadVersionedTrace`), use `(*ExecutionTrace).ExportJSONUnchecked` instead.
+> This variant skips the write-side validation and is only intended for test
+> code.
+
+---
+
+### Transaction Hash Fingerprinting
+
+The raw transaction hash is replaced with its SHA-256 digest prefixed by
+`"sha256:"` before writing.  This ensures:
+
+- Sensitive or private transaction identifiers do not leak through shared
+  export files.
+- The fingerprint is a stable, collision-resistant reference.
+
+An empty transaction hash produces the sentinel value `"sha256:(empty)"` rather
+than the digest of an empty string, making empty-hash conditions unambiguous.
+
+---
+
+### SaveToFile — Legacy Plain Format
+
+`(*ExecutionTrace).SaveToFile(path string) error`
+
+Writes the trace as a plain `ExecutionTrace` JSON object (no envelope, no
+schema version field).  Use this only for simple persistence or when
+interfacing with older tooling that expects the legacy format.
+
+```go
+if err := trace.SaveToFile("./trace-plain.json"); err != nil {
+    log.Fatal(err)
+}
+```
+
+> **Note**: Files written by `SaveToFile` carry no version information.  When
+> loaded by `LoadExecutionTrace`, a deprecation warning is printed to stderr
+> advising the operator to re-export with the current CLI.
+
+---
+
+### LoadExecutionTrace — Universal Loader
+
+`LoadExecutionTrace(path string) (*ExecutionTrace, error)`
+
+Single entry-point that loads a trace file regardless of its envelope shape:
+
+| File shape | Detected by |
+|---|---|
+| ExportJSON envelope | Top-level `"schema_version"` string key |
+| VersionedTrace envelope | Top-level `"version"` object key |
+| Plain ExecutionTrace JSON | Fallback — neither key present |
+
+```go
+trace, err := LoadExecutionTrace("./trace.json")
+if err != nil {
+    // Error includes the file path and references glassbox commands:
+    // failed to load execution trace from "./trace.json": ...
+    //   Verify the file was produced by a glassbox command such as:
+    //     glassbox debug <tx-hash> --trace-output trace.json
+    log.Fatal(err)
+}
+```
+
+Internally, `LoadExecutionTrace` delegates to `LoadVersionedTrace` with
+`DefaultCompatibilityOptions()`.  Schema version validation, version migration,
+and deprecation warnings are all handled by that function.
+
+---
+
+### Schema Version Lifecycle
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `CurrentJSONSchemaVersion` | `"1.0"` | Version embedded by `ExportJSON` in production |
+| `SupportedJSONSchemaVersions` | `["1.0"]` | Versions `LoadVersionedTrace` accepts without error |
+
+When the schema evolves:
+
+1. **Patch change** (documentation only) — no code change required; the
+   `MAJOR.MINOR` pair is unchanged.
+2. **Minor change** (new optional fields) — append the new version string to
+   `SupportedJSONSchemaVersions`; files produced by older CLIs continue to
+   load with a deprecation warning.
+3. **Major change** (breaking) — bump `CurrentJSONSchemaVersion` major component
+   and add migration logic to `migrateTrace`.
+
+**Error example for unsupported version:**
+
+```
+unsupported schema_version "99.0" in trace file "./old-trace.json"
+  This binary supports schema versions: "1.0"
+  Fix: re-export the trace with the current CLI version, or upgrade Glassbox
+```
 
 ---
 
