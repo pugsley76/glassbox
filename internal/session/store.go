@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/dotandev/glassbox/internal/logger"
+	"github.com/dotandev/glassbox/internal/security"
 	"github.com/dotandev/glassbox/internal/simulator"
 	"github.com/dotandev/glassbox/internal/version"
 	_ "modernc.org/sqlite"
@@ -309,10 +310,28 @@ func (s *Store) SaveWithValidation(ctx context.Context, data *Data) error {
 // the full integrity-report formatting. Prefer SaveWithValidation when the
 // caller cannot guarantee the Data has already been validated externally.
 func (s *Store) Save(ctx context.Context, data *Data) error {
+	if data == nil {
+		return fmt.Errorf("session data must not be nil")
+	}
 	if data.ID == "" {
 		return fmt.Errorf("session ID is required")
 	}
 	if data.TxHash == "" {
+		return fmt.Errorf("session TxHash is required")
+	}
+	if data.Network == "" {
+		return fmt.Errorf("session network is required")
+	}
+	validNetworks := map[string]bool{"testnet": true, "mainnet": true, "futurenet": true}
+	if !validNetworks[data.Network] {
+		return fmt.Errorf("session network %q is invalid: accepted values are testnet, mainnet, futurenet", data.Network)
+	}
+	if data.Status == "" {
+		return fmt.Errorf("session status is required")
+	}
+	validStatuses := map[string]bool{"active": true, "saved": true, "resumed": true, "recovered": true, "expired": true}
+	if !validStatuses[data.Status] {
+		return fmt.Errorf("session status %q is invalid: accepted values are active, saved, resumed, recovered, expired", data.Status)
 		return fmt.Errorf(
 			"session transaction hash is required\n" +
 				"  Fix: run 'glassbox debug <tx-hash>' to create a session with a valid transaction hash",
@@ -356,6 +375,15 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 		case "futurenet":
 			data.HorizonURL = "https://horizon-futurenet.stellar.org"
 		}
+	}
+	// Reject null bytes in HorizonURL — they are a potential injection vector
+	// and cannot appear in a valid URL.
+	if strings.ContainsRune(data.HorizonURL, 0) {
+		return fmt.Errorf(
+			"horizon URL contains null bytes and cannot be stored: %q\n"+
+				"  Fix: provide a valid HTTPS URL with --horizon-url or rely on the auto-populated default",
+			data.HorizonURL,
+		)
 	}
 	if data.Name != "" && len(data.Name) > 128 {
 		return fmt.Errorf(
@@ -809,28 +837,90 @@ func (s *Store) scanSessionRow(row sessionRowScanner) (*Data, error) {
 		data.EnvFingerprint = envFP.String
 	}
 
-	if data.CreatedAt, err = time.Parse(time.RFC3339, createdAt); err != nil {
-		return nil, fmt.Errorf("failed to parse created_at: %w", err)
+	if data.CreatedAt, err = parseTimestamp(createdAt); err != nil {
+		return nil, fmt.Errorf(
+			"failed to parse created_at %q: %w\n"+
+				"  Fix: the session database may be corrupt — run 'glassbox session doctor' for diagnostics",
+			createdAt, err,
+		)
 	}
-	if data.LastAccessAt, err = time.Parse(time.RFC3339, lastAccessAt); err != nil {
-		return nil, fmt.Errorf("failed to parse last_access_at: %w", err)
+	if data.LastAccessAt, err = parseTimestamp(lastAccessAt); err != nil {
+		return nil, fmt.Errorf(
+			"failed to parse last_access_at %q: %w\n"+
+				"  Fix: the session database may be corrupt — run 'glassbox session doctor' for diagnostics",
+			lastAccessAt, err,
+		)
 	}
 
 	return &data, nil
 }
 
-// GenerateID creates a new session ID from transaction hash and timestamp
+// parseTimestamp parses a timestamp string that may be in RFC3339 format
+// (e.g. "2006-01-02T15:04:05Z07:00") or in SQLite's default datetime format
+// (e.g. "2006-01-02 15:04:05" or "2006-01-02 15:04:05.999999999+07:00").
+// SQLite does not guarantee a specific timestamp format when rows are written
+// directly or by older versions of the driver, so both formats must be handled.
+func parseTimestamp(s string) (time.Time, error) {
+	// Try the standard RFC3339 format first (the canonical form written by
+	// current Go database/sql drivers with the sqlite driver).
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	// Try RFC3339 with nanoseconds (e.g. "2006-01-02T15:04:05.999999999Z07:00").
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t, nil
+	}
+	// SQLite datetime() default: "2006-01-02 15:04:05" (UTC, no timezone).
+	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+		return t.UTC(), nil
+	}
+	// SQLite datetime with fractional seconds: "2006-01-02 15:04:05.999999999".
+	if t, err := time.Parse("2006-01-02 15:04:05.999999999", s); err == nil {
+		return t.UTC(), nil
+	}
+	return time.Time{}, fmt.Errorf("unrecognised timestamp format: %q (expected RFC3339 or \"2006-01-02 15:04:05\")", s)
+}
+
+// GenerateID creates a new session ID from transaction hash and timestamp.
+// The produced ID is safe for use as a file name and in SQL identifiers —
+// only lowercase hex characters, digits, and hyphens are retained.
 func GenerateID(txHash string) string {
 	if txHash != "" {
-		// Use first 8 chars of hash + timestamp for readability
-		shortHash := txHash
+		// Sanitize: keep only lowercase hex digits (a-f, 0-9) and hyphens to
+		// prevent any special characters in txHash from escaping into the ID
+		// and causing injection in file names or SQL queries.
+		sanitized := sanitizeIDComponent(txHash)
+		shortHash := sanitized
 		if len(shortHash) > 8 {
 			shortHash = shortHash[:8]
 		}
-		return fmt.Sprintf("%s-%d", shortHash, time.Now().Unix())
+		if shortHash != "" {
+			return fmt.Sprintf("%s-%d", shortHash, time.Now().Unix())
+		}
 	}
-	// Fallback to timestamp-based ID
+	// Fallback to timestamp-based ID when txHash is empty or yields no safe chars.
 	return fmt.Sprintf("session-%d", time.Now().Unix())
+}
+
+// sanitizeIDComponent strips any character from s that is not a lowercase
+// ASCII letter, digit, or hyphen, making the result safe for use in IDs,
+// file names, and log entries. Upper-case letters are lowercased.
+func sanitizeIDComponent(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r + 32) // to lower
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-':
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // ToSimulationRequest converts stored JSON back to SimulationRequest

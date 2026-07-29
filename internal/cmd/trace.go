@@ -14,6 +14,7 @@ import (
 	"github.com/dotandev/glassbox/internal/diagnostics"
 	"github.com/dotandev/glassbox/internal/errors"
 	"github.com/dotandev/glassbox/internal/gasmodel"
+	"github.com/dotandev/glassbox/internal/security"
 	"github.com/dotandev/glassbox/internal/trace"
 	"github.com/dotandev/glassbox/internal/visualizer"
 	"github.com/spf13/cobra"
@@ -43,6 +44,23 @@ var (
 	traceTimingsFlag           bool // --timings: structured phase timing via diagnostics
 	traceForceFlag             bool
 	traceFormatAlias           string // --format is a user-friendly alias for --export-format
+	traceVerifyExportFlag      string // --verify-export: verify integrity of an existing export file
+
+	// Secret scanning flags
+	secretScanModeFlag       string
+	secretScanOverrideFlag   []string
+
+	// Secret scanning flags
+	secretScanModeFlag       string
+	secretScanOverrideFlag   []string
+
+	// Secret scanning flags
+	secretScanModeFlag       string
+	secretScanOverrideFlag   []string
+
+	// Secret scanning flags
+	secretScanModeFlag       string
+	secretScanOverrideFlag   []string
 
 	// eventSchemas is optionally populated by other subsystems (e.g. schema
 	// loading) before the trace command runs. Nil is safe — PrintExecutionTrace
@@ -92,7 +110,13 @@ Performance notes:
   Large traces (>5 000 steps) can produce slow HTML rendering.
   Use --format json for large traces or CI pipelines.
   Use --trace-verbosity summary to reduce output size significantly.
-  Use --dry-run to validate parameters without writing any files.`,
+  Use --dry-run to validate parameters without writing any files.
+
+Export verification:
+  Use --verify-export <file> to check the integrity of an existing export.
+  The command verifies the checksum, step count, schema version recorded in
+  the companion .meta.json file, and that the file extension matches the
+  declared format.  No trace file argument is required in this mode.`,
 	Example: `  # Open the interactive trace viewer
   glassbox trace execution.json
 
@@ -134,7 +158,13 @@ Performance notes:
   glassbox trace --annotations review.json --annotations-strict execution.json
 
   # Force overwrite of an existing output file
-  glassbox trace --export trace.html --force execution.json`,
+  glassbox trace --export trace.html --force execution.json
+
+  # Verify the integrity of an existing export (checksum, step count, schema version)
+  glassbox trace --verify-export trace.json
+
+  # Verify-export exits with a non-zero code when integrity checks fail (suitable for CI)
+  glassbox trace --verify-export ./artifacts/trace.json && echo "OK"`,
 	Args: cobra.MaximumNArgs(1),
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		var failures []string
@@ -274,6 +304,13 @@ Performance notes:
 			}
 		}
 
+		// Validate --verify-export path when set.
+		if traceVerifyExportFlag != "" {
+			if _, err := ValidateInputPath("verify-export", traceVerifyExportFlag); err != nil {
+				failures = append(failures, err.Error())
+			}
+		}
+
 		if len(failures) == 1 {
 			return errors.WrapValidationError(failures[0])
 		}
@@ -294,6 +331,22 @@ Performance notes:
 			diagCollector = diagnostics.NewCollector()
 		} else {
 			diagCollector = diagnostics.Noop()
+		}
+
+		// --verify-export: verify integrity of an existing export file and exit.
+		// This mode does not require a trace file argument — it only reads the
+		// export artifact and its companion .meta.json file.
+		if traceVerifyExportFlag != "" {
+			if err := trace.VerifyExport(traceVerifyExportFlag); err != nil {
+				return errors.WrapValidationError(fmt.Sprintf(
+					"export integrity check failed for %q:\n  %s\n"+
+						"  Fix: re-export the trace with 'glassbox trace --export <file> --format <fmt> <trace>'",
+					traceVerifyExportFlag, err.Error(),
+				))
+			}
+			fmt.Printf("%s Export integrity verified: %s\n",
+				visualizer.Symbol("success"), traceVerifyExportFlag)
+			return nil
 		}
 
 		// Capture the cobra context so we can check for Ctrl-C throughout.
@@ -760,6 +813,23 @@ func init() {
 	traceCmd.Flags().BoolVar(&traceForceFlag, "force", false, "Overwrite existing output files without prompting")
 	traceCmd.Flags().BoolVar(&traceShowTimingFlag, "show-timing", false, "Print load, render, and export timing to stderr")
 	traceCmd.Flags().BoolVar(&traceTimingsFlag, "timings", false, "Print per-phase timing breakdown to stderr after the operation completes")
+	traceCmd.Flags().StringVar(&traceVerifyExportFlag, "verify-export", "", "Verify integrity of an existing export file (checksum, step count, schema version)")
+
+	// Secret scanning flags
+	traceCmd.Flags().StringVar(&secretScanModeFlag, "secret-scan-mode", "", "Secret scanning mode: opt-in (warn only) or strict (block export)")
+	traceCmd.Flags().StringArrayVar(&secretScanOverrideFlag, "secret-scan-override", nil, "Paths allowed to contain secrets (for test fixtures); repeatable")
+
+	// Secret scanning flags
+	traceCmd.Flags().StringVar(&secretScanModeFlag, "secret-scan-mode", "", "Secret scanning mode: opt-in (warn only) or strict (block export)")
+	traceCmd.Flags().StringArrayVar(&secretScanOverrideFlag, "secret-scan-override", nil, "Paths allowed to contain secrets (for test fixtures); repeatable")
+
+	// Secret scanning flags
+	traceCmd.Flags().StringVar(&secretScanModeFlag, "secret-scan-mode", "", "Secret scanning mode: opt-in (warn only) or strict (block export)")
+	traceCmd.Flags().StringArrayVar(&secretScanOverrideFlag, "secret-scan-override", nil, "Paths allowed to contain secrets (for test fixtures); repeatable")
+
+	// Secret scanning flags
+	traceCmd.Flags().StringVar(&secretScanModeFlag, "secret-scan-mode", "", "Secret scanning mode: opt-in (warn only) or strict (block export)")
+	traceCmd.Flags().StringArrayVar(&secretScanOverrideFlag, "secret-scan-override", nil, "Paths allowed to contain secrets (for test fixtures); repeatable")
 
 	_ = traceCmd.RegisterFlagCompletionFunc("theme", completeThemeFlag)
 	_ = traceCmd.RegisterFlagCompletionFunc("export-format", completeTraceExportFormatFlag)
@@ -784,9 +854,31 @@ func traceExportOptions() (trace.ExportOptions, error) {
 		}
 		metadata[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
 	}
+
+	// Parse secret scan mode
+	var scanMode security.ScannerMode
+	if secretScanModeFlag != "" {
+		switch strings.ToUpper(strings.TrimSpace(secretScanModeFlag)) {
+		case "OPT_IN":
+			scanMode = security.ModeOptIn
+		case "STRICT":
+			scanMode = security.ModeStrict
+		default:
+			return trace.ExportOptions{}, errors.WrapValidationError(
+				fmt.Sprintf(
+					"--secret-scan-mode must be either 'opt-in' or 'strict', got %q\n"+
+						"  Fix: use --secret-scan-mode opt-in (warn only) or --secret-scan-mode strict (block export)",
+					secretScanModeFlag,
+				),
+			)
+		}
+	}
+
 	return trace.ExportOptions{
-		Comments:        traceComments,
-		SessionMetadata: metadata,
+		Comments:           traceComments,
+		SessionMetadata:    metadata,
+		SecretScanMode:     scanMode,
+		SecretScanOverrides: secretScanOverrideFlag,
 	}, nil
 }
 

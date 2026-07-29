@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dotandev/glassbox/internal/security"
 	"github.com/dotandev/glassbox/internal/version"
 )
 
@@ -28,17 +29,33 @@ type archiveMeta struct {
 	SchemaVersion  int    `json:"schema_version"`
 }
 
+// ArchiveOptions controls session archive export behavior
+type ArchiveOptions struct {
+	// SecretScanMode controls whether secret scanning is enabled and how it behaves
+	SecretScanMode security.ScannerMode
+	// SecretScanOverrides are paths that are allowed to contain secrets (for test fixtures)
+	SecretScanOverrides []string
+}
+
 // SupportedArchiveExtensions lists the file extensions accepted for session
 // archive files. The canonical extension is ".gbx"; ".zip" is also accepted
 // for interoperability with generic ZIP tools.
 var SupportedArchiveExtensions = []string{".gbx", ".zip"}
 
-// ValidateArchivePath checks that destPath is non-empty and ends with a
-// supported archive extension. It returns an actionable error when the
-// extension is missing or unsupported.
+// ValidateArchivePath checks that destPath is non-empty, free of null bytes,
+// and ends with a supported archive extension. It returns an actionable error
+// when any of these conditions are not met.
 func ValidateArchivePath(destPath string) error {
 	if strings.TrimSpace(destPath) == "" {
 		return fmt.Errorf("destination path is required")
+	}
+	// Null bytes cannot appear in a valid file path and are a sign of injection.
+	if strings.ContainsRune(destPath, 0) {
+		return fmt.Errorf(
+			"archive path contains null bytes and cannot be used: %q\n"+
+				"  Fix: provide a path without null bytes (e.g. ./session.gbx)",
+			destPath,
+		)
 	}
 	ext := strings.ToLower(filepath.Ext(destPath))
 	for _, supported := range SupportedArchiveExtensions {
@@ -66,6 +83,12 @@ func ValidateArchivePath(destPath string) error {
 // The session data is validated before export so that corrupt or incomplete
 // sessions are rejected early with a clear error rather than silently archived.
 func ExportArchive(data *Data, destPath string) error {
+	return ExportArchiveWithOptions(data, destPath, ArchiveOptions{})
+}
+
+// ExportArchiveWithOptions packages a debug session into a portable ZIP archive
+// with additional options for secret scanning and other export controls.
+func ExportArchiveWithOptions(data *Data, destPath string, opts ArchiveOptions) error {
 	if data == nil {
 		return fmt.Errorf("session data is nil")
 	}
@@ -87,6 +110,47 @@ func ExportArchive(data *Data, destPath string) error {
 		}
 		sb.WriteString("Fix the issues above and re-run 'glassbox session share'.")
 		return fmt.Errorf("%s", sb.String())
+	}
+
+	// Secret scanning — detect and optionally block exports containing secrets
+	if opts.SecretScanMode != "" {
+		scanner := security.NewSecretScanner(opts.SecretScanMode)
+		for _, override := range opts.SecretScanOverrides {
+			scanner.AddOverride(override)
+		}
+
+		// Scan session fields that might contain secrets
+		fieldsToScan := map[string]string{
+			"pinned_endpoint": data.PinnedEndpoint,
+			"horizon_url":      data.HorizonURL,
+		}
+
+		result := scanner.ScanMap(fieldsToScan, "session")
+		if result.HasSecrets {
+			if scanner.ShouldBlockExport(result) {
+				return fmt.Errorf(scanner.GetErrorMessage(result))
+			}
+			fmt.Fprintf(os.Stderr, "Warning: %s\n", scanner.GetErrorMessage(result))
+		}
+
+		// Scan annotations if present
+		if data.AnnotationsJSON != "" {
+			var annotations map[string]interface{}
+			if err := json.Unmarshal([]byte(data.AnnotationsJSON), &annotations); err == nil {
+				// Convert annotations to string map for scanning
+				annotationsStr := make(map[string]string)
+				for k, v := range annotations {
+					annotationsStr[k] = fmt.Sprintf("%v", v)
+				}
+				result := scanner.ScanMap(annotationsStr, "annotations")
+				if result.HasSecrets {
+					if scanner.ShouldBlockExport(result) {
+						return fmt.Errorf(scanner.GetErrorMessage(result))
+					}
+					fmt.Fprintf(os.Stderr, "Warning: %s\n", scanner.GetErrorMessage(result))
+				}
+			}
+		}
 	}
 
 	journalPath := destPath + ".journal"
@@ -241,6 +305,16 @@ func ImportArchiveWithManifest(srcPath string) (*Data, *ManifestReport, error) {
 			"archive path is required\n" +
 				"  Fix: provide the path to a .gbx archive file\n" +
 				"  Example: glassbox session load ./session.gbx",
+		)
+	}
+
+	// Reject null bytes early — they cannot appear in valid file paths and are
+	// a sign of attempted injection.
+	if strings.ContainsRune(srcPath, 0) {
+		return nil, fmt.Errorf(
+			"archive path contains null bytes and cannot be used: %q\n"+
+				"  Fix: provide a path without null bytes (e.g. ./session.gbx)",
+			srcPath,
 		)
 	}
 
