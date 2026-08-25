@@ -4,8 +4,10 @@
 package cmd
 
 import (
+	stderrors "errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,7 +23,59 @@ var (
 	sessionNameFlag        string
 	sessionPinEndpointFlag string
 	sessionSavePlanFlag    bool // --plan: show execution plan without saving
+	sessionSaveForceFlag   bool // --force: overwrite even on revision conflict [Issue #813]
+
+	// Session encryption [Issue #560]. Persistent flags on sessionCmd so
+	// every subcommand that opens the store (save, load, list, doctor,
+	// import, share, gc) shares one configuration.
+	sessionEncryptFlag       bool
+	sessionKeyProviderFlag   string
+	sessionKeyPassphraseFlag string
+
+	// Secret scanning flags for session export
+	secretScanModeFlag       string
+	secretScanOverrideFlag   []string
 )
+
+// openSessionStore opens the session store at the default location and, if
+// session encryption was requested via flags or environment, configures its
+// key provider. Every CLI command that touches the session store should use
+// this instead of calling session.NewStore() directly, so encryption
+// configuration is applied consistently everywhere.
+func openSessionStore() (*session.Store, error) {
+	store, err := session.NewStore()
+	if err != nil {
+		return nil, err
+	}
+	if kp, kpErr := resolveSessionKeyProviderFromFlags(); kpErr != nil {
+		store.Close()
+		return nil, kpErr
+	} else if kp != nil {
+		store.SetKeyProvider(kp)
+	}
+	return store, nil
+}
+
+// resolveSessionKeyProviderFromFlags builds a session.KeyProvider from CLI
+// flags and their environment-variable fallbacks. It returns (nil, nil) when
+// encryption was not requested, so callers can tell "not configured" apart
+// from "configured but invalid."
+func resolveSessionKeyProviderFromFlags() (session.KeyProvider, error) {
+	encrypt := sessionEncryptFlag || os.Getenv("GLASSBOX_SESSION_ENCRYPTION") != ""
+	providerName := sessionKeyProviderFlag
+	if providerName == "" {
+		providerName = os.Getenv("GLASSBOX_SESSION_KEY_PROVIDER")
+	}
+	passphrase := sessionKeyPassphraseFlag
+	if passphrase == "" {
+		passphrase = os.Getenv("GLASSBOX_SESSION_KEY_PASSPHRASE")
+	}
+
+	if !encrypt && providerName == "" && passphrase == "" {
+		return nil, nil
+	}
+	return session.ResolveKeyProvider(providerName, passphrase)
+}
 
 // currentData holds the active session context from debug command
 var currentData *session.Data
@@ -89,6 +143,20 @@ var sessionSaveCmd = &cobra.Command{
 	incomplete chain state is rejected with actionable diagnostics instead of being
 	written to the store.
 
+Concurrency safety:
+  Glassbox protects session saves with two mechanisms [Issue #813]:
+
+  1. Advisory lock – a per-session lock file in ~/.Glassbox/locks/ ensures that
+     only one writer is active at a time.  A lock held by a crashed process is
+     removed automatically after 5 minutes.
+  2. Revision check – every session carries a monotonically increasing revision
+     counter.  If another process saved the session between your last load and
+     now, this command fails with a SESSION_WRITE_CONFLICT error and explains
+     how to recover.
+
+  To overwrite a conflicting save without merging:
+    glassbox session save --force
+
 Validation:
   The session data is validated before saving. The following checks are made:
     • Transaction hash is present
@@ -108,7 +176,10 @@ Validation:
   glassbox session save --name payroll-bug
 
   # Save and pin a custom RPC endpoint
-  glassbox session save --pin-endpoint https://soroban-testnet.stellar.org`,
+  glassbox session save --pin-endpoint https://soroban-testnet.stellar.org
+
+  # Force-overwrite a conflicting save
+  glassbox session save --force`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -162,7 +233,7 @@ Validation:
 		}
 
 		// Open session store
-		store, err := session.NewStore()
+		store, err := openSessionStore()
 		if err != nil {
 			return errors.WrapValidationError(fmt.Sprintf("failed to open session store: %v", err))
 		}
@@ -182,8 +253,31 @@ Validation:
 
 		// Save with validation so corrupt or incomplete sessions are rejected
 		// early with a clear diagnostic instead of a silent partial write.
-		if err := store.SaveWithValidation(ctx, data); err != nil {
-			return errors.WrapValidationError(fmt.Sprintf("failed to save session: %v", err))
+		// When --force is set, bypass the optimistic revision check.
+		var saveErr error
+		if sessionSaveForceFlag {
+			saveErr = store.SaveForce(ctx, data)
+		} else {
+			saveErr = store.SaveWithValidation(ctx, data)
+		}
+		if saveErr != nil {
+			// Surface session-conflict errors with structured guidance so
+			// users know exactly what to do next (Issue #813).
+			if stderrors.Is(saveErr, session.ErrSessionConflict) {
+				return errors.WrapSessionConflict(data.ID, data.Revision-1, data.Revision).(*errors.ErstError).
+					WithHint(fmt.Sprintf(
+						"Run 'glassbox session resume %s' to reload the latest version "+
+							"and re-apply your changes, or re-run with --force to overwrite it.",
+						data.ID,
+					))
+			}
+			if stderrors.Is(saveErr, session.ErrLockHeld) {
+				return errors.WrapSessionLockHeld(data.ID, 0).(*errors.ErstError).
+					WithHint("Another Glassbox instance is saving this session. " +
+						"Wait a moment and retry. If the other process has crashed, " +
+						"the lock clears automatically after 5 minutes.")
+			}
+			return errors.WrapValidationError(fmt.Sprintf("failed to save session: %v", saveErr))
 		}
 
 		fmt.Printf("Session saved: %s\n", data.ID)
@@ -193,6 +287,7 @@ Validation:
 		fmt.Printf("  Transaction: %s\n", data.TxHash)
 		fmt.Printf("  Network: %s\n", data.Network)
 		fmt.Printf("  Created: %s\n", data.CreatedAt.Format(time.RFC3339))
+		fmt.Printf("  Revision: %d\n", data.Revision)
 
 		return nil
 	},
@@ -237,7 +332,7 @@ Use 'Glassbox session list' to see available session IDs and names.`,
 		}
 
 		// Open session store
-		store, err := session.NewStore()
+		store, err := openSessionStore()
 		if err != nil {
 			return errors.WrapValidationError(fmt.Sprintf(
 				"failed to open session store: %v\n"+
@@ -372,7 +467,7 @@ See also:
 		ctx := cmd.Context()
 
 		// Open session store
-		store, err := session.NewStore()
+		store, err := openSessionStore()
 		if err != nil {
 			return errors.WrapValidationError(fmt.Sprintf("failed to open session store: %v", err))
 		}
@@ -446,7 +541,7 @@ Use 'Glassbox session list' to see available sessions.`,
 		}
 
 		// Open session store
-		store, err := session.NewStore()
+		store, err := openSessionStore()
 		if err != nil {
 			return errors.WrapValidationError(fmt.Sprintf("failed to open session store: %v", err))
 		}
@@ -553,7 +648,7 @@ Validation:
 		fmt.Println()
 
 		// Attempt to load the session from the store.
-		store, storeErr := session.NewStore()
+		store, storeErr := openSessionStore()
 		if storeErr != nil {
 			return errors.WrapValidationError(fmt.Sprintf(
 				"failed to open session store: %v\n"+
@@ -641,7 +736,7 @@ with actionable remediation hints for each degraded session.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
-		store, err := session.NewStore()
+		store, err := openSessionStore()
 		if err != nil {
 			return errors.WrapValidationError(fmt.Sprintf(
 				"failed to open session store: %v\n"+
@@ -655,6 +750,23 @@ with actionable remediation hints for each degraded session.`,
 		}
 
 		fmt.Println(result.Summary())
+
+		if home, homeErr := os.UserHomeDir(); homeErr == nil {
+			glassboxDir := filepath.Join(home, ".Glassbox")
+			removed, cleanErr := session.CleanStaleTempFiles(glassboxDir, session.StaleTempFileAge)
+			if cleanErr == nil && removed > 0 {
+				fmt.Printf("Removed %d stale temp/recovery-journal file(s) from %s\n", removed, glassboxDir)
+			}
+			viewerDir := filepath.Join(glassboxDir, "viewer_state")
+			if removedVS, vsErr := session.CleanStaleTempFiles(viewerDir, session.StaleTempFileAge); vsErr == nil && removedVS > 0 {
+				fmt.Printf("Removed %d stale temp file(s) from %s\n", removedVS, viewerDir)
+			}
+			// Clean stale advisory lock files left by crashed processes [Issue #813].
+			if removedLocks, lockErr := session.CleanStaleLocks(); lockErr == nil && removedLocks > 0 {
+				fmt.Printf("Removed %d stale advisory lock file(s) from %s/locks/\n", removedLocks, glassboxDir)
+			}
+		}
+
 		if result.DegradedSessions == 0 {
 			return nil
 		}
@@ -683,6 +795,15 @@ func init() {
 	sessionSaveCmd.Flags().StringVar(&sessionNameFlag, "name", "", "Bookmark name for this session snapshot")
 	sessionSaveCmd.Flags().StringVar(&sessionPinEndpointFlag, "pin-endpoint", "", "Pin an RPC endpoint URL with this session")
 	sessionSaveCmd.Flags().BoolVar(&sessionSavePlanFlag, "plan", false, "Print the execution plan (DB path, session ID) without saving")
+	sessionSaveCmd.Flags().BoolVar(&sessionSaveForceFlag, "force", false, "Overwrite the session even if another process has saved a newer revision (bypasses conflict check)")
+
+	sessionCmd.PersistentFlags().BoolVar(&sessionEncryptFlag, "session-encrypt", false,
+		"Encrypt sensitive session fields at rest (or set GLASSBOX_SESSION_ENCRYPTION)")
+	sessionCmd.PersistentFlags().StringVar(&sessionKeyProviderFlag, "session-key-provider", "",
+		"Session encryption key provider: passphrase (default) or env (or set GLASSBOX_SESSION_KEY_PROVIDER)")
+	sessionCmd.PersistentFlags().StringVar(&sessionKeyPassphraseFlag, "session-key-passphrase", "",
+		"Passphrase for session encryption (or set GLASSBOX_SESSION_KEY_PASSPHRASE)")
+	_ = sessionCmd.PersistentFlags().MarkHidden("session-key-passphrase") // sensitive; hidden from default help
 
 	sessionCmd.AddCommand(sessionSaveCmd)
 	sessionCmd.AddCommand(sessionResumeCmd)

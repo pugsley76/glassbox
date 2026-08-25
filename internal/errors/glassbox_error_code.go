@@ -36,6 +36,11 @@ const (
 	ErstUnauthorized        ErstErrorCode = "UNAUTHORIZED"
 	// Source discovery
 	ErstSourceDiscoveryFailed ErstErrorCode = "SOURCE_DISCOVERY_FAILED"
+	// RPC response validation
+	ErstRPCInvalidResponse ErstErrorCode = "RPC_INVALID_RESPONSE"
+	// Session concurrency [Issue #813]
+	ErstSessionConflict ErstErrorCode = "SESSION_WRITE_CONFLICT"
+	ErstSessionLockHeld ErstErrorCode = "SESSION_LOCK_HELD"
 )
 
 // ErstError wraps an error with a standardized code and preserves the original error string.
@@ -85,30 +90,33 @@ func (e *ErstError) Is(target error) bool {
 
 // Registry mapping Go errors to ErstErrorCode
 var errorCodeRegistry = map[error]ErstErrorCode{
-	ErrTransactionNotFound:  ErstTransactionNotFound,
-	ErrRPCConnectionFailed:  ErstRPCConnectionFailed,
-	ErrRPCTimeout:           ErstRPCTimeout,
-	ErrAllRPCFailed:         ErstAllRPCFailed,
-	ErrSimulatorNotFound:    ErstSimulatorNotFound,
-	ErrSimulationFailed:     ErstSimulationFailed,
-	ErrSimCrash:             ErstSimCrash,
-	ErrInvalidNetwork:       ErstInvalidNetwork,
-	ErrMarshalFailed:        ErstValidationFailed,
-	ErrUnmarshalFailed:      ErstValidationFailed,
-	ErrSimulationLogicError: ErstSimulationLogicError,
-	ErrRPCError:             ErstRPCError,
-	ErrValidationFailed:     ErstValidationFailed,
-	ErrProtocolUnsupported:  ErstValidationFailed,
-	ErrArgumentRequired:     ErstValidationFailed,
-	ErrAuditLogInvalid:      ErstValidationFailed,
-	ErrSessionNotFound:      ErstValidationFailed,
-	ErrUnauthorized:         ErstUnauthorized,
-	ErrLedgerNotFound:       ErstLedgerNotFound,
-	ErrLedgerArchived:       ErstLedgerArchived,
-	ErrRateLimitExceeded:    ErstRateLimitExceeded,
-	ErrConfigFailed:         ErstConfigFailed,
-	ErrNetworkNotFound:      ErstNetworkNotFound,
+	ErrTransactionNotFound:   ErstTransactionNotFound,
+	ErrRPCConnectionFailed:   ErstRPCConnectionFailed,
+	ErrRPCTimeout:            ErstRPCTimeout,
+	ErrAllRPCFailed:          ErstAllRPCFailed,
+	ErrSimulatorNotFound:     ErstSimulatorNotFound,
+	ErrSimulationFailed:      ErstSimulationFailed,
+	ErrSimCrash:              ErstSimCrash,
+	ErrInvalidNetwork:        ErstInvalidNetwork,
+	ErrMarshalFailed:         ErstValidationFailed,
+	ErrUnmarshalFailed:       ErstValidationFailed,
+	ErrSimulationLogicError:  ErstSimulationLogicError,
+	ErrRPCError:              ErstRPCError,
+	ErrValidationFailed:      ErstValidationFailed,
+	ErrProtocolUnsupported:   ErstValidationFailed,
+	ErrArgumentRequired:      ErstValidationFailed,
+	ErrAuditLogInvalid:       ErstValidationFailed,
+	ErrSessionNotFound:       ErstValidationFailed,
+	ErrUnauthorized:          ErstUnauthorized,
+	ErrLedgerNotFound:        ErstLedgerNotFound,
+	ErrLedgerArchived:        ErstLedgerArchived,
+	ErrRateLimitExceeded:     ErstRateLimitExceeded,
+	ErrConfigFailed:          ErstConfigFailed,
+	ErrNetworkNotFound:       ErstNetworkNotFound,
 	ErrSourceDiscoveryFailed: ErstSourceDiscoveryFailed,
+	ErrRPCInvalidResponse:    ErstRPCInvalidResponse,
+	ErrSessionConflict:       ErstSessionConflict,
+	ErrSessionLockHeld:       ErstSessionLockHeld,
 }
 
 // ClassifyError maps an error to an ErstError with a code and preserves the original error string.

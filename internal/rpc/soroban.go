@@ -170,16 +170,17 @@ func (c *Client) GetLedgerEntries(ctx context.Context, keys []string) (map[strin
 	entries := make(map[string]string)
 	var keysToFetch []string
 
-	// Check cache if enabled
+	// Check cache if enabled. Keys are scoped by network so testnet and
+	// mainnet entries never collide even if the raw XDR key bytes are equal.
 	if c.CacheEnabled {
 		for _, key := range keys {
-			val, hit, err := Get(key)
+			val, hit, err := GetLedgerEntry(c.GetNetworkName(), key)
 			if err != nil {
 				logger.Logger.Warn("Cache read failed", "error", err)
 			}
 			if hit {
 				entries[key] = val
-				logger.Logger.Debug("Cache hit", "key", key)
+				logger.Logger.Debug("Cache hit", "key", key, "network", c.GetNetworkName())
 			} else {
 				keysToFetch = append(keysToFetch, key)
 			}
@@ -439,6 +440,13 @@ func (c *Client) getLedgerEntriesAttemptURL(ctx context.Context, keysToFetch []s
 		return nil, errors.WrapUnmarshalFailed(err, string(respBytes))
 	}
 
+	if err := ValidateGetLedgerEntriesResponse(targetURL, &rpcResp); err != nil {
+		logger.Logger.Error("Soroban getLedgerEntries response validation failed", "url", targetURL, "error", err)
+		metrics.RecordRemoteNodeResponse(targetURL, string(c.Network), false, duration)
+		c.recordTelemetry(targetURL, duration, false)
+		return nil, err
+	}
+
 	if rpcResp.Error != nil {
 		logger.Logger.Error("Soroban getLedgerEntries RPC error", "url", targetURL, "code", rpcResp.Error.Code, "message", rpcResp.Error.Message)
 		// Record failed remote node response
@@ -457,9 +465,10 @@ func (c *Client) getLedgerEntriesAttemptURL(ctx context.Context, keysToFetch []s
 		entries[entry.Key] = entry.Xdr
 		fetchedCount++
 
-		// Cache the new entry
+		// Cache the new entry, scoped by network so the same XDR key on
+		// testnet and mainnet is stored as a distinct row.
 		if c.CacheEnabled {
-			if err := Set(entry.Key, entry.Xdr); err != nil {
+			if err := SetLedgerEntry(c.GetNetworkName(), entry.Key, entry.Xdr); err != nil {
 				logger.Logger.Warn("Failed to cache entry", "key", entry.Key, "error", err)
 			}
 		}
@@ -657,6 +666,12 @@ func (c *Client) simulateTransactionAttemptURL(ctx context.Context, envelopeXdr 
 		return nil, errors.WrapUnmarshalFailed(err, string(respBytes))
 	}
 
+	if err := ValidateSimulateTransactionResponse(targetURL, &rpcResp); err != nil {
+		logger.Logger.Error("Soroban simulateTransaction response validation failed", "url", targetURL, "error", err)
+		c.recordTelemetry(targetURL, duration, false)
+		return nil, err
+	}
+
 	if rpcResp.Error != nil {
 		logger.Logger.Error("Soroban simulateTransaction RPC error", "url", targetURL, "code", rpcResp.Error.Code, "message", rpcResp.Error.Message)
 		c.recordTelemetry(targetURL, duration, false)
@@ -790,6 +805,12 @@ func (c *Client) getHealthAttemptURL(ctx context.Context, targetURL string) (hea
 		return nil, errors.NewRPCError(errors.CodeRPCUnmarshalFailed, err)
 	}
 
+	if err := ValidateGetHealthResponse(targetURL, &rpcResp); err != nil {
+		logger.Logger.Error("Soroban getHealth response validation failed", "url", targetURL, "error", err)
+		c.recordTelemetry(targetURL, duration, false)
+		return nil, err
+	}
+
 	if rpcResp.Error != nil {
 		logger.Logger.Error("Soroban getHealth RPC error", "url", targetURL, "code", rpcResp.Error.Code, "message", rpcResp.Error.Message)
 		c.recordTelemetry(targetURL, duration, false)
@@ -812,6 +833,10 @@ func (c *Client) GetLatestLedgerSequence(ctx context.Context) (int, error) {
 	var resp GetLatestLedgerResponse
 	err := c.postRequest(ctx, payload, &resp)
 	if err != nil {
+		return 0, err
+	}
+
+	if err := ValidateGetLatestLedgerResponse(c.selectSorobanURL(), &resp); err != nil {
 		return 0, err
 	}
 

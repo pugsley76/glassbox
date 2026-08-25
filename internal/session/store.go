@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/dotandev/glassbox/internal/logger"
+	"github.com/dotandev/glassbox/internal/security"
 	"github.com/dotandev/glassbox/internal/simulator"
 	"github.com/dotandev/glassbox/internal/version"
 	_ "modernc.org/sqlite"
@@ -46,6 +47,17 @@ type Data struct {
 	ResultXdr     string    `json:"result_xdr"`
 	ResultMetaXdr string    `json:"result_meta_xdr"`
 	PinnedEndpoint string   `json:"pinned_endpoint,omitempty"`
+
+	// Revision is a monotonically increasing counter used for optimistic
+	// concurrency control [Issue #813].  It is incremented by Store.Save on
+	// every successful write.  Callers that supply a non-zero Revision to
+	// Save will have their write rejected with ErrSessionConflict when the
+	// on-disk revision has advanced past the supplied value, indicating that
+	// another process saved the session in the meantime.
+	//
+	// A zero value means "no revision check requested" and is the default for
+	// sessions created before this field existed.
+	Revision int64 `json:"revision,omitempty"`
 
 	// Audit Chain Integrity [Issue #330]
 	AuditHash           string `json:"audit_hash,omitempty"`            // SHA-256 of the session payload
@@ -82,11 +94,41 @@ type Data struct {
 	TraceJSON     string `json:"-"`
 	BundleJSON    string `json:"-"`
 	SourceMapJSON string `json:"-"`
+
+	// EncryptedPayload holds the sealed sensitive fields when the session
+	// is encrypted [Issue #560]. When set, EnvelopeXdr, ResultXdr,
+	// ResultMetaXdr, SimRequestJSON, SimResponseJSON, TraceJSON,
+	// BundleJSON, SourceMapJSON, and AnnotationsJSON are empty on this
+	// record — see encryption.go.
+	EncryptedPayload *EncryptedEnvelope `json:"encrypted_payload,omitempty"`
+
+	// ExtrasJSON preserves additive or unknown fields that appear in an
+	// archive's session.json but are not recognised by the current struct
+	// definition. This allows older binaries to round-trip newer archives
+	// without silently discarding fields they do not understand.
+	// ExtrasJSON is never written to the SQLite store — it only travels
+	// with archive import/export paths — so the runtime schema stays stable
+	// even when archives carry forward-compatible extensions.
+	ExtrasJSON map[string]json.RawMessage `json:"-"`
 }
 
 // Store manages session persistence in SQLite
 type Store struct {
-	db *sql.DB
+	db          *sql.DB
+	keyProvider KeyProvider
+}
+
+// SetKeyProvider configures the KeyProvider used to encrypt sensitive
+// payload fields on every subsequent Save/SaveWithValidation and decrypt
+// them on every subsequent Load/LoadByName/List through this Store. Pass
+// nil to disable encryption for new writes; sessions already encrypted by a
+// previous provider still require a matching provider to load.
+//
+// There is no implicit fallback: if a caller requests encryption (by
+// configuring a provider) and the provider cannot produce a key, Save fails
+// closed rather than writing plaintext.
+func (s *Store) SetKeyProvider(kp KeyProvider) {
+	s.keyProvider = kp
 }
 
 // DefaultDBPath returns the filesystem path where the session database is stored.
@@ -174,6 +216,7 @@ func (s *Store) initSchema() error {
 		env_fingerprint TEXT,
 		provenance_json TEXT,
 		annotations_json TEXT,
+		revision INTEGER NOT NULL DEFAULT 0,
 		GLASSBOX_version TEXT,
 		schema_version INTEGER NOT NULL
 	);
@@ -199,6 +242,13 @@ func (s *Store) initSchema() error {
 		return err
 	}
 	if err := s.ensureColumn("sessions", "annotations_json", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("sessions", "encrypted_payload", "TEXT"); err != nil {
+		return err
+	}
+	// revision column for optimistic concurrency control [Issue #813].
+	if err := s.ensureColumn("sessions", "revision", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_session_name ON sessions(name) WHERE name IS NOT NULL AND name != ''`); err != nil {
@@ -285,6 +335,9 @@ func (s *Store) SaveWithValidation(ctx context.Context, data *Data) error {
 // the full integrity-report formatting. Prefer SaveWithValidation when the
 // caller cannot guarantee the Data has already been validated externally.
 func (s *Store) Save(ctx context.Context, data *Data) error {
+	if data == nil {
+		return fmt.Errorf("session data must not be nil")
+	}
 	if data.ID == "" {
 		return fmt.Errorf("session ID is required")
 	}
@@ -333,6 +386,15 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 			data.HorizonURL = "https://horizon-futurenet.stellar.org"
 		}
 	}
+	// Reject null bytes in HorizonURL — they are a potential injection vector
+	// and cannot appear in a valid URL.
+	if strings.ContainsRune(data.HorizonURL, 0) {
+		return fmt.Errorf(
+			"horizon URL contains null bytes and cannot be stored: %q\n"+
+				"  Fix: provide a valid HTTPS URL with --horizon-url or rely on the auto-populated default",
+			data.HorizonURL,
+		)
+	}
 	if data.Name != "" && len(data.Name) > 128 {
 		return fmt.Errorf(
 			"session name is too long (%d characters, max 128)\n"+
@@ -353,13 +415,59 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 		data.EnvFingerprint = BuildEnvFingerprint()
 	}
 
+	// ── Advisory locking [Issue #813] ────────────────────────────────────────
+	// Acquire the per-session advisory lock before touching the database so
+	// that concurrent writers serialise instead of racing.  The lock is
+	// released unconditionally once the SQL write completes.
+	lock, lockErr := AcquireLock(data.ID)
+	if lockErr != nil {
+		return fmt.Errorf("failed to acquire session lock: %w", lockErr)
+	}
+	defer lock.Release()
+
+	// ── Optimistic revision check [Issue #813] ────────────────────────────
+	// If the caller loaded the session before editing it, it will have
+	// populated data.Revision with the value it read.  We read the current
+	// on-disk revision inside the advisory lock and reject the write if
+	// another process incremented it in the meantime.
+	if data.Revision > 0 {
+		diskRevision, revErr := s.loadRevision(ctx, data.ID)
+		if revErr == nil && diskRevision != data.Revision {
+			return &ConflictError{
+				SessionID:        data.ID,
+				ExpectedRevision: data.Revision,
+				ActualRevision:   diskRevision,
+			}
+		}
+	}
+	// Increment the revision counter for this write.
+	data.Revision++
+
+	// Encryption [Issue #560]: when this Store was configured with a key
+	// provider, every save through it seals the sensitive payload fields
+	// before they touch disk. EncryptSessionPayload fails closed — if the
+	// provider cannot produce a key, data is left unmodified and this
+	// method returns the error without writing anything, so encryption
+	// requested with an unusable key never silently falls back to
+	// plaintext.
+	if s.keyProvider != nil {
+		if err := EncryptSessionPayload(data, s.keyProvider); err != nil {
+			return err
+		}
+	}
+	encryptedPayloadJSON, err := marshalEncryptedPayload(data.EncryptedPayload)
+	if err != nil {
+		return err
+	}
+
 	query := `
 	INSERT INTO sessions (
 		id, name, created_at, last_access_at, status, network, horizon_url, tx_hash,
 		envelope_xdr, result_xdr, result_meta_xdr, pinned_endpoint,
 		audit_hash, audit_signature, previous_session_hash,
-		sim_request_json, sim_response_json, env_fingerprint, GLASSBOX_version, schema_version
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		sim_request_json, sim_response_json, env_fingerprint, provenance_json, annotations_json,
+		encrypted_payload, revision, GLASSBOX_version, schema_version
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		name = excluded.name,
 		last_access_at = excluded.last_access_at,
@@ -380,23 +488,58 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 		provenance_json = excluded.provenance_json,
 		annotations_json = excluded.annotations_json,
 		GLASSBOX_version = excluded.GLASSBOX_version,
-		schema_version = excluded.schema_version
+		schema_version = excluded.schema_version,
+		encrypted_payload = excluded.encrypted_payload,
+		revision = excluded.revision
 	`
 
-	_, err := s.db.ExecContext(ctx, query,
+	_, err = s.db.ExecContext(ctx, query,
 		data.ID, data.Name, data.CreatedAt, data.LastAccessAt, data.Status,
 		data.Network, data.HorizonURL, data.TxHash,
 		data.EnvelopeXdr, data.ResultXdr, data.ResultMetaXdr, data.PinnedEndpoint,
 		data.AuditHash, data.AuditSignature, data.PreviousSessionHash,
-		data.SimRequestJSON, data.SimResponseJSON, data.EnvFingerprint, data.ProvenanceJSON, data.AnnotationsJSON, data.ErstVersion, data.SchemaVersion,
+		data.SimRequestJSON, data.SimResponseJSON, data.EnvFingerprint, data.ProvenanceJSON, data.AnnotationsJSON,
+		encryptedPayloadJSON, data.Revision, data.ErstVersion, data.SchemaVersion,
 	)
 
 	if err != nil {
 		return fmt.Errorf("failed to save session: %w", err)
 	}
 
-	logger.Logger.Debug("Session saved", "id", data.ID, "tx_hash", data.TxHash)
+	logger.Logger.Debug("Session saved", "id", data.ID, "tx_hash", data.TxHash, "revision", data.Revision)
 	return nil
+}
+
+// SaveForce persists a session unconditionally, bypassing the optimistic
+// revision check.  Use this only when the caller has already examined the
+// conflict (e.g. via Save returning ConflictError) and decided to overwrite
+// the newer version.  The advisory lock is still acquired so concurrent
+// force-saves are serialised safely.
+//
+// SaveForce resets data.Revision to 0 before saving so the normal optimistic
+// path can resume from a clean baseline after the forced overwrite.
+func (s *Store) SaveForce(ctx context.Context, data *Data) error {
+	if data == nil {
+		return fmt.Errorf("session data must not be nil")
+	}
+	// Zero the revision so Save skips the optimistic check.
+	data.Revision = 0
+	return s.Save(ctx, data)
+}
+
+// loadRevision reads only the revision column for sessionID.
+// Returns (0, nil) when the session does not yet exist in the store.
+func (s *Store) loadRevision(ctx context.Context, sessionID string) (int64, error) {
+	const q = `SELECT COALESCE(revision, 0) FROM sessions WHERE id = ?`
+	var rev int64
+	err := s.db.QueryRowContext(ctx, q, sessionID).Scan(&rev)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to read session revision: %w", err)
+	}
+	return rev, nil
 }
 
 // SavePreservingSchemaVersion persists a session without bumping schema_version
@@ -460,20 +603,22 @@ func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 	SELECT id, name, created_at, last_access_at, status, network, horizon_url, tx_hash,
 	       envelope_xdr, result_xdr, result_meta_xdr, pinned_endpoint,
 	       audit_hash, audit_signature, previous_session_hash,
-	       sim_request_json, sim_response_json, env_fingerprint, provenance_json, annotations_json, GLASSBOX_version, schema_version
+	       sim_request_json, sim_response_json, env_fingerprint, provenance_json, annotations_json,
+	       encrypted_payload, COALESCE(revision, 0), GLASSBOX_version, schema_version
 	FROM sessions
 	WHERE id = ?
 	`
 
 	var data Data
 	var createdAt, lastAccessAt string
-	var envFP, auditHash, auditSignature, prevSessionHash, provenanceJSON, annotationsJSON sql.NullString
+	var envFP, auditHash, auditSignature, prevSessionHash, provenanceJSON, annotationsJSON, encryptedPayload sql.NullString
 	err := s.db.QueryRowContext(ctx, query, sessionID).Scan(
 		&data.ID, &data.Name, &createdAt, &lastAccessAt, &data.Status,
 		&data.Network, &data.HorizonURL, &data.TxHash,
 		&data.EnvelopeXdr, &data.ResultXdr, &data.ResultMetaXdr, &data.PinnedEndpoint,
 		&auditHash, &auditSignature, &prevSessionHash,
-		&data.SimRequestJSON, &data.SimResponseJSON, &envFP, &provenanceJSON, &annotationsJSON, &data.ErstVersion, &data.SchemaVersion,
+		&data.SimRequestJSON, &data.SimResponseJSON, &envFP, &provenanceJSON, &annotationsJSON,
+		&encryptedPayload, &data.Revision, &data.ErstVersion, &data.SchemaVersion,
 	)
 	if envFP.Valid {
 		data.EnvFingerprint = envFP.String
@@ -492,6 +637,11 @@ func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 	}
 	if annotationsJSON.Valid {
 		data.AnnotationsJSON = annotationsJSON.String
+	}
+	if err == nil {
+		if data.EncryptedPayload, err = unmarshalEncryptedPayload(encryptedPayload.String); err != nil {
+			return nil, fmt.Errorf("failed to load session %q: %w", sessionID, err)
+		}
 	}
 
 	if err == sql.ErrNoRows {
@@ -514,6 +664,14 @@ func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 	}
 	if data.LastAccessAt, err = time.Parse(time.RFC3339, lastAccessAt); err != nil {
 		return nil, fmt.Errorf("failed to parse last_access_at for session %q: %w", sessionID, err)
+	}
+
+	// Decrypt before anything else touches the sensitive fields, so schema
+	// migration and re-save (below) both operate on plaintext. A missing or
+	// mismatched key fails the load outright rather than returning a
+	// session with silently empty sensitive fields.
+	if decErr := DecryptSessionPayload(&data, s.keyProvider); decErr != nil {
+		return nil, decErr
 	}
 
 	if schemaErr := ValidateSchemaVersion(data.SchemaVersion, data.ID); schemaErr != nil {
@@ -574,7 +732,8 @@ func (s *Store) List(ctx context.Context, limit int) ([]*Data, error) {
 	SELECT id, name, created_at, last_access_at, status, network, horizon_url, tx_hash,
 	       envelope_xdr, result_xdr, result_meta_xdr, pinned_endpoint,
 	       audit_hash, audit_signature, previous_session_hash,
-	       sim_request_json, sim_response_json, env_fingerprint, provenance_json, annotations_json, GLASSBOX_version, schema_version
+	       sim_request_json, sim_response_json, env_fingerprint, provenance_json, annotations_json,
+	       encrypted_payload, COALESCE(revision, 0), GLASSBOX_version, schema_version
 	FROM sessions
 	ORDER BY last_access_at DESC
 	`
@@ -605,12 +764,16 @@ func (s *Store) List(ctx context.Context, limit int) ([]*Data, error) {
 		auditHash := sql.NullString{}
 		auditSignature := sql.NullString{}
 		previousSessionHash := sql.NullString{}
+		provenanceJSON := sql.NullString{}
+		annotationsJSON := sql.NullString{}
+		encryptedPayload := sql.NullString{}
 		scanErr := rows.Scan(
 			&data.ID, &data.Name, &createdAt, &lastAccessAt, &data.Status,
 			&data.Network, &data.HorizonURL, &data.TxHash,
 			&data.EnvelopeXdr, &data.ResultXdr, &data.ResultMetaXdr, &data.PinnedEndpoint,
 			&auditHash, &auditSignature, &previousSessionHash,
-			&data.SimRequestJSON, &data.SimResponseJSON, &envFP, &data.ErstVersion, &data.SchemaVersion,
+			&data.SimRequestJSON, &data.SimResponseJSON, &envFP, &provenanceJSON, &annotationsJSON,
+			&encryptedPayload, &data.Revision, &data.ErstVersion, &data.SchemaVersion,
 		)
 		if scanErr != nil {
 			return nil, fmt.Errorf("failed to scan session: %w", scanErr)
@@ -619,6 +782,20 @@ func (s *Store) List(ctx context.Context, limit int) ([]*Data, error) {
 		data.AuditSignature = auditSignature.String
 		data.PreviousSessionHash = previousSessionHash.String
 		data.EnvFingerprint = envFP.String
+		data.ProvenanceJSON = provenanceJSON.String
+		data.AnnotationsJSON = annotationsJSON.String
+		// List never decrypts: listing/GC/diagnostics only need non-sensitive
+		// metadata (all of which stays plaintext regardless of encryption),
+		// so callers are never asked for a key just to see a session name.
+		if data.EncryptedPayload, scanErr = unmarshalEncryptedPayload(encryptedPayload.String); scanErr != nil {
+			return nil, fmt.Errorf("failed to parse encrypted_payload for session %q: %w", data.ID, scanErr)
+		}
+		if data.CreatedAt, scanErr = time.Parse(time.RFC3339, createdAt); scanErr != nil {
+			return nil, fmt.Errorf("failed to parse created_at for session %q: %w", data.ID, scanErr)
+		}
+		if data.LastAccessAt, scanErr = time.Parse(time.RFC3339, lastAccessAt); scanErr != nil {
+			return nil, fmt.Errorf("failed to parse last_access_at for session %q: %w", data.ID, scanErr)
+		}
 		sessions = append(sessions, &data)
 	}
 
@@ -731,28 +908,90 @@ func (s *Store) scanSessionRow(row sessionRowScanner) (*Data, error) {
 		data.EnvFingerprint = envFP.String
 	}
 
-	if data.CreatedAt, err = time.Parse(time.RFC3339, createdAt); err != nil {
-		return nil, fmt.Errorf("failed to parse created_at: %w", err)
+	if data.CreatedAt, err = parseTimestamp(createdAt); err != nil {
+		return nil, fmt.Errorf(
+			"failed to parse created_at %q: %w\n"+
+				"  Fix: the session database may be corrupt — run 'glassbox session doctor' for diagnostics",
+			createdAt, err,
+		)
 	}
-	if data.LastAccessAt, err = time.Parse(time.RFC3339, lastAccessAt); err != nil {
-		return nil, fmt.Errorf("failed to parse last_access_at: %w", err)
+	if data.LastAccessAt, err = parseTimestamp(lastAccessAt); err != nil {
+		return nil, fmt.Errorf(
+			"failed to parse last_access_at %q: %w\n"+
+				"  Fix: the session database may be corrupt — run 'glassbox session doctor' for diagnostics",
+			lastAccessAt, err,
+		)
 	}
 
 	return &data, nil
 }
 
-// GenerateID creates a new session ID from transaction hash and timestamp
+// parseTimestamp parses a timestamp string that may be in RFC3339 format
+// (e.g. "2006-01-02T15:04:05Z07:00") or in SQLite's default datetime format
+// (e.g. "2006-01-02 15:04:05" or "2006-01-02 15:04:05.999999999+07:00").
+// SQLite does not guarantee a specific timestamp format when rows are written
+// directly or by older versions of the driver, so both formats must be handled.
+func parseTimestamp(s string) (time.Time, error) {
+	// Try the standard RFC3339 format first (the canonical form written by
+	// current Go database/sql drivers with the sqlite driver).
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	// Try RFC3339 with nanoseconds (e.g. "2006-01-02T15:04:05.999999999Z07:00").
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t, nil
+	}
+	// SQLite datetime() default: "2006-01-02 15:04:05" (UTC, no timezone).
+	if t, err := time.Parse("2006-01-02 15:04:05", s); err == nil {
+		return t.UTC(), nil
+	}
+	// SQLite datetime with fractional seconds: "2006-01-02 15:04:05.999999999".
+	if t, err := time.Parse("2006-01-02 15:04:05.999999999", s); err == nil {
+		return t.UTC(), nil
+	}
+	return time.Time{}, fmt.Errorf("unrecognised timestamp format: %q (expected RFC3339 or \"2006-01-02 15:04:05\")", s)
+}
+
+// GenerateID creates a new session ID from transaction hash and timestamp.
+// The produced ID is safe for use as a file name and in SQL identifiers —
+// only lowercase hex characters, digits, and hyphens are retained.
 func GenerateID(txHash string) string {
 	if txHash != "" {
-		// Use first 8 chars of hash + timestamp for readability
-		shortHash := txHash
+		// Sanitize: keep only lowercase hex digits (a-f, 0-9) and hyphens to
+		// prevent any special characters in txHash from escaping into the ID
+		// and causing injection in file names or SQL queries.
+		sanitized := sanitizeIDComponent(txHash)
+		shortHash := sanitized
 		if len(shortHash) > 8 {
 			shortHash = shortHash[:8]
 		}
-		return fmt.Sprintf("%s-%d", shortHash, time.Now().Unix())
+		if shortHash != "" {
+			return fmt.Sprintf("%s-%d", shortHash, time.Now().Unix())
+		}
 	}
-	// Fallback to timestamp-based ID
+	// Fallback to timestamp-based ID when txHash is empty or yields no safe chars.
 	return fmt.Sprintf("session-%d", time.Now().Unix())
+}
+
+// sanitizeIDComponent strips any character from s that is not a lowercase
+// ASCII letter, digit, or hyphen, making the result safe for use in IDs,
+// file names, and log entries. Upper-case letters are lowercased.
+func sanitizeIDComponent(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			b.WriteRune(r + 32) // to lower
+		case r >= '0' && r <= '9':
+			b.WriteRune(r)
+		case r == '-':
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // ToSimulationRequest converts stored JSON back to SimulationRequest
