@@ -95,7 +95,9 @@ func looksHighCardinality(v string) bool {
 	}
 	// Path-like: contains directory separators and is longer than a hostname
 	if len(v) > 20 && strings.ContainsAny(v, "/\\") {
-		return true
+		if !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
+			return true
+		}
 	}
 	return false
 }
