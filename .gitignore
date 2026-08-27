@@ -88,6 +88,9 @@ PR_273_improve_trace_export_build_artifact_discovery.md
 PR_794_path_normalization_pipeline.md
 PR_782_event_ordering_system.md
 PR_781_trace_schema_versioning.md
+PR-780-process-lifecycle.md
+PR_785_normalized_trace_comparison.md
+PR_978_cli_trace_comparison.md
 
 # --- Kiro IDE workspace files ---
 .kiro/
