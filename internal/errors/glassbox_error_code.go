@@ -72,6 +72,15 @@ const (
 	// or a broken hash chain — that would not be caught by per-file signature
 	// verification alone.
 	ErstAuditDirPolicyViolation ErstErrorCode = "AUDIT_DIR_POLICY_VIOLATION"
+
+	// Internal [Issue #762]
+	// ErstInternalError is returned when a command hits an unexpected
+	// internal failure (e.g. ID generation, unexpected I/O) that does not
+	// belong to any more specific sentinel family. Using this code instead of
+	// returning a bare, unwrapped error keeps every command-facing failure a
+	// stable ErstError so automation can rely on a consistent code and exit
+	// bucket rather than falling back to ErstUnknown.
+	ErstInternalError ErstErrorCode = "INTERNAL_ERROR"
 )
 
 // ErstError wraps an error with a standardized code and preserves the original error string.
