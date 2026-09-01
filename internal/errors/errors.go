@@ -546,6 +546,19 @@ func WrapAnalysisTruncated(phase, reason string) error {
 	}
 }
 
+// WrapInternal wraps an unexpected internal failure (e.g. ID generation,
+// unexpected I/O) that does not belong to any more specific sentinel family
+// [Issue #762]. Using this instead of returning a bare fmt.Errorf keeps every
+// command-facing failure a stable ErstError with a consistent code and exit
+// bucket rather than surfacing as ErstUnknown to automation.
+func WrapInternal(msg string, err error) error {
+	return &ErstError{
+		Code:    ErstInternalError,
+		Message: fmt.Sprintf("%s: %v", msg, err),
+		OrigErr: err,
+	}
+}
+
 const (
 	// RPC origin
 	CodeRPCConnectionFailed  ErstErrorCode = "RPC_CONNECTION_FAILED"

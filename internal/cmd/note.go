@@ -117,7 +117,7 @@ func runNoteAdd(cmd *cobra.Command, _ []string) error {
 
 	noteID, err := trace.GenerateNoteID()
 	if err != nil {
-		return fmt.Errorf("failed to generate note ID: %w", err)
+		return errors.WrapInternal("failed to generate note ID", err)
 	}
 
 	note := trace.AnalystNote{
