@@ -86,6 +86,9 @@ func ValidateVersionString(v string) error {
 				}
 			}
 		}
+		if len(p) > 1 && p[0] == '0' {
+			return &VersionValidationError{Value: v, Reason: fmt.Sprintf("component %d has a leading zero", i+1), Expected: "MAJOR.MINOR.PATCH with no leading zeros"}
+		}
 	}
 
 	return nil

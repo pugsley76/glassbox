@@ -142,3 +142,15 @@ func TestValidateVersionString_NonNumeric(t *testing.T) {
 		t.Errorf("error should mention non-digit, got: %q", err.Error())
 	}
 }
+
+func TestValidateVersionString_LeadingZero(t *testing.T) {
+	for _, v := range []string{"01.0.0", "1.02.3", "1.0.00"} {
+		err := ValidateVersionString(v)
+		if err == nil {
+			t.Fatalf("expected error for %q (semver forbids leading zeros)", v)
+		}
+		if !strings.Contains(err.Error(), "leading zero") {
+			t.Errorf("error for %q should mention 'leading zero', got: %q", v, err.Error())
+		}
+	}
+}

@@ -149,6 +149,9 @@ type Config struct {
 	// TelemetrySampleRate is the fraction of high-frequency trace events to emit [0.0, 1.0].
 	// 1.0 emits all events (default); 0.1 emits ~10%; 0.0 disables trace event telemetry.
 	TelemetrySampleRate float64 `json:"telemetry_sample_rate,omitempty"`
+	// TelemetrySampleRateSet tracks whether the sample rate was explicitly set,
+	// so an explicit 0.0 is not replaced by the default.
+	TelemetrySampleRateSet bool `json:"-"`
 	// MaxTraceDepth is the maximum depth of the call tree before it is truncated.
 	MaxTraceDepth int `json:"max_trace_depth,omitempty"`
 	// ExternalSourceRepos maps local path prefixes to remote GitHub repositories for source links.
@@ -223,6 +226,9 @@ func DefaultConfig() *Config {
 		CachePath:           defaultConfig.CachePath,
 		Telemetry:           defaultConfig.Telemetry,
 		TelemetryAnonymized: defaultConfig.TelemetryAnonymized,
+		TelemetryEnabled:    defaultConfig.TelemetryEnabled,
+		TelemetryEndpoint:   defaultConfig.TelemetryEndpoint,
+		TelemetrySampleRate: defaultConfig.TelemetrySampleRate,
 		RequestTimeout:      defaultConfig.RequestTimeout,
 		MaxCacheSize:        defaultConfig.MaxCacheSize,
 		MaxTraceDepth:       defaultConfig.MaxTraceDepth,
@@ -469,6 +475,7 @@ func (envParser) Parse(cfg *Config) error {
 	if v := os.Getenv("GLASSBOX_TELEMETRY_SAMPLE_RATE"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			cfg.TelemetrySampleRate = f
+			cfg.TelemetrySampleRateSet = true
 		}
 	}
 	if v := os.Getenv("GLASSBOX_BUILD_MANIFEST"); v != "" {
@@ -517,7 +524,7 @@ func (configDefaultsAssigner) Apply(cfg *Config) {
 	if cfg.Telemetry && !cfg.TelemetryAnonymizedConfigured {
 		cfg.TelemetryAnonymized = defaultConfig.TelemetryAnonymized
 	}
-	if cfg.TelemetrySampleRate == 0 {
+	if cfg.TelemetrySampleRate == 0 && !cfg.TelemetrySampleRateSet {
 		cfg.TelemetrySampleRate = defaultConfig.TelemetrySampleRate
 	}
 }

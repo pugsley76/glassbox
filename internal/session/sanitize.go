@@ -13,7 +13,7 @@ import (
 // information that must never be surfaced in error messages or logs.
 var piiPatterns = []*regexp.Regexp{
 	// Home-directory path prefixes (Unix and Windows)
-	regexp.MustCompile(`(?i)(/home/[^/\s]+|/Users/[^/\s]+|C:\\Users\\[^\\\s]+)`),
+	regexp.MustCompile(`(?i)(/home/[^/\s]+|/Users/[^/\s]+|[A-Za-z]:\\Users\\[^\\\s]+)`),
 	// Stellar secret seeds (56-char base32 starting with 'S')
 	regexp.MustCompile(`\bS[A-Z2-7]{55}\b`),
 	// JWT tokens: three base64url segments separated by dots

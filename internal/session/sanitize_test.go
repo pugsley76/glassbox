@@ -113,3 +113,14 @@ type testError struct{ msg string }
 func (e *testError) Error() string { return e.msg }
 
 func wrapTestErr(msg string) error { return &testError{msg: msg} }
+
+func TestSanitizeErrorMessage_RemovesNonCDriveWindowsPath(t *testing.T) {
+	msg := `failed to open D:\Users\bob\file.txt: access denied`
+	got := SanitizeErrorMessage(msg)
+	if strings.Contains(got, "bob") {
+		t.Errorf("sanitized message must not contain username, got: %q", got)
+	}
+	if !strings.Contains(got, "[REDACTED]") {
+		t.Errorf("sanitized message should contain [REDACTED], got: %q", got)
+	}
+}
