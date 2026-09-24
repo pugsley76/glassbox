@@ -5,15 +5,12 @@ package telemetry
 
 import (
 	"math/rand"
-	"sync/atomic"
 )
 
 // Sampler limits event emission for high-frequency telemetry topics.
 // A rate of 1.0 emits every event; 0.1 emits ~10% of events; 0.0 emits none.
 type Sampler struct {
 	rate float64
-	// counter is used for deterministic sampling (every 1/rate-th event).
-	counter atomic.Uint64
 }
 
 // NewSampler returns a Sampler with the given sample rate clamped to [0.0, 1.0].

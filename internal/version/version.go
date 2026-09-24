@@ -24,10 +24,12 @@ func IsDev() bool {
 	return Version == "0.0.0-dev"
 }
 
+const shortSHALen = 8
+
 // ShortSHA returns the first 8 characters of CommitSHA, or "unknown" if unset.
 func ShortSHA() string {
-	if len(CommitSHA) >= 8 {
-		return CommitSHA[:8]
+	if len(CommitSHA) >= shortSHALen {
+		return CommitSHA[:shortSHALen]
 	}
 	return CommitSHA
 }

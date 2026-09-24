@@ -294,7 +294,7 @@ func (m *Manager) Clean(force bool) (*CleanupStatus, error) {
 
 // formatBytes converts bytes to human-readable format
 func formatBytes(bytes int64) string {
-	units := []string{"B", "KB", "MB", "GB", "TB"}
+	units := []string{"B", "KiB", "MiB", "GiB", "TiB"}
 	size := float64(bytes)
 	unitIndex := 0
 

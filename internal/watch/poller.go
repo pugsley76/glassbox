@@ -53,7 +53,7 @@ func (p *Poller) Poll(ctx context.Context, checkFunc func(ctx context.Context) (
 	for {
 		select {
 		case <-ctx.Done():
-			return &PollResult{Found: false, Error: fmt.Errorf("polling timeout exceeded")}, nil
+			return &PollResult{Found: false, Error: ctx.Err()}, nil
 		default:
 		}
 
