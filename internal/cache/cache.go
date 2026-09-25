@@ -43,10 +43,9 @@ func NewManager(cacheDir string, config Config) *Manager {
 
 // FileInfo contains information about a cached file
 type FileInfo struct {
-	Path       string
-	Size       int64
-	LastAccess time.Time
-	ModTime    time.Time
+	Path    string
+	Size    int64
+	ModTime time.Time
 }
 
 // GetCacheDir returns the cache directory path (creates if not exists)
@@ -88,10 +87,9 @@ func (m *Manager) ListCachedFiles() ([]FileInfo, error) {
 		}
 		if !info.IsDir() {
 			files = append(files, FileInfo{
-				Path:       path,
-				Size:       info.Size(),
-				LastAccess: info.ModTime(),
-				ModTime:    info.ModTime(),
+				Path:    path,
+				Size:    info.Size(),
+				ModTime: info.ModTime(),
 			})
 		}
 		return nil
@@ -107,7 +105,7 @@ func (m *Manager) ListCachedFiles() ([]FileInfo, error) {
 // sortFilesByAccessTime sorts files by access time (oldest first)
 func sortFilesByAccessTime(files []FileInfo) {
 	sort.Slice(files, func(i, j int) bool {
-		return files[i].LastAccess.Before(files[j].LastAccess)
+		return files[i].ModTime.Before(files[j].ModTime)
 	})
 }
 
