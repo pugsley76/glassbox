@@ -401,3 +401,19 @@ func TestDecodeFootprintXDR_InvalidBase64(t *testing.T) {
 		t.Fatal("expected error for invalid base64")
 	}
 }
+
+// ── Empty input ───────────────────────────────────────────────────────────────
+
+// TestXDRDecoder_EmptyInput asserts that passing an empty byte slice (encoded
+// as an empty base64 string) to the XDR decoder returns a descriptive,
+// non-nil error rather than panicking or returning a nil result silently.
+// Empty envelopes arise from truncated RPC responses and empty network buffers.
+func TestXDRDecoder_EmptyInput(t *testing.T) {
+	result, err := DecodeEnvelopeXDR("")
+	if err == nil {
+		t.Fatal("expected a non-nil error for empty input, got nil")
+	}
+	if result != nil {
+		t.Errorf("expected nil result for empty input, got %+v", result)
+	}
+}
