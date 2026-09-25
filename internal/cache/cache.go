@@ -104,8 +104,8 @@ func (m *Manager) ListCachedFiles() ([]FileInfo, error) {
 	return files, nil
 }
 
-// SortFilesByAccessTime sorts files by access time (oldest first)
-func SortFilesByAccessTime(files []FileInfo) {
+// sortFilesByAccessTime sorts files by access time (oldest first)
+func sortFilesByAccessTime(files []FileInfo) {
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].LastAccess.Before(files[j].LastAccess)
 	})
@@ -156,7 +156,7 @@ func (m *Manager) CleanLRU() (*CleanupStatus, error) {
 	}
 
 	// Sort by access time (oldest first)
-	SortFilesByAccessTime(files)
+	sortFilesByAccessTime(files)
 
 	// Delete files until cache size is under limit
 	targetSize := m.config.MaxSizeBytes / 2 // Target 50% of max size after cleanup
@@ -256,7 +256,7 @@ func (m *Manager) Clean(force bool) (*CleanupStatus, error) {
 	}
 
 	// Sort by access time (oldest first)
-	SortFilesByAccessTime(files)
+	sortFilesByAccessTime(files)
 
 	// Delete oldest files
 	targetSize := m.config.MaxSizeBytes / 2 // Target 50% of max size

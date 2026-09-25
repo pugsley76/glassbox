@@ -95,7 +95,7 @@ func TestSortFilesByAccessTime(t *testing.T) {
 		{Path: "file2", LastAccess: now.Add(1 * time.Hour)},
 	}
 
-	SortFilesByAccessTime(files)
+	sortFilesByAccessTime(files)
 
 	// Verify sorting (oldest first)
 	assert.Equal(t, "file3", files[0].Path)
@@ -175,10 +175,10 @@ func TestFormatBytes(t *testing.T) {
 	}{
 		{0, "0 B"},
 		{512, "512 B"},
-		{1024, "1.00 KB"},
-		{1024 * 1024, "1.00 MB"},
-		{1024 * 1024 * 1024, "1.00 GB"},
-		{1536 * 1024 * 1024, "1.50 GB"},
+		{1024, "1.00 KiB"},
+		{1024 * 1024, "1.00 MiB"},
+		{1024 * 1024 * 1024, "1.00 GiB"},
+		{1536 * 1024 * 1024, "1.50 GiB"},
 	}
 
 	for _, test := range tests {
