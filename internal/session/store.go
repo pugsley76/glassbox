@@ -23,6 +23,10 @@ import (
 )
 
 const (
+	// CurrentSchemaVersion is bumped each time a breaking change is made to the
+	// session file format. To add a migration, increment this constant and add a
+	// corresponding case to the migration switch in schema.go (migrationTable).
+	//
 	// SchemaVersion tracks the database schema version for migrations.
 	// Bump this constant whenever a new step is appended to migrationTable in schema.go.
 	SchemaVersion = 3

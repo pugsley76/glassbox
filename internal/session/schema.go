@@ -14,7 +14,16 @@ import (
 // loaded without manual regeneration. Rows older than this must be re-debugged.
 const MinSupportedSchemaVersion = 1
 
-// NOTE: SchemaVersion is defined in store.go (currently 2). When a new migration
+// CurrentSchemaVersion is bumped each time a breaking change is made to the
+// session file format. To add a migration, increment this constant and add a
+// corresponding case to the migration switch in migration.go (migrationTable
+// in this file). The version history is:
+//
+//   v1 — initial schema; backfills env_fingerprint on legacy rows.
+//   v2 — normalises empty Status field to "active".
+//   v3 — backfills audit-chain sentinel and revision baseline.
+//
+// NOTE: SchemaVersion is defined in store.go (currently 3). When a new migration
 // step is appended to migrationTable below, increment that constant to match the
 // highest toVersion in the table.
 
