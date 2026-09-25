@@ -11,9 +11,14 @@ import (
 	"github.com/dotandev/glassbox/internal/rpc"
 )
 
-var Client = &http.Client{
+var defaultClient = &http.Client{
 	Timeout: 30 * time.Second,
 	Transport: NewRetryTransport(),
+}
+
+// DefaultClient returns the shared default HTTP client.
+func DefaultClient() *http.Client {
+	return defaultClient
 }
 
 // NewRetryTransport creates a transport with retry logic for the default HTTP client.
