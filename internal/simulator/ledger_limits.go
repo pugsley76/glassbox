@@ -40,8 +40,9 @@ func (w *LedgerSizeWarning) Error() string {
 //
 // entries is a map of base64-encoded XDR LedgerKey → base64-encoded XDR
 // LedgerEntry, as produced by rpc.Client.GetLedgerEntries.  Both key and
-// value bytes are counted because both are transmitted in the transaction
-// footprint.
+// value bytes are counted because the Soroban footprint includes the full XDR
+// serialisation of every LedgerKey and LedgerEntry; the network limit applies
+// to their combined decoded size.
 //
 // Entries whose values cannot be base64-decoded are counted as zero bytes
 // (the simulator will surface the decode error separately).
