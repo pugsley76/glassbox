@@ -51,7 +51,7 @@ pub struct CapturedSnapshot {
     pub host_fn_name: String,
     /// The ledger state at the moment of capture.
     pub state: LedgerSnapshot,
-    /// If this is an After snapshot, the ID of the corresponding Before snapshot.
+    /// Always None in the current implementation. Reserved for tracking the corresponding before-snapshot ID in nested host call scenarios.
     pub before_id: Option<SnapshotId>,
     /// Whether the host function trapped (only meaningful for After snapshots).
     pub trapped: bool,
