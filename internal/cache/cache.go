@@ -197,7 +197,7 @@ func (m *Manager) CleanLRU() (*CleanupStatus, error) {
 func (m *Manager) Clean(force bool) (*CleanupStatus, error) {
 	// Check if cache directory exists
 	if _, err := os.Stat(m.cacheDir); os.IsNotExist(err) {
-		fmt.Println("Cache directory does not exist")
+		logger.Logger.Info("Cache directory does not exist")
 		return &CleanupStatus{}, nil
 	}
 
@@ -212,18 +212,14 @@ func (m *Manager) Clean(force bool) (*CleanupStatus, error) {
 		DeletedFiles: []string{},
 	}
 
-	// Format sizes for display
-	originalSizeStr := formatBytes(originalSize)
-
 	if originalSize == 0 {
-		fmt.Printf("Cache is empty (0 B)\n")
+		logger.Logger.Info("Cache is empty", "size", "0 B")
 		status.FinalSize = 0
 		return status, nil
 	}
 
 	// Show warning and get confirmation
-	fmt.Printf("Cache size: %s\n", originalSizeStr)
-	fmt.Printf("Maximum size: %s\n", formatBytes(m.config.MaxSizeBytes))
+	logger.Logger.Info("Cache status", "size", formatBytes(originalSize), "max_size", formatBytes(m.config.MaxSizeBytes))
 
 	if !force {
 		if termctx.GlobalNonInteractive() {
@@ -235,13 +231,13 @@ func (m *Manager) Clean(force bool) (*CleanupStatus, error) {
 			return status, fmt.Errorf("failed to read input: %w", scanErr)
 		}
 		if response != "yes" && response != "y" {
-			fmt.Println("Cache cleanup cancelled")
+			logger.Logger.Info("Cache cleanup cancelled")
 			status.FinalSize = originalSize
 			return status, nil
 		}
 	}
 
-	fmt.Println("\nCleaning cache (Least Recently Used files first)...")
+	logger.Logger.Info("Cleaning cache (Least Recently Used files first)")
 
 	// Get list of cached files
 	files, err := m.ListCachedFiles()
@@ -250,7 +246,7 @@ func (m *Manager) Clean(force bool) (*CleanupStatus, error) {
 	}
 
 	if len(files) == 0 {
-		fmt.Println("No cached files found")
+		logger.Logger.Info("No cached files found")
 		status.FinalSize = 0
 		return status, nil
 	}
@@ -283,11 +279,10 @@ func (m *Manager) Clean(force bool) (*CleanupStatus, error) {
 
 	status.FinalSize = currentSize
 
-	// Print summary
-	fmt.Printf("\nCleanup complete!\n")
-	fmt.Printf("Files deleted: %d\n", status.FilesDeleted)
-	fmt.Printf("Space freed: %s\n", formatBytes(status.SpaceFreed))
-	fmt.Printf("Final cache size: %s\n", formatBytes(status.FinalSize))
+	logger.Logger.Info("Cleanup complete",
+		"files_deleted", status.FilesDeleted,
+		"space_freed", formatBytes(status.SpaceFreed),
+		"final_cache_size", formatBytes(status.FinalSize))
 
 	return status, nil
 }

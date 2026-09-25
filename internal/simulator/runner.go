@@ -51,13 +51,11 @@ func NewRunner(simPathOverride string, debug bool) (*Runner, error) {
 		return nil, err
 	}
 
-	if debug {
-		logger.Logger.Debug(
-			"Simulator binary resolved",
-			"path", path,
-			"source", source,
-		)
-	}
+	logger.Logger.Debug(
+		"Simulator binary resolved",
+		"path", path,
+		"source", source,
+	)
 
 	return &Runner{
 		BinaryPath: path,

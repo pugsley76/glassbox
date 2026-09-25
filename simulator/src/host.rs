@@ -20,6 +20,8 @@ use std::fmt;
 pub struct SnapshotId(u64);
 
 impl SnapshotId {
+    /// Returns the raw counter value. This is unique only within a single
+    /// [`HostSnapshotTracker`] instance and is not globally unique.
     pub fn as_u64(self) -> u64 {
         self.0
     }
