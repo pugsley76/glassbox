@@ -85,6 +85,7 @@ impl HostSnapshotTracker {
     /// Takes a snapshot of the current ledger state and stores it as
     /// the pending "before" snapshot.
     pub fn take_before_snapshot(&mut self, host_fn_name: &str, state: LedgerSnapshot) {
+        debug_assert!(self.pending_before.is_none(), "take_before_snapshot called twice without take_after_snapshot");
         let id = self.next_snapshot_id();
         self.pending_before = Some(CapturedSnapshot {
             id,
