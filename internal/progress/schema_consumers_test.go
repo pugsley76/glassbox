@@ -107,6 +107,19 @@ func TestSequenceValidator_OutOfOrder(t *testing.T) {
 	assert.Contains(t, err.Error(), "out of order")
 }
 
+func TestSequenceValidator_SkippedPhaseIsTerminal(t *testing.T) {
+	sv := progress.NewSequenceValidator()
+
+	// A skipped phase must be accepted and treated as terminal.
+	require.NoError(t, sv.Validate(progress.Event{Phase: progress.PhaseFetch, Status: progress.StatusSkipped}))
+
+	// Re-emitting a StatusStart for the same phase must now fail because
+	// IsTerminal returned true for the skipped event and advanced lastOrder.
+	err := sv.Validate(progress.Event{Phase: progress.PhaseFetch, Status: progress.StatusStart})
+	require.Error(t, err, "StatusStart after StatusSkipped for the same phase must be rejected")
+	assert.Contains(t, err.Error(), "out of order")
+}
+
 func TestSequenceValidator_AfterCancellation(t *testing.T) {
 	sv := progress.NewSequenceValidator()
 	sv.Cancel()

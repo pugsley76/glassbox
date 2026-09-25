@@ -72,7 +72,7 @@ func (sv *SequenceValidator) Validate(e Event) error {
 		return nil
 	}
 
-	if order < sv.lastOrder {
+	if order <= sv.lastOrder {
 		return &SequenceError{Got: e.Phase, Last: sv.lastCompleted, Reason: "arrived out of order"}
 	}
 
