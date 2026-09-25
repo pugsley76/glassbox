@@ -11,6 +11,9 @@ import (
 	"github.com/dotandev/glassbox/internal/errors"
 )
 
+// maxRequestTimeout is the maximum allowed HTTP request timeout in seconds.
+// 300 s (5 minutes) is a conservative ceiling; Soroban RPC servers typically
+// time out within 30–60 s.
 const maxRequestTimeout = 300
 
 type TimeoutValidator struct{}
