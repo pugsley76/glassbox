@@ -189,6 +189,19 @@ var migrationTable = []migrationStep{
 			}
 		},
 	},
+	{
+		toVersion:   4,
+		description: "backfill tags_json empty array for pre-tagging sessions",
+		migrate: func(data *Data) {
+			// v3 → v4: the tags_json column is new in schema v4. Rows that
+			// pre-date it have a NULL / empty value. We backfill a canonical
+			// empty JSON array so the Tags() accessor never needs to handle
+			// NULL and all rows are structurally valid from this version onward.
+			if data.TagsJSON == "" {
+				data.TagsJSON = "[]"
+			}
+		},
+	},
 }
 
 // UpgradeSessionData migrates an in-memory session record from an older schema

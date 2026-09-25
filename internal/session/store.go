@@ -25,7 +25,7 @@ import (
 const (
 	// SchemaVersion tracks the database schema version for migrations.
 	// Bump this constant whenever a new step is appended to migrationTable in schema.go.
-	SchemaVersion = 3
+	SchemaVersion = 4
 
 	// DefaultTTL is the default time-to-live for sessions (30 days)
 	DefaultTTL = 30 * 24 * time.Hour
@@ -86,6 +86,22 @@ type Data struct {
 	// across colliding sessions instead of overwriting it.
 	AnnotationsJSON string `json:"-"`
 
+	// TagsJSON is a JSON array of short string tags attached by the operator
+	// for filtering and categorization [Issue #1060].
+	// Example: ["auth-bug", "mainnet", "priority-high"]
+	//
+	// Tags are distinct from free-text AnnotationsJSON notes: they are short,
+	// lowercase identifiers intended for programmatic filtering with
+	// 'glassbox session list --tag <tag>'. Each tag is at most 64 characters;
+	// a session may carry at most 32 tags. The Tags() / SetTags() helpers
+	// in tags.go enforce these constraints and provide JSON round-trip.
+	//
+	// TagsJSON is stored as a top-level column in sessions.db and included in
+	// the archive manifest's integrity hash so tag changes are detectable.
+	// Like AnnotationsJSON, tags are excluded from the session's AuditHash so
+	// they do not alter cryptographic evidence.
+	TagsJSON string `json:"tags_json,omitempty"`
+
 	// Archive-only artifacts [Issue #56]. Unlike AnnotationsJSON, these are
 	// never persisted to the SQLite store — they exist only as independent
 	// members of a shared session archive, each hashed separately in the
@@ -103,6 +119,20 @@ type Data struct {
 	// record — see encryption.go.
 	EncryptedPayload *EncryptedEnvelope `json:"encrypted_payload,omitempty"`
 
+	// TagsJSON is a JSON array of short string tags attached by the operator
+	// for filtering and categorization [Issue #1060].
+	// Example: ["auth-bug", "mainnet", "priority-high"]
+	//
+	// Tags are distinct from free-text AnnotationsJSON notes: they are short,
+	// lowercase identifiers intended for programmatic filtering with
+	// 'glassbox session list --tag <tag>'. Each tag is at most 64 characters;
+	// a session may carry at most 32 tags. The Tags() / SetTags() helpers
+	// in tags.go enforce these constraints and provide JSON round-trip.
+	//
+	// TagsJSON is stored as a top-level column in sessions.db and included in
+	// the archive manifest's integrity hash so tag changes are detectable.
+	// Like AnnotationsJSON, tags are excluded from the session's AuditHash so
+	// they do not alter cryptographic evidence.
 	// ExtrasJSON preserves additive or unknown fields that appear in an
 	// archive's session.json but are not recognised by the current struct
 	// definition. This allows older binaries to round-trip newer archives
@@ -217,6 +247,7 @@ func (s *Store) initSchema() error {
 		env_fingerprint TEXT,
 		provenance_json TEXT,
 		annotations_json TEXT,
+		tags_json TEXT NOT NULL DEFAULT '[]',
 		revision INTEGER NOT NULL DEFAULT 0,
 		GLASSBOX_version TEXT,
 		schema_version INTEGER NOT NULL
@@ -243,6 +274,9 @@ func (s *Store) initSchema() error {
 		return err
 	}
 	if err := s.ensureColumn("sessions", "annotations_json", "TEXT"); err != nil {
+		return err
+	}
+	if err := s.ensureColumn("sessions", "tags_json", "TEXT NOT NULL DEFAULT '[]'"); err != nil {
 		return err
 	}
 	if err := s.ensureColumn("sessions", "encrypted_payload", "TEXT"); err != nil {
@@ -467,8 +501,8 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 		envelope_xdr, result_xdr, result_meta_xdr, pinned_endpoint,
 		audit_hash, audit_signature, previous_session_hash,
 		sim_request_json, sim_response_json, env_fingerprint, provenance_json, annotations_json,
-		encrypted_payload, revision, GLASSBOX_version, schema_version
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		tags_json, encrypted_payload, revision, GLASSBOX_version, schema_version
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		name = excluded.name,
 		last_access_at = excluded.last_access_at,
@@ -488,11 +522,17 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 		env_fingerprint = excluded.env_fingerprint,
 		provenance_json = excluded.provenance_json,
 		annotations_json = excluded.annotations_json,
+		tags_json = excluded.tags_json,
 		GLASSBOX_version = excluded.GLASSBOX_version,
 		schema_version = excluded.schema_version,
 		encrypted_payload = excluded.encrypted_payload,
 		revision = excluded.revision
 	`
+
+	tagsJSON := data.TagsJSON
+	if tagsJSON == "" {
+		tagsJSON = "[]"
+	}
 
 	_, err = s.db.ExecContext(ctx, query,
 		data.ID, data.Name, data.CreatedAt, data.LastAccessAt, data.Status,
@@ -500,7 +540,7 @@ func (s *Store) Save(ctx context.Context, data *Data) error {
 		data.EnvelopeXdr, data.ResultXdr, data.ResultMetaXdr, data.PinnedEndpoint,
 		data.AuditHash, data.AuditSignature, data.PreviousSessionHash,
 		data.SimRequestJSON, data.SimResponseJSON, data.EnvFingerprint, data.ProvenanceJSON, data.AnnotationsJSON,
-		encryptedPayloadJSON, data.Revision, data.ErstVersion, data.SchemaVersion,
+		tagsJSON, encryptedPayloadJSON, data.Revision, data.ErstVersion, data.SchemaVersion,
 	)
 
 	if err != nil {
@@ -605,6 +645,7 @@ func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 	       envelope_xdr, result_xdr, result_meta_xdr, pinned_endpoint,
 	       audit_hash, audit_signature, previous_session_hash,
 	       sim_request_json, sim_response_json, env_fingerprint, provenance_json, annotations_json,
+	       COALESCE(tags_json, '[]'),
 	       encrypted_payload, COALESCE(revision, 0), GLASSBOX_version, schema_version
 	FROM sessions
 	WHERE id = ?
@@ -612,13 +653,14 @@ func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 
 	var data Data
 	var createdAt, lastAccessAt string
-	var envFP, auditHash, auditSignature, prevSessionHash, provenanceJSON, annotationsJSON, encryptedPayload sql.NullString
+	var envFP, auditHash, auditSignature, prevSessionHash, provenanceJSON, annotationsJSON, tagsJSON, encryptedPayload sql.NullString
 	err := s.db.QueryRowContext(ctx, query, sessionID).Scan(
 		&data.ID, &data.Name, &createdAt, &lastAccessAt, &data.Status,
 		&data.Network, &data.HorizonURL, &data.TxHash,
 		&data.EnvelopeXdr, &data.ResultXdr, &data.ResultMetaXdr, &data.PinnedEndpoint,
 		&auditHash, &auditSignature, &prevSessionHash,
 		&data.SimRequestJSON, &data.SimResponseJSON, &envFP, &provenanceJSON, &annotationsJSON,
+		&tagsJSON,
 		&encryptedPayload, &data.Revision, &data.ErstVersion, &data.SchemaVersion,
 	)
 	if envFP.Valid {
@@ -638,6 +680,11 @@ func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 	}
 	if annotationsJSON.Valid {
 		data.AnnotationsJSON = annotationsJSON.String
+	}
+	if tagsJSON.Valid && tagsJSON.String != "" {
+		data.TagsJSON = tagsJSON.String
+	} else {
+		data.TagsJSON = "[]"
 	}
 	if err == nil {
 		if data.EncryptedPayload, err = unmarshalEncryptedPayload(encryptedPayload.String); err != nil {
@@ -734,6 +781,7 @@ func (s *Store) List(ctx context.Context, limit int) ([]*Data, error) {
 	       envelope_xdr, result_xdr, result_meta_xdr, pinned_endpoint,
 	       audit_hash, audit_signature, previous_session_hash,
 	       sim_request_json, sim_response_json, env_fingerprint, provenance_json, annotations_json,
+	       COALESCE(tags_json, '[]'),
 	       encrypted_payload, COALESCE(revision, 0), GLASSBOX_version, schema_version
 	FROM sessions
 	ORDER BY last_access_at DESC
@@ -767,6 +815,7 @@ func (s *Store) List(ctx context.Context, limit int) ([]*Data, error) {
 		previousSessionHash := sql.NullString{}
 		provenanceJSON := sql.NullString{}
 		annotationsJSON := sql.NullString{}
+		tagsJSON := sql.NullString{}
 		encryptedPayload := sql.NullString{}
 		scanErr := rows.Scan(
 			&data.ID, &data.Name, &createdAt, &lastAccessAt, &data.Status,
@@ -774,6 +823,7 @@ func (s *Store) List(ctx context.Context, limit int) ([]*Data, error) {
 			&data.EnvelopeXdr, &data.ResultXdr, &data.ResultMetaXdr, &data.PinnedEndpoint,
 			&auditHash, &auditSignature, &previousSessionHash,
 			&data.SimRequestJSON, &data.SimResponseJSON, &envFP, &provenanceJSON, &annotationsJSON,
+			&tagsJSON,
 			&encryptedPayload, &data.Revision, &data.ErstVersion, &data.SchemaVersion,
 		)
 		if scanErr != nil {
@@ -785,6 +835,11 @@ func (s *Store) List(ctx context.Context, limit int) ([]*Data, error) {
 		data.EnvFingerprint = envFP.String
 		data.ProvenanceJSON = provenanceJSON.String
 		data.AnnotationsJSON = annotationsJSON.String
+		if tagsJSON.Valid && tagsJSON.String != "" {
+			data.TagsJSON = tagsJSON.String
+		} else {
+			data.TagsJSON = "[]"
+		}
 		// List never decrypts: listing/GC/diagnostics only need non-sensitive
 		// metadata (all of which stays plaintext regardless of encryption),
 		// so callers are never asked for a key just to see a session name.
