@@ -31,6 +31,11 @@ const (
 	TrapCategoryUnknown       TrapCategory = "unknown"
 )
 
+// TrapCauseUnreachable is the human-readable cause string for an unreachable
+// WASM instruction trap. Extracting it as a named constant allows tests and
+// callers to reference it directly without duplicating the literal string.
+const TrapCauseUnreachable = "unreachable instruction"
+
 // TrapCause is a structured, serializable representation of a trap that
 // preserves information across the Rust → Go boundary.
 type TrapCause struct {
@@ -122,7 +127,7 @@ func MapErrorToCategory(errMsg string) TrapCategory {
 		return TrapCategoryDivisionByZero
 	case contains(s, "index"), contains(s, "out of bounds"), contains(s, "bounds"):
 		return TrapCategoryIndexOOB
-	case contains(s, "wasm"), contains(s, "unreachable"), contains(s, "trap"):
+	case contains(s, "wasm"), contains(s, TrapCauseUnreachable), contains(s, "unreachable"), contains(s, "trap"):
 		return TrapCategoryWasmTrap
 	case contains(s, "host"):
 		return TrapCategoryHostError
