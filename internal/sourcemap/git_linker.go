@@ -5,9 +5,9 @@ package sourcemap
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
-	"net/url"
 	"path"
 	"path/filepath"
 	"strings"
@@ -24,8 +24,8 @@ type GitLinker struct {
 	// remoteURL is the parsed GitHub remote origin URL.
 	remoteURL string
 	// defaultBranch is retained only for explicit ambiguous-link overrides.
-	defaultBranch string
-	provenance RevisionProvenance
+	defaultBranch  string
+	provenance     RevisionProvenance
 	allowAmbiguous bool
 }
 
@@ -41,14 +41,24 @@ func NewGitLinker(startPath string) (*GitLinker, error) {
 // AllowAmbiguous was explicitly requested.
 func NewGitLinkerWithRevision(startPath string, opts RevisionOptions) (*GitLinker, error) {
 	root, err := findRepoRoot(startPath)
-	if err != nil { return nil, fmt.Errorf("repository root not found from %q: %w", startPath, err) }
+	if err != nil {
+		return nil, fmt.Errorf("repository root not found from %q: %w", startPath, err)
+	}
 	remote, err := gitRemoteOrigin(root)
-	if err != nil { return nil, fmt.Errorf("could not determine remote origin for repo at %q: %w", root, err) }
-	if _, _, err := parseGitHubRemote(remote); err != nil { return nil, fmt.Errorf("unsupported repository remote %q: %w", remote, err) }
+	if err != nil {
+		return nil, fmt.Errorf("could not determine remote origin for repo at %q: %w", root, err)
+	}
+	if _, _, err := parseGitHubRemote(remote); err != nil {
+		return nil, fmt.Errorf("unsupported repository remote %q: %w", remote, err)
+	}
 	provenance, revisionErr := resolveRevision(root, opts)
-	if revisionErr != nil && !opts.AllowAmbiguous { return nil, fmt.Errorf("cannot create immutable source links: %w", revisionErr) }
+	if revisionErr != nil && !opts.AllowAmbiguous {
+		return nil, fmt.Errorf("cannot create immutable source links: %w", revisionErr)
+	}
 	branch, _ := gitDefaultBranch(root)
-	if branch == "" { branch = "main" }
+	if branch == "" {
+		branch = "main"
+	}
 	return &GitLinker{repoRoot: root, remoteURL: remote, defaultBranch: branch, provenance: provenance, allowAmbiguous: opts.AllowAmbiguous}, nil
 }
 
@@ -70,13 +80,21 @@ func (g *GitLinker) GitHubURL(absFilePath string) (string, error) {
 		return "", fmt.Errorf("file %q is outside the repository root %q", absFilePath, g.repoRoot)
 	}
 
-	if err := validateSourcePath(rel); err != nil { return "", err }
+	if err := validateSourcePath(rel); err != nil {
+		return "", err
+	}
 	revision := g.provenance.Revision
 	if !g.provenance.Immutable() {
 		// Compatibility for callers that constructed GitLinker directly. Production
 		// constructors never enter this branch unless the caller opted in.
-		if !g.allowAmbiguous && g.provenance.Revision != "" { return "", fmt.Errorf("refusing ambiguous source link (%s)", g.provenance.Label()) }
-		if !g.allowAmbiguous && g.provenance.Revision == "" { revision = g.defaultBranch } else if revision == "" { revision = g.defaultBranch }
+		if !g.allowAmbiguous && g.provenance.Revision != "" {
+			return "", fmt.Errorf("refusing ambiguous source link (%s)", g.provenance.Label())
+		}
+		if !g.allowAmbiguous && g.provenance.Revision == "" {
+			revision = g.defaultBranch
+		} else if revision == "" {
+			revision = g.defaultBranch
+		}
 	}
 	return fmt.Sprintf("https://github.com/%s/%s/blob/%s/%s", owner, repo, url.PathEscape(revision), escapeGitHubPath(rel)), nil
 }
@@ -86,12 +104,23 @@ func (g *GitLinker) Provenance() RevisionProvenance { return g.provenance }
 
 func validateSourcePath(rel string) error {
 	clean := path.Clean(rel)
-	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(rel, "\\") { return fmt.Errorf("unsafe repository-relative path %q", rel) }
-	for _, segment := range strings.Split(clean, "/") { if segment == "" || segment == "." || segment == ".." { return fmt.Errorf("unsafe repository-relative path %q", rel) } }
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(rel, "\\") {
+		return fmt.Errorf("unsafe repository-relative path %q", rel)
+	}
+	for _, segment := range strings.Split(clean, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return fmt.Errorf("unsafe repository-relative path %q", rel)
+		}
+	}
 	return nil
 }
+
 func escapeGitHubPath(rel string) string {
-	parts := strings.Split(rel, "/"); for i := range parts { parts[i] = url.PathEscape(parts[i]) }; return strings.Join(parts, "/")
+	parts := strings.Split(rel, "/")
+	for i := range parts {
+		parts[i] = url.PathEscape(parts[i])
+	}
+	return strings.Join(parts, "/")
 }
 
 // RepoRoot returns the discovered repository root path.
@@ -141,9 +170,13 @@ func isRepoRoot(dir string) bool {
 // repository configuration parsing it deliberately rejects owner/repo shorthand
 // and lookalike hosts, which must not silently produce a GitHub link.
 func parseGitHubRemote(raw string) (string, string, error) {
-	if strings.HasPrefix(raw, "git@github.com:") { return parseGitHubURL(raw) }
+	if strings.HasPrefix(raw, "git@github.com:") {
+		return parseGitHubURL(raw)
+	}
 	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "ssh") || !strings.EqualFold(u.Hostname(), "github.com") { return "", "", fmt.Errorf("remote is not a github.com URL") }
+	if err != nil || (u.Scheme != "https" && u.Scheme != "ssh") || !strings.EqualFold(u.Hostname(), "github.com") {
+		return "", "", fmt.Errorf("remote is not a github.com URL")
+	}
 	return parseGitHubURL(raw)
 }
 
