@@ -84,9 +84,9 @@ func WarnLedgerEntriesSize(entries map[string]string, w io.Writer) bool {
 			"         The network will reject this transaction. "+
 			"Reduce the number of ledger entries read in a single invocation.\n",
 		warning.Error(),
-		formatBytes(warning.TotalBytes),
+		formatLedgerBytes(warning.TotalBytes),
 		warning.EntryCount,
-		formatBytes(warning.LimitBytes),
+		formatLedgerBytes(warning.LimitBytes),
 	)
 	return true
 }
@@ -98,8 +98,11 @@ func WarnLedgerEntriesSizeToStderr(entries map[string]string) bool {
 	return WarnLedgerEntriesSize(entries, os.Stderr)
 }
 
-// formatBytes formats a byte count as a human-readable string.
-func formatBytes(n int) string {
+// formatLedgerBytes formats a byte count as a human-readable string, including
+// the raw byte count in parentheses alongside the KiB/MiB label.  It is
+// distinct from the cache package's formatBytes, which uses different labels
+// and omits the raw byte count.
+func formatLedgerBytes(n int) string {
 	const kib = 1024
 	const mib = 1024 * kib
 	switch {

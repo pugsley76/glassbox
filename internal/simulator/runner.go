@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -140,7 +141,13 @@ func isExecutable(path string) bool {
 		return false
 	}
 	if runtime.GOOS == "windows" {
-		return true // On Windows, if it's a file and we can stat it, assume it's executable for now
+		// On Windows there is no executable-permission bit.  Accept files with
+		// no extension (Unix-style binaries placed on the PATH) or with the
+		// .exe extension.  Any other extension (e.g. .json, .txt) is not an
+		// executable and should be rejected so callers get an actionable error
+		// rather than a cryptic OS "file not found or not executable" message.
+		ext := strings.ToLower(filepath.Ext(path))
+		return ext == "" || ext == ".exe"
 	}
 	return info.Mode()&0111 != 0
 }

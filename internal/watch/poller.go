@@ -10,9 +10,18 @@ import (
 )
 
 type PollerConfig struct {
-	MaxAttempts     int
+	// MaxAttempts is the maximum number of poll attempts before giving up.
+	// Zero uses the default of 60.
+	MaxAttempts int
+	// InitialInterval is the wait duration before the second poll attempt.
+	// Zero uses the default of 1 second.
 	InitialInterval time.Duration
-	MaxInterval     time.Duration
+	// MaxInterval is the upper bound on the exponential back-off delay between
+	// attempts.  Zero uses the default of 10 seconds.
+	MaxInterval time.Duration
+	// TimeoutDuration is the wall-clock deadline for the entire polling
+	// operation; the context passed to Poll is cancelled after this duration.
+	// Zero uses the default of 30 seconds.
 	TimeoutDuration time.Duration
 }
 
