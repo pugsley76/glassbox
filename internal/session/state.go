@@ -33,7 +33,8 @@ type StateStore struct {
 // NewStateStore initializes the store [Issue #589]
 func NewStateStore() *StateStore {
 	s := &StateStore{
-		state: make(State),
+		state:      make(State),
+		middleware: make([]Middleware, 0),
 	}
 	// The base dispatcher updates the actual state map
 	s.dispatch = s.baseDispatch
