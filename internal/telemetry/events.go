@@ -13,7 +13,7 @@ func init() {
 func registerDebugProgressEvents() {
 	defs := []*EventDefinition{
 		{
-			Name:        "debug.progress",
+			Name:        EventDebugProgress,
 			Version:     1,
 			Owner:       "debug-team",
 			Description: "Structured progress events for long-running debug operations",
