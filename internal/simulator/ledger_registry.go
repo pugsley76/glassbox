@@ -20,9 +20,11 @@ const (
 	EntryKindContract                        // ContractData with Persistent durability
 	EntryKindCode                            // ContractCode (WASM bytecode)
 	EntryKindTTL                             // Time-to-live record for a contract entry
-	EntryKindPersistent                      // Alias for ContractData Persistent (same wire type)
+	_                                        // reserved iota slot
 	EntryKindTemporary                       // ContractData Temporary durability
 	EntryKindConfigSetting                   // Network-wide configurable parameter
+
+	EntryKindPersistent = EntryKindContract // Alias for ContractData Persistent (same wire type)
 )
 
 // String returns a human-readable name for the EntryKind.

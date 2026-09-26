@@ -90,9 +90,9 @@ func TestSortFilesByAccessTime(t *testing.T) {
 	now := time.Now()
 
 	files := []FileInfo{
-		{Path: "file1", LastAccess: now.Add(2 * time.Hour)},
-		{Path: "file3", LastAccess: now},
-		{Path: "file2", LastAccess: now.Add(1 * time.Hour)},
+		{Path: "file1", ModTime: now.Add(2 * time.Hour)},
+		{Path: "file3", ModTime: now},
+		{Path: "file2", ModTime: now.Add(1 * time.Hour)},
 	}
 
 	sortFilesByAccessTime(files)
