@@ -64,6 +64,15 @@ type Profile struct {
 	// If empty, Placeholder is used.
 	RedactedPlaceholder string `json:"redacted_placeholder,omitempty"`
 
+	// effectivePlaceholder returns the effective placeholder for this profile.
+	// It returns p.RedactedPlaceholder if non-empty, otherwise Placeholder.
+	func (p *Profile) effectivePlaceholder() string {
+		if p.RedactedPlaceholder != "" {
+			return p.RedactedPlaceholder
+		}
+		return Placeholder
+	}
+
 	// OptIn controls whether the profile is opt-in (false) or opt-out (true).
 	// When OptIn is true, fields not explicitly listed are NOT redacted.
 	// When OptIn is false (default), all matched fields are redacted.
@@ -79,10 +88,7 @@ type RedactionSummary struct {
 
 // Apply applies redaction rules to a string value.
 func (p *Profile) Apply(value string) string {
-	placeholder := p.RedactedPlaceholder
-	if placeholder == "" {
-		placeholder = Placeholder
-	}
+	placeholder := p.effectivePlaceholder()
 
 	for _, rule := range p.Rules {
 		if rule.compiled != nil && rule.compiled.MatchString(value) {
@@ -94,10 +100,7 @@ func (p *Profile) Apply(value string) string {
 
 // ApplyToMap applies redaction rules to a map, redacting values for matching keys.
 func (p *Profile) ApplyToMap(m map[string]interface{}) map[string]interface{} {
-	placeholder := p.RedactedPlaceholder
-	if placeholder == "" {
-		placeholder = Placeholder
-	}
+	placeholder := p.effectivePlaceholder()
 
 	out := make(map[string]interface{}, len(m))
 	for k, v := range m {
@@ -129,10 +132,7 @@ func (p *Profile) ApplyToMap(m map[string]interface{}) map[string]interface{} {
 
 // ApplyToStringMap applies redaction to a map[string]string.
 func (p *Profile) ApplyToStringMap(m map[string]string) map[string]string {
-	placeholder := p.RedactedPlaceholder
-	if placeholder == "" {
-		placeholder = Placeholder
-	}
+	placeholder := p.effectivePlaceholder()
 
 	out := make(map[string]string, len(m))
 	for k, v := range m {

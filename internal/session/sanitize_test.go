@@ -132,3 +132,14 @@ func TestSanitizeErrorMessage_RemovesNonCDriveWindowsPath(t *testing.T) {
 		t.Errorf("sanitized message should contain [REDACTED], got: %q", got)
 	}
 }
+
+func TestSanitizeErrorMessage_RemovesWindowsPathAnyDrive(t *testing.T) {
+	msg := "failed to open D:\\Users\\carol\\.Glassbox\\sessions.db"
+	got := SanitizeErrorMessage(msg)
+	if strings.Contains(got, "carol") {
+		t.Errorf("sanitized message must not contain username, got: %q", got)
+	}
+	if !strings.Contains(got, "[REDACTED]") {
+		t.Errorf("sanitized message should contain [REDACTED], got: %q", got)
+	}
+}
