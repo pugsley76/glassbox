@@ -72,7 +72,9 @@ type Profile struct {
 
 // RedactionSummary records what was redacted for inclusion in report metadata.
 type RedactionSummary struct {
-	ProfileName    string   `json:"profile_name"`
+	ProfileName string `json:"profile_name"`
+	// FieldsRedacted lists each field name that was redacted. Duplicates may
+	// appear if multiple rules matched the same field.
 	FieldsRedacted []string `json:"fields_redacted"`
 	TotalRedacted  int      `json:"total_redacted"`
 }

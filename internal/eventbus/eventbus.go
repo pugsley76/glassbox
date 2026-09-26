@@ -25,7 +25,8 @@ type EventBus struct {
 	nextID   HandlerID
 }
 
-// New returns a new, ready-to-use EventBus.
+// New returns a new, ready-to-use EventBus. It initializes the outer handler
+// map only; per-topic handler maps are allocated lazily by Subscribe.
 func New() *EventBus {
 	return &EventBus{
 		handlers: make(map[string]map[HandlerID]Handler),
@@ -41,6 +42,8 @@ func (b *EventBus) Subscribe(topic string, handler Handler) HandlerID {
 	b.nextID++
 	id := b.nextID
 
+	// Inner topic maps are created lazily on first Subscribe to avoid
+	// allocating maps for topics that may never be used.
 	if b.handlers[topic] == nil {
 		b.handlers[topic] = make(map[HandlerID]Handler)
 	}
