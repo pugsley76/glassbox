@@ -48,3 +48,58 @@ func TestNewCacheKey_Valid(t *testing.T) {
 		t.Errorf("SchemaVersion: want %d, got %d", CacheKeyVersion, key.SchemaVersion)
 	}
 }
+
+func TestCacheKey_Digest_Deterministic(t *testing.T) {
+	config := map[string]interface{}{
+		"opt_level": 2,
+		"features":  []string{"bulk-memory", "simd"},
+	}
+
+	k1, err := NewCacheKey(validWASMBytes, KindOptimization, "wasm-opt 1.2.3", config, []string{"build-id", "dwarf"})
+	if err != nil {
+		t.Fatalf("NewCacheKey k1: %v", err)
+	}
+	k2, err := NewCacheKey(validWASMBytes, KindOptimization, "wasm-opt 1.2.3", config, []string{"build-id", "dwarf"})
+	if err != nil {
+		t.Fatalf("NewCacheKey k2: %v", err)
+	}
+
+	d1, err := k1.Digest()
+	if err != nil {
+		t.Fatalf("Digest k1: %v", err)
+	}
+	d2, err := k2.Digest()
+	if err != nil {
+		t.Fatalf("Digest k2: %v", err)
+	}
+
+	if d1 != d2 {
+		t.Fatalf("Digest mismatch for identical keys: %s != %s", d1, d2)
+	}
+}
+
+func TestCacheKey_Digest_SourceMapInputsOrderIndependent(t *testing.T) {
+	config := map[string]string{"mode": "debug"}
+
+	k1, err := NewCacheKey(validWASMBytes, KindSourceMap, "sourcemapper 1.0.0", config, []string{"dwarf", "build-id", "names"})
+	if err != nil {
+		t.Fatalf("NewCacheKey k1: %v", err)
+	}
+	k2, err := NewCacheKey(validWASMBytes, KindSourceMap, "sourcemapper 1.0.0", config, []string{"names", "dwarf", "build-id"})
+	if err != nil {
+		t.Fatalf("NewCacheKey k2: %v", err)
+	}
+
+	d1, err := k1.Digest()
+	if err != nil {
+		t.Fatalf("Digest k1: %v", err)
+	}
+	d2, err := k2.Digest()
+	if err != nil {
+		t.Fatalf("Digest k2: %v", err)
+	}
+
+	if d1 != d2 {
+		t.Fatalf("Digest mismatch for reordered source map inputs: %s != %s", d1, d2)
+	}
+}
