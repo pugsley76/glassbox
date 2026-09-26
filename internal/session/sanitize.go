@@ -33,7 +33,7 @@ func SanitizeErrorMessage(msg string) string {
 // SanitizeDBPath replaces the user-specific home-directory portion of a
 // database path with "~" so error messages never leak usernames.
 func SanitizeDBPath(path string) string {
-	re := regexp.MustCompile(`(?i)(/home/[^/]+|/Users/[^/]+|C:\\Users\\[^\\]+)`)
+	re := regexp.MustCompile(`(?i)(/home/[^/]+|/Users/[^/]+|[A-Za-z]:\\Users\\[^\\]+)`)
 	return re.ReplaceAllString(path, "~")
 }
 

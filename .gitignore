@@ -111,6 +111,7 @@ commit_309*.next
 # --- Issue PR notes (local only) ---
 PR_270_improve_trace_export_session_recovery_integrity.md
 PR_271_improve_trace_export_source_discovery_fallback.md
+PR_1042_1043_1044_1045_code_quality_fixes.md
 
 .gocache
 
