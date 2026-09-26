@@ -36,7 +36,8 @@ func (s *Sampler) ShouldEmit() bool {
 	return rand.Float64() < s.rate //nolint:gosec // sampling does not require cryptographic randomness; math/rand statistical uniformity is sufficient
 }
 
-// Rate returns the configured sample rate.
+// Rate returns the configured sample rate, always in [0.0, 1.0].
+// A rate of 1.0 emits all events; 0.0 emits none.
 func (s *Sampler) Rate() float64 {
 	return s.rate
 }
