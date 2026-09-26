@@ -23,8 +23,8 @@ const (
 	GitHubAPIURL = "https://api.github.com/repos/dotandev/glassbox/releases/latest"
 	// CheckInterval is how often we check for updates (24 hours)
 	CheckInterval = 24 * time.Hour
-	// RequestTimeout is the maximum time to wait for GitHub API
-	RequestTimeout = 5 * time.Second
+	// UpdateCheckTimeout is the maximum time to wait for GitHub API
+	UpdateCheckTimeout = 5 * time.Second
 )
 
 // Checker handles update checking logic
@@ -70,7 +70,7 @@ func (c *Checker) CheckForUpdates() {
 	}
 
 	// Create context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), RequestTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), UpdateCheckTimeout)
 	defer cancel()
 
 	// Fetch latest version from GitHub
@@ -128,7 +128,7 @@ func (c *Checker) fetchLatestVersion(ctx context.Context) (string, error) {
 
 	hc := c.httpClient
 	if hc == nil {
-		hc = &http.Client{Timeout: RequestTimeout}
+		hc = &http.Client{Timeout: UpdateCheckTimeout}
 	}
 
 	resp, err := hc.Do(req)
@@ -217,7 +217,7 @@ func (c *Checker) FetchReleaseInfo(ctx context.Context, ver string) (*GitHubRele
 
 	hc := c.httpClient
 	if hc == nil {
-		hc = &http.Client{Timeout: RequestTimeout}
+		hc = &http.Client{Timeout: UpdateCheckTimeout}
 	}
 
 	resp, err := hc.Do(req)
