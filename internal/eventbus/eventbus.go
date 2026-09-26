@@ -67,10 +67,17 @@ func (b *EventBus) Unsubscribe(topic string, id HandlerID) {
 }
 
 // Emit delivers payload to all handlers currently subscribed to topic.
-// Handlers are invoked synchronously in the calling goroutine under a
-// read lock, so they must not themselves call Subscribe or Unsubscribe
-// (doing so would deadlock). For that pattern, dispatch handler calls
-// after releasing the lock — see the note in the package doc.
+// It takes a snapshot of the handler list under a read lock, then releases
+// the lock before invoking each handler, so Emit itself does not block
+// concurrent Subscribe or Unsubscribe calls on other topics.
+//
+// Handlers must not call Subscribe or Unsubscribe on this EventBus; doing so
+// would deadlock because Emit releases its read lock before invoking handlers,
+// but Subscribe acquires a write lock. Schedule any such calls for after the
+// handler returns (e.g. via a goroutine or a deferred work queue).
+//
+// Handlers are invoked synchronously in the calling goroutine; long-running
+// handlers will delay subsequent handlers and the return of Emit.
 func (b *EventBus) Emit(topic string, payload any) {
 	b.mu.RLock()
 	listeners := b.handlers[topic]

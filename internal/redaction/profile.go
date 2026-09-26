@@ -77,7 +77,10 @@ type RedactionSummary struct {
 	TotalRedacted  int      `json:"total_redacted"`
 }
 
-// Apply applies redaction rules to a string value.
+// Apply applies the profile's compiled redaction rules to value.
+// It returns the redaction placeholder if any rule's pattern matches value,
+// or value unchanged if no rule matches.
+// Apply is safe for concurrent use; it does not modify the Profile.
 func (p *Profile) Apply(value string) string {
 	placeholder := p.RedactedPlaceholder
 	if placeholder == "" {
@@ -92,7 +95,11 @@ func (p *Profile) Apply(value string) string {
 	return value
 }
 
-// ApplyToMap applies redaction rules to a map, redacting values for matching keys.
+// ApplyToMap applies the profile's redaction rules to a map whose values may be
+// of any type. String values are tested against both key-name rules and compiled
+// pattern rules; non-string values are passed through unchanged.
+// The original map is not modified; a new map is returned.
+// ApplyToMap is safe for concurrent use; it does not modify the Profile.
 func (p *Profile) ApplyToMap(m map[string]interface{}) map[string]interface{} {
 	placeholder := p.RedactedPlaceholder
 	if placeholder == "" {
@@ -127,7 +134,10 @@ func (p *Profile) ApplyToMap(m map[string]interface{}) map[string]interface{} {
 	return out
 }
 
-// ApplyToStringMap applies redaction to a map[string]string.
+// ApplyToStringMap applies the profile's redaction rules to a map[string]string.
+// Each value is tested against key-name rules and compiled pattern rules.
+// The original map is not modified; a new map is returned.
+// ApplyToStringMap is safe for concurrent use; it does not modify the Profile.
 func (p *Profile) ApplyToStringMap(m map[string]string) map[string]string {
 	placeholder := p.RedactedPlaceholder
 	if placeholder == "" {
@@ -195,7 +205,11 @@ func containsAny(s string, substrs ...string) bool {
 	return false
 }
 
-// Compile compiles all regex patterns in the profile rules.
+// Compile compiles all regex patterns in the profile's rules.
+// It must be called once before any Apply* method is used on a Profile that
+// was constructed manually (built-in profiles returned by FullProfile and
+// SecretsOnlyProfile are already compiled). Compile is not safe for concurrent
+// use; call it before sharing the Profile across goroutines.
 func (p *Profile) Compile() error {
 	for i := range p.Rules {
 		if p.Rules[i].Pattern != "" {
@@ -209,7 +223,10 @@ func (p *Profile) Compile() error {
 	return nil
 }
 
-// Summary returns a RedactionSummary for the given list of redacted field names.
+// Summary returns a RedactionSummary recording which fields were redacted and
+// by which profile. The returned struct is suitable for inclusion in report
+// metadata. fieldsRedacted should be the list of field names that were
+// replaced with the redaction placeholder during a single Apply* call.
 func (p *Profile) Summary(fieldsRedacted []string) RedactionSummary {
 	return RedactionSummary{
 		ProfileName:    p.Name,
