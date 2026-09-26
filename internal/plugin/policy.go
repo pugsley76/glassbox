@@ -25,8 +25,9 @@ type Policy struct {
 	// regardless of their capabilities or permissions.
 	DeniedPlugins []string `json:"denied_plugins,omitempty"`
 
-	// AllowUntrusted controls whether plugins with TrustLevel "untrusted" may
-	// be loaded. Defaults to true for backward compatibility.
+	// AllowUntrusted, when true, permits plugins with TrustLevel 'untrusted'
+	// to load. The zero value is false (deny untrusted); use DefaultPolicy()
+	// to get a permissive policy.
 	AllowUntrusted bool `json:"allow_untrusted"`
 }
 

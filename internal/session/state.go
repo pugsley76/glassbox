@@ -40,7 +40,11 @@ func NewStateStore() *StateStore {
 	return s
 }
 
-// Use injects custom middleware into the state management pipeline
+// Use injects custom middleware into the state management pipeline.
+//
+// Middleware must not call Dispatch within the same StateStore during the
+// dispatch chain; doing so will deadlock because the base dispatcher holds
+// the write lock.
 func (s *StateStore) Use(mw Middleware) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
