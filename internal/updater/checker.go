@@ -19,7 +19,10 @@ import (
 )
 
 const (
-	// GitHubAPIURL is the endpoint for fetching the latest release
+	// GitHubAPIURL is the endpoint for fetching the latest release.
+	// GitHub unauthenticated API rate limit is 60 req/hr per IP. The Checker
+	// honours CheckInterval to stay well below this. In shared CI environments,
+	// set GITHUB_TOKEN to use authenticated requests with a 5000 req/hr limit.
 	GitHubAPIURL = "https://api.github.com/repos/dotandev/glassbox/releases/latest"
 	// CheckInterval is how often we check for updates (24 hours)
 	CheckInterval = 24 * time.Hour

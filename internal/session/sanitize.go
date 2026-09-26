@@ -11,6 +11,8 @@ import (
 
 // piiPatterns is a list of regex patterns that match potentially sensitive
 // information that must never be surfaced in error messages or logs.
+// piiPatterns is compiled once at package initialisation to avoid repeated
+// regex compilation on every sanitization call.
 var piiPatterns = []*regexp.Regexp{
 	// Home-directory path prefixes (Unix and Windows)
 	regexp.MustCompile(`(?i)(/home/[^/\s]+|/Users/[^/\s]+|C:\\Users\\[^\\\s]+)`),
