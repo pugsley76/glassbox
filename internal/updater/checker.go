@@ -93,6 +93,9 @@ func (c *Checker) CheckForUpdates() {
 func (c *Checker) shouldCheck() (bool, error) {
 	cacheFile := filepath.Join(c.cacheDir, "last_update_check")
 
+	// The cache file stores CacheData JSON. If the file is absent or
+	// unreadable, treat this as "check now" to ensure updates are detected on
+	// first run.
 	data, err := os.ReadFile(cacheFile)
 	if err != nil {
 		// Cache doesn't exist or can't be read - should check

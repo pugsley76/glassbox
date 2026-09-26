@@ -25,14 +25,14 @@ var phaseOrder = map[Phase]int{
 type SequenceError struct {
 	// Got is the phase that was attempted.
 	Got Phase
-	// Last is the most recently completed (terminal) phase.
+	// Last is the most recent terminal phase.
 	Last Phase
 	// Reason describes the specific violation.
 	Reason string
 }
 
 func (e *SequenceError) Error() string {
-	return fmt.Sprintf("progress sequence error: phase %q %s (last completed: %q)", e.Got, e.Reason, e.Last)
+	return fmt.Sprintf("progress sequence error: phase %q %s (last terminal: %q)", e.Got, e.Reason, e.Last)
 }
 
 // SequenceValidator tracks the state of a single operation to detect
@@ -40,11 +40,11 @@ func (e *SequenceError) Error() string {
 //
 // It is safe for concurrent use.
 type SequenceValidator struct {
-	mu            sync.Mutex
-	lastCompleted Phase
-	lastOrder     int
-	cancelled     bool
-	done          bool
+	mu           sync.Mutex
+	lastTerminal Phase
+	lastOrder    int
+	cancelled    bool
+	done         bool
 }
 
 // NewSequenceValidator returns a fresh validator.
@@ -60,10 +60,10 @@ func (sv *SequenceValidator) Validate(e Event) error {
 	defer sv.mu.Unlock()
 
 	if sv.cancelled {
-		return &SequenceError{Got: e.Phase, Last: sv.lastCompleted, Reason: "emitted after cancellation"}
+		return &SequenceError{Got: e.Phase, Last: sv.lastTerminal, Reason: "emitted after cancellation"}
 	}
 	if sv.done {
-		return &SequenceError{Got: e.Phase, Last: sv.lastCompleted, Reason: "emitted after operation completed"}
+		return &SequenceError{Got: e.Phase, Last: sv.lastTerminal, Reason: "emitted after operation completed"}
 	}
 
 	order, known := phaseOrder[e.Phase]
@@ -73,11 +73,11 @@ func (sv *SequenceValidator) Validate(e Event) error {
 	}
 
 	if order <= sv.lastOrder {
-		return &SequenceError{Got: e.Phase, Last: sv.lastCompleted, Reason: "arrived out of order"}
+		return &SequenceError{Got: e.Phase, Last: sv.lastTerminal, Reason: "arrived out of order"}
 	}
 
 	if e.IsTerminal() {
-		sv.lastCompleted = e.Phase
+		sv.lastTerminal = e.Phase
 		sv.lastOrder = order
 		if e.Phase == PhaseDone && e.Status == StatusComplete {
 			sv.done = true
