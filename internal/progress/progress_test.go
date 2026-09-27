@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dotandev/glassbox/internal/progress"
 	"github.com/stretchr/testify/assert"
@@ -201,4 +202,11 @@ func TestTimestampIsSet(t *testing.T) {
 	events := collectJSON(t, &buf)
 	require.Len(t, events, 1)
 	assert.False(t, events[0].Timestamp.IsZero(), "timestamp must be non-zero")
+}
+
+func TestClock_Now_ReturnsCurrentTime(t *testing.T) {
+	clock := progress.RealClock{}
+	now := clock.Now()
+	epsilon := 1 * time.Second
+	assert.WithinDuration(t, time.Now().UTC(), now, epsilon, "RealClock.Now() should be within one second of time.Now()")
 }

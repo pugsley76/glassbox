@@ -70,6 +70,9 @@ func (g *GitLinker) GitHubURL(absFilePath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("cannot parse remote URL %q: %w", g.remoteURL, err)
 	}
+	if owner == "" || repo == "" {
+		return "", fmt.Errorf("could not extract owner/repo from remote %q", g.remoteURL)
+	}
 
 	rel, err := pathutil.RelToSlash(g.repoRoot, absFilePath)
 	if err != nil {

@@ -6,6 +6,7 @@ package cache
 import (
 	"encoding/json"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,4 +68,47 @@ func TestWASMCache_Get_DetectsCorruption(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, found)
 	assert.Nil(t, got)
+}
+
+// TestWASMCache_ConcurrentGetPut verifies that concurrent Get and Set calls
+// do not race by running multiple goroutines performing read and write operations.
+func TestWASMCache_ConcurrentGetPut(t *testing.T) {
+	cacheDir := t.TempDir()
+	manager := NewManager(cacheDir, DefaultConfig())
+	wasmCache := NewWASMCache(manager, 24*time.Hour, nil)
+
+	var wg sync.WaitGroup
+	numGoroutines := 10
+	numIterations := 100
+
+	// Run 10 goroutines, each doing 100 Get/Set operations
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(goroutineID int) {
+			defer wg.Done()
+			for j := 0; j < numIterations; j++ {
+				key, err := NewCacheKey(
+					[]byte("concurrent-test-input"),
+					KindCompilation,
+					"test-tool",
+					map[string]string{"goroutine": string(rune(goroutineID+'0'))},
+					nil,
+				)
+				require.NoError(t, err)
+
+				payload := []byte("test payload")
+				err = wasmCache.Set(key, payload)
+				require.NoError(t, err)
+
+				_, found, err := wasmCache.Get(key)
+				require.NoError(t, err)
+				// Get should succeed since we just Set
+				if !found {
+					t.Errorf("goroutine %d iteration %d: expected cache hit", goroutineID, j)
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
 }

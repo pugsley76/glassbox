@@ -40,7 +40,8 @@ type WASMEntry struct {
 	CachedAt time.Time `json:"cached_at"`
 
 	// ExpiresAt is the wall-clock time after which the entry is treated as
-	// stale and will be evicted on the next read or GC sweep.
+	// stale and will be evicted on the next read or GC sweep. A zero time.Time
+	// is interpreted as "already expired" and will cause immediate eviction.
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
@@ -61,7 +62,7 @@ type WASMCache struct {
 	manager *Manager
 	ttl     time.Duration
 	diag    *Diagnostics
-	mu      sync.RWMutex // protects in-flight reads so concurrent readers are safe
+	mu      sync.RWMutex // protects concurrent access to cache operations (Set, Get, Invalidate)
 }
 
 // NewWASMCache creates a WASMCache backed by manager with the given TTL.
