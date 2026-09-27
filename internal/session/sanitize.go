@@ -40,16 +40,16 @@ func SanitizeDBPath(path string) string {
 }
 
 // ValidateDBPermissions checks that the SQLite database file at dbPath is
-// readable and writable by the current process. Returns a descriptive,
+// readable by the current process. Returns a descriptive,
 // PII-free error when the check fails.
 func ValidateDBPermissions(dbPath string) error {
 	safePath := SanitizeDBPath(dbPath)
 
-	f, err := os.OpenFile(dbPath, os.O_RDWR, 0)
+	f, err := os.OpenFile(dbPath, os.O_RDONLY, 0)
 	if err != nil {
 		if os.IsPermission(err) {
 			return fmt.Errorf(
-				"session database %q is not readable/writable (permission denied)\n"+
+				"session database %q is not readable (permission denied)\n"+
 					"Fix: run 'chmod 600 %s' or delete and re-create the file",
 				safePath, safePath,
 			)
