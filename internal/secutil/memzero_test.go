@@ -30,3 +30,18 @@ func TestMemzeroRetainsLength(t *testing.T) {
 		t.Errorf("slice length changed: got %d, want 4", len(data))
 	}
 }
+
+// BenchmarkMemzero_1KB measures the cost of zeroing a 1 KB buffer.
+// A sudden drop in ns/op (≈10× faster than baseline) would indicate the
+// compiler is eliding the zeroing loop despite runtime.KeepAlive, which
+// would leave sensitive key material in memory — a security regression.
+func BenchmarkMemzero_1KB(b *testing.B) {
+	buf := make([]byte, 1024)
+	for i := range buf {
+		buf[i] = 0xff
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		Memzero(buf)
+	}
+}
