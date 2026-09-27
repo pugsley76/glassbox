@@ -35,6 +35,9 @@ const (
 //
 // Key derivation is deterministic: fields are sorted by name before hashing
 // so that map iteration order never affects the result.
+//
+// Always use NewCacheKey to construct keys; direct struct literals produce
+// unversioned entries that may fail validation.
 type CacheKey struct {
 	// ContentHash is the SHA-256 hex digest of the raw WASM bytes being
 	// analysed. This is the primary invalidation signal: a file replaced

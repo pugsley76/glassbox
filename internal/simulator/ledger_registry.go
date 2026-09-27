@@ -50,7 +50,11 @@ func (k EntryKind) String() string {
 // Mutation records the before- and after-XDR images of a single written entry.
 // Before is empty when the entry was absent before the write.
 type Mutation struct {
-	Before string // base64 XDR before the write; "" if the entry was absent
+	// Before is the base64-encoded XDR of the entry before the write.
+	// Empty string means the entry was absent before the write (a create
+	// operation). This is unambiguous because valid XDR-encoded LedgerEntries
+	// always have a non-zero serialised length.
+	Before string
 	After  string // base64 XDR after the write
 	Kind   EntryKind
 }
