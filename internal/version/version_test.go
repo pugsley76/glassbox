@@ -64,33 +64,42 @@ func TestShortSHA_Unknown(t *testing.T) {
 func TestUserAgent_Format(t *testing.T) {
 	origV := Version
 	origC := CommitSHA
+	origB := BuildDate
 	t.Cleanup(func() {
 		Version = origV
 		CommitSHA = origC
+		BuildDate = origB
 	})
 
 	Version = "1.2.3"
 	CommitSHA = "deadbeef1234"
+	BuildDate = "2026-01-01"
 
 	ua := UserAgent()
-	if !strings.HasPrefix(ua, "glassbox/1.2.3") {
-		t.Errorf("UserAgent() = %q; expected prefix glassbox/1.2.3", ua)
+	if ua != "glassbox/1.2.3 (deadbeef, 2026-01-01)" {
+		t.Errorf("UserAgent() = %q; expected %q", ua, "glassbox/1.2.3 (deadbeef, 2026-01-01)")
 	}
-	if !strings.Contains(ua, "deadbeef") {
-		t.Errorf("UserAgent() = %q; expected short SHA deadbeef", ua)
+
+	BuildDate = "unknown"
+	uaUnknown := UserAgent()
+	if uaUnknown != "glassbox/1.2.3 (deadbeef)" {
+		t.Errorf("UserAgent() = %q; expected %q", uaUnknown, "glassbox/1.2.3 (deadbeef)")
 	}
 }
 
 func TestUserAgent_DevBuild(t *testing.T) {
 	origV := Version
 	origC := CommitSHA
+	origB := BuildDate
 	t.Cleanup(func() {
 		Version = origV
 		CommitSHA = origC
+		BuildDate = origB
 	})
 
 	Version = "0.0.0-dev"
 	CommitSHA = "unknown"
+	BuildDate = "unknown"
 
 	ua := UserAgent()
 	if !strings.Contains(ua, "0.0.0-dev") {

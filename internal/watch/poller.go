@@ -78,7 +78,7 @@ func (p *Poller) Poll(ctx context.Context, checkFunc func(ctx context.Context) (
 		}
 
 		if attempt >= p.config.MaxAttempts {
-			return &PollResult{Found: false, Error: fmt.Errorf("max attempts exceeded")}, nil
+			return &PollResult{Found: false, Error: fmt.Errorf("polling stopped after %d attempts", attempt)}, nil
 		}
 
 		select {

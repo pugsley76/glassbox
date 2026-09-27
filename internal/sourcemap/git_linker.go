@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/dotandev/glassbox/internal/logger"
 	"github.com/dotandev/glassbox/internal/pathutil"
 )
 
@@ -53,6 +54,7 @@ func NewGitLinkerWithRevision(startPath string, opts RevisionOptions) (*GitLinke
 	}
 	provenance, revisionErr := resolveRevision(root, opts)
 	if revisionErr != nil && !opts.AllowAmbiguous {
+		logger.Logger.Debug("refusing ambiguous source link", "reason", revisionErr)
 		return nil, fmt.Errorf("cannot create immutable source links: %w", revisionErr)
 	}
 	branch, _ := gitDefaultBranch(root)
