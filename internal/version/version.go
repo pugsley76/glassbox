@@ -35,8 +35,12 @@ func ShortSHA() string {
 }
 
 // UserAgent returns a User-Agent / metadata string suitable for RPC headers
-// and diagnostic output: "glassbox/<version> (<commit>)".
+// and diagnostic output: "glassbox/<version> (<commit>)" or
+// "glassbox/<version> (<commit>, <build-date>)".
 func UserAgent() string {
+	if BuildDate != "unknown" {
+		return fmt.Sprintf("glassbox/%s (%s, %s)", Version, ShortSHA(), BuildDate)
+	}
 	return fmt.Sprintf("glassbox/%s (%s)", Version, ShortSHA())
 }
 
