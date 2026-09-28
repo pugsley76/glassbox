@@ -239,7 +239,6 @@ func (s *KMSSigner) SignWithMetadata(ctx context.Context, message []byte, correl
 	// bytes to KMS; we never recompute or mutate the digest.
 	digest := computeKMSDigest(message)
 
-	var lastErr error
 	backoff := s.retryCfg.InitialBackoff
 
 	for attempt := 0; attempt <= s.retryCfg.MaxRetries; attempt++ {
@@ -276,7 +275,6 @@ func (s *KMSSigner) SignWithMetadata(ctx context.Context, message []byte, correl
 		}
 
 		retryable, code, class := classifyKMSError(err)
-		lastErr = err
 		meta.Retryable = retryable
 		meta.ErrorCode = code
 		meta.ErrorClass = class

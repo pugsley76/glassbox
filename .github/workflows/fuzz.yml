@@ -94,6 +94,11 @@ jobs:
             -fuzztime=${{ steps.fuzz_time.outputs.time }} \
             -timeout=${FUZZ_JOB_TIMEOUT}s \
             ./internal/simulator/ 2>&1 | tee -a ci-artifacts/fuzz-xdr/output.log || true
+
+          go test -fuzz=FuzzFootprintDecode \
+            -fuzztime=${{ steps.fuzz_time.outputs.time }} \
+            -timeout=${FUZZ_JOB_TIMEOUT}s \
+            ./internal/simulator/ 2>&1 | tee -a ci-artifacts/fuzz-xdr/output.log || true
         continue-on-error: true
 
       - name: Check for crashes
