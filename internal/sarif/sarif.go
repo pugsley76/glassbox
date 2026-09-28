@@ -131,6 +131,17 @@ type Result struct {
 // Location pinpoints a finding in source code.
 type Location struct {
 	PhysicalLocation *PhysicalLocation `json:"physicalLocation,omitempty"`
+	// LogicalLocation is used when a result has no source file to point at,
+	// for example a WASM instruction offset that failed to resolve.
+	LogicalLocation *LogicalLocation `json:"logicalLocation,omitempty"`
+}
+
+// LogicalLocation identifies a result by a program-level construct rather than
+// by a source range, such as a WASM instruction offset.
+type LogicalLocation struct {
+	Name               string `json:"name,omitempty"`
+	FullyQualifiedName string `json:"fullyQualifiedName,omitempty"`
+	Kind               string `json:"kind,omitempty"`
 }
 
 // PhysicalLocation references a specific location in an artifact.
