@@ -32,7 +32,7 @@ func (k EntryKind) String() string {
 	switch k {
 	case EntryKindAccount:
 		return "account"
-	case EntryKindContract, EntryKindPersistent:
+	case EntryKindContract:
 		return "contract_data_persistent"
 	case EntryKindCode:
 		return "contract_code"

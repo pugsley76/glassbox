@@ -29,7 +29,7 @@ const (
 	//
 	// SchemaVersion tracks the database schema version for migrations.
 	// Bump this constant whenever a new step is appended to migrationTable in schema.go.
-	SchemaVersion = 4
+	SchemaVersion = 5
 
 	// DefaultTTL is the default time-to-live for sessions (30 days)
 	DefaultTTL = 30 * 24 * time.Hour
@@ -292,6 +292,11 @@ func (s *Store) initSchema() error {
 	}
 	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_session_name ON sessions(name) WHERE name IS NOT NULL AND name != ''`); err != nil {
 		return fmt.Errorf("failed to create session name index: %w", err)
+	}
+
+	// MigrationJournal records every schema upgrade attempt [Issue #1115].
+	if err := s.ensureMigrationJournal(); err != nil {
+		return fmt.Errorf("failed to create migration_journal: %w", err)
 	}
 
 	// Schema migrations for existing databases
@@ -730,7 +735,7 @@ func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 		return nil, schemaErr
 	}
 
-	upgraded, upgradeErr := UpgradeSessionData(&data)
+	upgraded, upgradeErr := s.UpgradeSessionDataWithJournal(ctx, &data)
 	if upgradeErr != nil {
 		return nil, upgradeErr
 	}
@@ -749,6 +754,20 @@ func (s *Store) Load(ctx context.Context, sessionID string) (*Data, error) {
 	}
 
 	return &data, nil
+}
+
+// LookupIDByName returns the session ID for a bookmark name without loading
+// or migrating the row.
+func (s *Store) LookupIDByName(ctx context.Context, name string) (string, error) {
+	if strings.TrimSpace(name) == "" {
+		return "", fmt.Errorf("session name is required")
+	}
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM sessions WHERE name = ?`, name).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("session name not found: %q", name)
+	}
+	return id, err
 }
 
 // LoadByName retrieves a saved session snapshot by its user-facing bookmark name.
