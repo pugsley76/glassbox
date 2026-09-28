@@ -11,7 +11,7 @@ require (
 
 require (
 	github.com/atotto/clipboard v0.1.4
-	github.com/aws/smithy-go v1.28.1
+	github.com/aws/smithy-go v1.28.2
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/fatih/color v1.19.0
 	github.com/getsentry/sentry-go v0.47.0
