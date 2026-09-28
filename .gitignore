@@ -1,2 +1,59 @@
 # PR documentation files (local only, not for version control)
 PR-*.md
+PR_*.md
+PR_ISSUE_*.md
+
+# ── Test snapshots and generated test/lint artifacts ──────────────────────────
+# Jest and Vitest snapshots are generated, environment-dependent (absolute
+# paths, timings) and regenerate on demand. Committing them produces noisy diffs
+# and stale expectations, so they stay out of the repository. Rust test
+# snapshots under contracts/ are explicitly un-ignored, because Soroban
+# bindings are verified against them.
+**/__snapshots__/
+*.snap
+*.snap.orig
+**/snapshots/
+!contracts/**/test_snapshots/
+coverage/
+coverage-*/
+.nyc_output/
+.jest-cache/
+_jest-cache/
+jest-results.json
+test-results/
+playwright-report/
+e2e/artifacts/
+e2e/screenshots/
+
+# Go test and lint scratch output
+*.out
+*.test
+lint_output*.txt
+tsc_output*.txt
+test_output.txt
+final_lint_check.txt
+lint_final_error.txt
+build_errors*.txt
+
+# ── Local development scratch files ───────────────────────────────────────────
+# One-off notes and helper scripts left at the repo root by debugging sessions.
+commit_msg.txt
+ISSUE_*_IMPLEMENTATION.md
+VALIDATION_RUN.md
+CHANGES_QUICK_REFERENCE.md
+verify_implementation.sh
+force_fix_licenses.sh
+fix_all_licenses.sh
+fix_licenses.sh
+fix_imports.sh
+fix_ci.sh
+push_pr.ps1
+
+# Generated reports and caches
+*.sarif
+*.lcov
+.eslintcache
+.stryker-tmp/
+bundle-size-report.json
+size-limit-report*.json
+.glassbox-cache/
