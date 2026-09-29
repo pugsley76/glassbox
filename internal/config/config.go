@@ -32,6 +32,48 @@ type Validator interface {
 	Validate(*Config) error
 }
 
+// -- Schema versioning --
+
+// CurrentSchemaVersion is the latest config schema version this binary understands.
+// Bump this constant when a new migration step is added to migrate.go.
+const CurrentSchemaVersion = 1
+
+// ErrFutureSchemaVersion is returned when a config file declares a schema
+// version higher than CurrentSchemaVersion.
+var ErrFutureSchemaVersion = errors.WrapConfigError(
+	"config file was written by a newer version of Glassbox",
+	nil,
+)
+
+// DetectSchemaVersion reads only the schema_version key from a raw TOML
+// config string without fully parsing it. It returns 0 when the key is
+// absent (pre-versioning files), and an error when the key is present but
+// cannot be parsed as an integer.
+func DetectSchemaVersion(content string) (int, error) {
+	for _, line := range splitLines(content) {
+		line = trimSpace(line)
+		if line == "" || hasPrefix(line, "#") {
+			continue
+		}
+		key, val, ok := splitKeyVal(line)
+		if !ok {
+			continue
+		}
+		if key != "schema_version" {
+			continue
+		}
+		n, err := parseInt(val)
+		if err != nil {
+			return 0, errors.WrapConfigError(
+				"schema_version must be a non-negative integer",
+				err,
+			)
+		}
+		return n, nil
+	}
+	return 0, nil // key absent → pre-versioning
+}
+
 // -- Types --
 
 type DebugConfig struct {
@@ -63,6 +105,12 @@ var validNetworks = map[string]bool{
 
 // Config represents the general configuration for Glassbox
 type Config struct {
+	// SchemaVersion documents which config schema this file was written for.
+	// The current supported version is CurrentSchemaVersion (1).
+	// Missing or zero means "pre-versioning" — treated as version 1 on load.
+	// Values above CurrentSchemaVersion are rejected with an actionable error.
+	SchemaVersion int `json:"schema_version,omitempty"`
+
 	RpcUrl  string   `json:"rpc_url,omitempty"`
 	RpcUrls []string `json:"rpc_urls,omitempty"`
 	// SorobanRpcUrls holds multiple Soroban RPC endpoints for adaptive failover.
@@ -101,6 +149,9 @@ type Config struct {
 	// TelemetrySampleRate is the fraction of high-frequency trace events to emit [0.0, 1.0].
 	// 1.0 emits all events (default); 0.1 emits ~10%; 0.0 disables trace event telemetry.
 	TelemetrySampleRate float64 `json:"telemetry_sample_rate,omitempty"`
+	// TelemetrySampleRateSet tracks whether the sample rate was explicitly set,
+	// so an explicit 0.0 is not replaced by the default.
+	TelemetrySampleRateSet bool `json:"-"`
 	// MaxTraceDepth is the maximum depth of the call tree before it is truncated.
 	MaxTraceDepth int `json:"max_trace_depth,omitempty"`
 	// ExternalSourceRepos maps local path prefixes to remote GitHub repositories for source links.
@@ -109,6 +160,11 @@ type Config struct {
 	FailureThreshold int `json:"failure_threshold,omitempty"`
 	// RetryTimeout is the duration in seconds to wait before retrying a failed endpoint.
 	RetryTimeout int `json:"retry_timeout,omitempty"`
+	// BuildManifestPath is the path to a glassbox-build-manifest.json file used
+	// for cross-machine source mapping from reproducible builds (Issue #45).
+	// Can also be set via the GLASSBOX_BUILD_MANIFEST environment variable.
+	// The --build-manifest CLI flag takes precedence over this value.
+	BuildManifestPath string `json:"build_manifest_path,omitempty"`
 }
 
 // -- Constants & Defaults --
@@ -134,6 +190,7 @@ var defaultConfig = &Config{
 	RequestTimeout:      defaultRequestTimeout,
 	TelemetryEnabled:    false,
 	TelemetrySampleRate: 1.0,
+	TelemetryAnonymized: true,
 	MaxCacheSize:        0,
 	MaxTraceDepth:       50,
 	FailureThreshold:    defaultFailureThreshold,
@@ -169,6 +226,9 @@ func DefaultConfig() *Config {
 		CachePath:           defaultConfig.CachePath,
 		Telemetry:           defaultConfig.Telemetry,
 		TelemetryAnonymized: defaultConfig.TelemetryAnonymized,
+		TelemetryEnabled:    defaultConfig.TelemetryEnabled,
+		TelemetryEndpoint:   defaultConfig.TelemetryEndpoint,
+		TelemetrySampleRate: defaultConfig.TelemetrySampleRate,
 		RequestTimeout:      defaultConfig.RequestTimeout,
 		MaxCacheSize:        defaultConfig.MaxCacheSize,
 		MaxTraceDepth:       defaultConfig.MaxTraceDepth,
@@ -288,6 +348,17 @@ func LoadConfig() (*Config, error) {
 		return nil, errors.WrapConfigError("failed to parse config file", err)
 	}
 
+	// Reject future schema versions loaded via the JSON path too.
+	if config.SchemaVersion > CurrentSchemaVersion {
+		return nil, errors.WrapConfigError(
+			"config file declares schema_version "+strconv.Itoa(config.SchemaVersion)+
+				" but this Glassbox binary only supports up to version "+
+				strconv.Itoa(CurrentSchemaVersion)+
+				"; upgrade Glassbox or run 'glassbox config migrate'",
+			nil,
+		)
+	}
+
 	return config, nil
 }
 
@@ -301,6 +372,9 @@ func SaveConfig(config *Config) error {
 	if err := os.MkdirAll(configDir, 0700); err != nil {
 		return errors.WrapConfigError("failed to create config directory", err)
 	}
+
+	// Always stamp the current schema version before writing.
+	config.SchemaVersion = CurrentSchemaVersion
 
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -390,7 +464,7 @@ func (envParser) Parse(cfg *Config) error {
 			cfg.RetryTimeout = n
 		}
 	}
-	if v := os.Getenv("GLASSBOX_TELEMETRY"); v != "" {
+	if v := os.Getenv("GLASSBOX_TELEMETRY_ENABLED"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.TelemetryEnabled = b
 		}
@@ -401,7 +475,11 @@ func (envParser) Parse(cfg *Config) error {
 	if v := os.Getenv("GLASSBOX_TELEMETRY_SAMPLE_RATE"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			cfg.TelemetrySampleRate = f
+			cfg.TelemetrySampleRateSet = true
 		}
+	}
+	if v := os.Getenv("GLASSBOX_BUILD_MANIFEST"); v != "" {
+		cfg.BuildManifestPath = v
 	}
 	return nil
 }
@@ -446,7 +524,7 @@ func (configDefaultsAssigner) Apply(cfg *Config) {
 	if cfg.Telemetry && !cfg.TelemetryAnonymizedConfigured {
 		cfg.TelemetryAnonymized = defaultConfig.TelemetryAnonymized
 	}
-	if cfg.TelemetrySampleRate == 0 {
+	if cfg.TelemetrySampleRate == 0 && !cfg.TelemetrySampleRateSet {
 		cfg.TelemetrySampleRate = defaultConfig.TelemetrySampleRate
 	}
 }

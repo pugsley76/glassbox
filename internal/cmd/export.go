@@ -11,6 +11,7 @@ import (
 
 	"github.com/dotandev/glassbox/internal/clioutput"
 	"github.com/dotandev/glassbox/internal/errors"
+	"github.com/dotandev/glassbox/internal/plan"
 	"github.com/dotandev/glassbox/internal/simulator"
 	"github.com/dotandev/glassbox/internal/snapshot"
 	"github.com/spf13/cobra"
@@ -19,6 +20,7 @@ import (
 var exportSnapshotFlag string
 var exportIncludeMemoryFlag bool
 var exportFormatFlag string
+var exportPlanFlag bool // --plan: show execution plan without side effects
 
 var decodeSnapshotFlag string
 var decodeOffsetFlag int
@@ -49,7 +51,21 @@ Examples:
 
   # Export as machine-readable JSON
   glassbox export --snapshot ./state.snap.json --format json`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		// --plan bypasses all I/O, so only format validation is needed.
+		if exportPlanFlag {
+			if exportFormatFlag != "" {
+				if !validExportFormats[strings.ToLower(strings.TrimSpace(exportFormatFlag))] {
+					return errors.WrapValidationError(fmt.Sprintf(
+						"invalid --format %q — must be one of: text, json\n"+
+							"  Fix: use --format text (human-readable, default) or --format json (machine-readable)",
+						exportFormatFlag,
+					))
+				}
+			}
+			return nil
+		}
+
 		// Validate --format before any work.
 		if exportFormatFlag != "" {
 			if !validExportFormats[strings.ToLower(strings.TrimSpace(exportFormatFlag))] {
@@ -74,6 +90,28 @@ Examples:
 		// early so the error message is clear and actionable.
 		if _, err := ValidateOutputPath("snapshot", exportSnapshotFlag); err != nil {
 			return err
+		}
+
+		return nil
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// --plan: show what will happen without doing it.
+		if exportPlanFlag {
+			execPlan := plan.BuildExportPlan(plan.ExportPlanOptions{
+				SnapshotOutputPath: exportSnapshotFlag,
+				IncludeMemory:      exportIncludeMemoryFlag,
+				JSONOutput:         clioutput.WantsJSON(false, exportFormatFlag),
+			})
+			if clioutput.WantsJSON(false, exportFormatFlag) {
+				jsonOut, jsonErr := execPlan.RenderJSON()
+				if jsonErr != nil {
+					return fmt.Errorf("failed to render plan: %w", jsonErr)
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), jsonOut)
+			} else {
+				fmt.Fprint(cmd.OutOrStdout(), execPlan.RenderText())
+			}
+			return nil
 		}
 
 		// Get current session
@@ -162,14 +200,29 @@ Use --offset and --length to select the byte range to inspect.
 
 Example:
   glassbox export decode-memory --snapshot ./state.snap.json --offset 0 --length 256`,
-	RunE: func(cmd *cobra.Command, args []string) error {
+	PreRunE: func(cmd *cobra.Command, args []string) error {
 		if decodeSnapshotFlag == "" {
 			return errors.WrapValidationError(
 				"--snapshot is required: provide the path to a snapshot file\n" +
 					"  Example: glassbox export decode-memory --snapshot ./state.snap.json",
 			)
 		}
-
+		if err := validateFilePath("snapshot", decodeSnapshotFlag); err != nil {
+			return err
+		}
+		if decodeOffsetFlag < 0 {
+			return errors.WrapValidationError(fmt.Sprintf(
+				"--offset must be >= 0 (got %d)", decodeOffsetFlag,
+			))
+		}
+		if decodeLengthFlag <= 0 {
+			return errors.WrapValidationError(fmt.Sprintf(
+				"--length must be > 0 (got %d)", decodeLengthFlag,
+			))
+		}
+		return nil
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
 		snap, err := snapshot.Load(decodeSnapshotFlag)
 		if err != nil {
 			return errors.WrapValidationError(fmt.Sprintf(
@@ -193,16 +246,6 @@ Example:
 			return nil
 		}
 
-		if decodeOffsetFlag < 0 {
-			return errors.WrapValidationError(fmt.Sprintf(
-				"--offset must be >= 0 (got %d)", decodeOffsetFlag,
-			))
-		}
-		if decodeLengthFlag <= 0 {
-			return errors.WrapValidationError(fmt.Sprintf(
-				"--length must be > 0 (got %d)", decodeLengthFlag,
-			))
-		}
 		if decodeOffsetFlag >= len(memory) {
 			return errors.WrapValidationError(fmt.Sprintf(
 				"--offset %d is out of bounds: snapshot memory is %d bytes total",
@@ -253,6 +296,9 @@ func init() {
 	exportCmd.Flags().StringVar(&exportSnapshotFlag, "snapshot", "", "Output file path for the exported JSON snapshot")
 	exportCmd.Flags().BoolVar(&exportIncludeMemoryFlag, "include-memory", false, "Include Wasm linear memory dump from simulation response when available")
 	exportCmd.Flags().StringVar(&exportFormatFlag, "format", "text", "Output format: text or json")
+	exportCmd.Flags().BoolVar(&exportPlanFlag, "plan", false, "Print the execution plan (files, outputs) without writing anything")
+
+	_ = exportCmd.RegisterFlagCompletionFunc("format", completeExportFormatFlag)
 
 	exportDecodeMemoryCmd.Flags().StringVar(&decodeSnapshotFlag, "snapshot", "", "Snapshot file that contains linear memory")
 	exportDecodeMemoryCmd.Flags().IntVar(&decodeOffsetFlag, "offset", 0, "Start offset in bytes (must be >= 0)")
