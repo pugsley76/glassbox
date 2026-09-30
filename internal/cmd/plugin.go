@@ -142,14 +142,9 @@ func init() {
 func runPluginList(cmd *cobra.Command, args []string) error {
 	dir := resolvePluginDir(pluginDirFlag)
 
-	// Load policy if provided.
-	var pol *plugin.Policy
-	if pluginPolicyFlag != "" {
-		var err error
-		pol, err = plugin.LoadPolicy(pluginPolicyFlag)
-		if err != nil {
-			return errors.WrapValidationError(fmt.Sprintf("failed to load policy: %v", err))
-		}
+	pol, err := plugin.LoadPolicyWithOverride(pluginPolicyFlag, AllowUntrustedPluginsFlag)
+	if err != nil {
+		return errors.WrapValidationError(fmt.Sprintf("failed to load policy: %v", err))
 	}
 
 	manifests, errs := plugin.DiscoverManifests(dir)
@@ -302,18 +297,16 @@ func runPluginValidate(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "  Trust level: %s\n", m.TrustLevel)
 	}
 
-	// Check against policy if provided.
-	if pluginPolicyFlag != "" {
-		pol, err := plugin.LoadPolicy(pluginPolicyFlag)
-		if err != nil {
-			return errors.WrapValidationError(fmt.Sprintf("failed to load policy: %v", err))
-		}
-		if err := pol.CheckManifest(m); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "POLICY DENIED: %v\n", err)
-			return errors.WrapValidationError(fmt.Sprintf("policy check failed: %v", err))
-		}
-		fmt.Fprintln(cmd.OutOrStdout(), "  Policy check: ALLOWED")
+	// Check against policy.
+	pol, err := plugin.LoadPolicyWithOverride(pluginPolicyFlag, AllowUntrustedPluginsFlag)
+	if err != nil {
+		return errors.WrapValidationError(fmt.Sprintf("failed to load policy: %v", err))
 	}
+	if err := pol.CheckManifest(m); err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "POLICY DENIED: %v\n", err)
+		return errors.WrapValidationError(fmt.Sprintf("policy check failed: %v", err))
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "  Policy check: ALLOWED")
 
 	return nil
 }
