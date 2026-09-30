@@ -83,8 +83,8 @@ Plugins are **conditionally trusted** based on their declared `TrustLevel`:
 | Trust level | Meaning | Default policy |
 |---|---|---|
 | `verified` | Checksum-verified, maintainer-signed binary | Permitted by default |
-| `community` | Known-source but not maintainer-signed | Permitted by default (`AllowUntrusted` defaults to `true`) |
-| `untrusted` | Unknown or unverified provenance | Permitted by default; blocked when `AllowUntrusted = false` |
+| `community` | Known-source but not maintainer-signed | **Blocked by default** (opt-in via `--allow-untrusted-plugins` or `plugin.allow_untrusted = true`) |
+| `untrusted` | Unknown or unverified provenance | **Blocked by default** (opt-in via `--allow-untrusted-plugins` or `plugin.allow_untrusted = true`) |
 
 Controls applied at the boundary:
 - Plugin binary checksum is verified against the manifest before execution.
@@ -256,9 +256,7 @@ bindings delegate simulation to an RPC endpoint.
 
 **Negative / trade-offs:**
 - IPC serialisation overhead adds latency per simulation request.
-- Plugin trust level `community` (and `untrusted`) is allowed by default because
-  `DefaultPolicy()` sets `AllowUntrusted = true`. Operators who require
-  `verified`-only plugins must set `AllowUntrusted = false` in their policy file.
+- Plugin trust levels `community` and `untrusted` are **blocked by default** (`DefaultPolicy()` returns `AllowUntrusted = false`). Operators who require community/untrusted plugins must explicitly opt-in via `--allow-untrusted-plugins` on the CLI, `plugin.allow_untrusted = true` in the config TOML, or `GLASSBOX_PLUGIN_ALLOW_UNTRUSTED=true` environment variable.
 - Browser bindings cannot run the simulator locally; they require an accessible
   RPC endpoint, which introduces a network trust dependency not present in CLI
   mode.
@@ -267,6 +265,10 @@ bindings delegate simulation to an RPC endpoint.
 - Existing deployments that run with `GLASSBOX_SIGNER_TYPE=mock` (test HSM)
   should audit whether that configuration is present in production; mock signers
   are Tier 3 trust-by-configuration but do not provide hardware isolation.
+- Existing deployments with community or untrusted plugins must now explicitly
+  opt-in by setting `plugin.allow_untrusted = true` in their config TOML,
+  passing `--allow-untrusted-plugins` on the CLI, or setting
+  `GLASSBOX_PLUGIN_ALLOW_UNTRUSTED=true` in the environment.
 - Plugin deployments should review `policy.go` to ensure `DeniedCapabilities`
   aligns with their environment before enabling community plugins.
 
