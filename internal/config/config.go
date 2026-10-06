@@ -165,6 +165,13 @@ type Config struct {
 	// Can also be set via the GLASSBOX_BUILD_MANIFEST environment variable.
 	// The --build-manifest CLI flag takes precedence over this value.
 	BuildManifestPath string `json:"build_manifest_path,omitempty"`
+
+	// Plugin contains plugin execution policy settings.
+	Plugin PluginConfig `json:"plugin,omitempty"`
+}
+
+type PluginConfig struct {
+	AllowUntrusted bool `json:"allow_untrusted,omitempty"`
 }
 
 // -- Constants & Defaults --
@@ -480,6 +487,11 @@ func (envParser) Parse(cfg *Config) error {
 	}
 	if v := os.Getenv("GLASSBOX_BUILD_MANIFEST"); v != "" {
 		cfg.BuildManifestPath = v
+	}
+	if v := os.Getenv("GLASSBOX_PLUGIN_ALLOW_UNTRUSTED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Plugin.AllowUntrusted = b
+		}
 	}
 	return nil
 }
