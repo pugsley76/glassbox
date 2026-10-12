@@ -3,7 +3,7 @@ module github.com/dotandev/glassbox
 go 1.26
 
 require (
-	github.com/aws/aws-sdk-go-v2 v1.45.0
+	github.com/aws/aws-sdk-go-v2 v1.47.2
 	github.com/aws/aws-sdk-go-v2/config v1.32.25
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.24
 	github.com/aws/aws-sdk-go-v2/service/kms v1.53.4
@@ -11,7 +11,7 @@ require (
 
 require (
 	github.com/atotto/clipboard v0.1.4
-	github.com/aws/smithy-go v1.28.1
+	github.com/aws/smithy-go v1.28.4
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/fatih/color v1.19.0
 	github.com/getsentry/sentry-go v0.47.0
@@ -31,6 +31,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.39.0
 	go.opentelemetry.io/otel/trace v1.42.0
 	go.yaml.in/yaml/v2 v2.4.4
+	golang.org/x/sys v0.45.0
 	modernc.org/sqlite v1.53.0
 	pgregory.net/rapid v1.2.0
 )
@@ -82,7 +83,6 @@ require (
 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
 	golang.org/x/net v0.53.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260120221211-b8f7ae30c516 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260420184626-e10c466a9529 // indirect
