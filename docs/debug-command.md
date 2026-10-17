@@ -28,6 +28,82 @@ glassbox debug --load-snapshots <registry-file>
 
 ---
 
+## Common flags at a glance
+
+The tables below list the flags most users need, grouped by what they control.
+Defaults match `glassbox debug --help`; flag descriptions are abbreviated here —
+see the detailed sections further down and the linked advanced docs for full
+behavior, accepted values, and error messages.
+
+### Input flags — what the command operates on
+
+| Flag | Default | Purpose | Advanced doc |
+|---|---|---|---|
+| `<transaction-hash>` (arg) | required* | 64-char lowercase hex transaction hash | — |
+| `--network`, `-n` | `mainnet` (auto-detected when omitted) | Stellar network: `testnet`, `mainnet`, or `futurenet` | [Core Flags](#core-flags) |
+| `--rpc-url` | _(config)_ | Custom RPC URL; comma-separated for failover | [Core Flags](#core-flags) |
+| `--rpc-token` | _(env: `GLASSBOX_RPC_TOKEN`)_ | RPC authentication token | [Core Flags](#core-flags) |
+| `--wasm` | _(none)_ | Path to local WASM file for offline replay | [Build Artifact Discovery](#build-artifact-discovery) |
+| `--xdr-file` / `--json-file` | _(none)_ | Load a local transaction envelope (XDR or JSON) | [Local envelope file](#local-envelope-file) |
+| `--load-snapshots` | _(none)_ | Replay a saved snapshot registry offline | [Offline snapshot replay](#offline-snapshot-replay) |
+| `--contract-source` | _(auto-discovery)_ | Explicit contract source directory for source mapping | [Source Mapping Flags](#source-mapping-flags) |
+| `--source-alias` | _(none)_ | JSON file mapping embedded source paths to local paths | [Source Mapping Flags](#source-mapping-flags) |
+| `--args` | _(none)_ | Mock arguments for local WASM replay | [WASM replay](#wasm-replay-no-network-required) |
+| `--mock-ledger-entry` / `--mock-ledger-manifest` | _(none)_ | Override ledger entries before simulation | [Build Artifact Discovery](#build-artifact-discovery) |
+
+\* Required unless `--wasm`, `--demo`, `--xdr-file`, `--json-file`, or
+`--load-snapshots` is provided.
+
+### Execution flags — how the command runs
+
+| Flag | Default | Purpose | Advanced doc |
+|---|---|---|---|
+| `--dry-run` | `false` | Validate inputs and environment without simulating | [Validation & Dry-Run](#validation--dry-run) |
+| `--plan` | `false` | Print the execution plan and exit without running | — |
+| `--watch` | `false` | Poll for a pending transaction on-chain before debugging | [Session & Watch Flags](#session--watch-flags) |
+| `--watch-timeout` | `30` (seconds) | Timeout for `--watch` mode | [Session & Watch Flags](#session--watch-flags) |
+| `--watch-files` | `false` | Rerun debug when local source/config files change | [Watch Mode](./WATCH_MODE.md) |
+| `--hot-reload` | `false` | Re-run local WASM replay when the binary changes | [Hot reload](#hot-reload) |
+| `--demo` | `false` | Print sample output (no network, for color detection) | [Demo Mode](#demo-mode) |
+| `--live` / `--latest-ledger` | `false` | Replay against the current validated ledger state | [Simulation Control Flags](#simulation-control-flags) |
+| `--no-cache` | `false` | Disable local ledger state caching for this run | [Session & Watch Flags](#session--watch-flags) |
+| `--snapshots` | `false` | Enable simulator snapshot capture | [Session & Watch Flags](#session--watch-flags) |
+| `--protocol-version` | _(auto)_ | Override the Soroban protocol version | [Simulation Control Flags](#simulation-control-flags) |
+| `--mock-time` | `0` | Override ledger timestamp (Unix seconds) | [Simulation Control Flags](#simulation-control-flags) |
+| `--mock-base-fee` | `0` | Override base fee (stroops) | [Simulation Control Flags](#simulation-control-flags) |
+| `--mock-gas-price` | `0` | Override gas price multiplier | [Simulation Control Flags](#simulation-control-flags) |
+| `--op` / `--operation` | `-1` (all operations) | Select a specific zero-based operation index | [Simulation Control Flags](#simulation-control-flags) |
+| `--trace-verbosity` | `normal` | Trace detail: `summary`, `normal`, or `verbose` | [Output Flags](#output-flags) |
+| `--skip-source-mapping` | `false` | Skip DWARF source mapping for faster raw trace replay | [Source Mapping Flags](#source-mapping-flags) |
+| `--secure-workspace` | `false` | Restrict artifact access to the current workspace | — |
+| `--pin-endpoint` | _(none)_ | Pin a specific RPC endpoint with the session | [Session & Watch Flags](#session--watch-flags) |
+
+### Output flags — what the command produces
+
+| Flag | Default | Purpose | Advanced doc |
+|---|---|---|---|
+| `--json` | `false` | Emit results as machine-readable JSON | [Output Flags](#output-flags) |
+| `--format` | `text` | Output format: `text` or `json` | [Output Flags](#output-flags) |
+| `--show-metrics` | `false` | Print RPC and simulation performance metrics | [Performance Metrics](#performance-metrics--) |
+| `--timings` | `false` | Print per-phase timing breakdown | — |
+| `--export-svg` | _(none)_ | Export the call graph as an SVG file | [Output Flags](#output-flags) |
+| `--save-snapshots` | _(none)_ | Save simulation results to a snapshot registry | [Session & Watch Flags](#session--watch-flags) |
+| `--generate-trace` / `--trace-output` | `false` / _(none)_ | Export execution trace to a file | — |
+| `--theme` | _(auto-detect)_ | Color theme: `dark`, `light`, `none`, `default`, `deuteranopia`, `protanopia`, `tritanopia`, `high-contrast` | [Theme Flag](#theme-flag) |
+| `--verbose`, `-v` | `false` | Verbose logging (equivalent to `--log-level=debug`) | [Output Flags](#output-flags) |
+| `--audit-key`, `--publish-ipfs`, `--publish-arweave` | _(none)_ | Sign and publish the audit trail to decentralised storage | [Audit & Decentralised Storage](#audit--decentralised-storage) |
+
+> **Profiling flags** (`--profile`, `--profile-format`) are global root-level
+> flags, not `debug`-specific. See [`glassbox profile`](./trace-profiling.md).
+
+Every flag documented above exists in `internal/cmd/debug.go` and its default
+matches the flag registration there. This table summarizes the most common
+flags; the detailed sections later in this page cover every flag, its accepted
+values, validation rules, and error messages. The table complements — it does
+not duplicate — `glassbox debug --help` and the generated flag help.
+
+---
+
 ## Core Flags
 
 | Flag | Default | Description |
