@@ -104,12 +104,13 @@ func buildFeeBumpEnvelope(t *testing.T, innerB64 string) string {
 		Type:    xdr.CryptoKeyTypeKeyTypeEd25519,
 		Ed25519: (*xdr.Uint256)(&feeSrc),
 	}
+	v1Inner := inner.MustV1()
 	fb := xdr.FeeBumpTransaction{
 		FeeSource: fbSrc,
 		Fee:       1000,
 		InnerTx: xdr.FeeBumpTransactionInnerTx{
 			Type: xdr.EnvelopeTypeEnvelopeTypeTx,
-			V1:   inner.MustV1(),
+			V1:   &v1Inner,
 		},
 	}
 	env := xdr.TransactionEnvelope{
@@ -364,7 +365,7 @@ func TestValidateEnvelopeXDR_Invalid(t *testing.T) {
 // ── DecodeFootprintXDR ────────────────────────────────────────────────────────
 
 func TestDecodeFootprintXDR(t *testing.T) {
-	key := xdr.LedgerKey{
+	roKey := xdr.LedgerKey{
 		Type: xdr.LedgerEntryTypeAccount,
 		Account: &xdr.LedgerKeyAccount{
 			AccountId: xdr.AccountId{
@@ -373,9 +374,18 @@ func TestDecodeFootprintXDR(t *testing.T) {
 			},
 		},
 	}
+	rwKey := xdr.LedgerKey{
+		Type: xdr.LedgerEntryTypeAccount,
+		Account: &xdr.LedgerKeyAccount{
+			AccountId: xdr.AccountId{
+				Type:    xdr.PublicKeyTypePublicKeyTypeEd25519,
+				Ed25519: &xdr.Uint256{0x02},
+			},
+		},
+	}
 	fp := xdr.LedgerFootprint{
-		ReadOnly:  []xdr.LedgerKey{key},
-		ReadWrite: []xdr.LedgerKey{key},
+		ReadOnly:  []xdr.LedgerKey{roKey},
+		ReadWrite: []xdr.LedgerKey{rwKey},
 	}
 	b, err := fp.MarshalBinary()
 	if err != nil {
@@ -399,5 +409,21 @@ func TestDecodeFootprintXDR_InvalidBase64(t *testing.T) {
 	_, err := DecodeFootprintXDR("!!")
 	if err == nil {
 		t.Fatal("expected error for invalid base64")
+	}
+}
+
+// ── Empty input ───────────────────────────────────────────────────────────────
+
+// TestXDRDecoder_EmptyInput asserts that passing an empty byte slice (encoded
+// as an empty base64 string) to the XDR decoder returns a descriptive,
+// non-nil error rather than panicking or returning a nil result silently.
+// Empty envelopes arise from truncated RPC responses and empty network buffers.
+func TestXDRDecoder_EmptyInput(t *testing.T) {
+	result, err := DecodeEnvelopeXDR("")
+	if err == nil {
+		t.Fatal("expected a non-nil error for empty input, got nil")
+	}
+	if result != nil {
+		t.Errorf("expected nil result for empty input, got %+v", result)
 	}
 }

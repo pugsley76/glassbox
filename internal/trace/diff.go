@@ -58,11 +58,17 @@ type TraceDiff struct {
 }
 
 // stepKey produces a stable alignment key for a step, preferring
-// contract ID + function + operation for stable matching.
+// sequence ID for deterministic ordering, falling back to
+// contract ID + function + operation for backward compatibility.
 func stepKey(s *ExecutionState) string {
 	if s == nil {
 		return ""
 	}
+	// Prefer sequence ID for deterministic ordering
+	if s.SequenceID > 0 {
+		return fmt.Sprintf("seq:%d", s.SequenceID)
+	}
+	// Fallback to contract ID + function + operation
 	parts := []string{s.ContractID, s.Function, s.Operation}
 	return strings.Join(parts, "|")
 }
@@ -114,10 +120,10 @@ func compareFields(old, new *ExecutionState) []DiffField {
 		})
 	}
 	if old.Cost != nil && new.Cost != nil {
-		if old.Cost.CPUInstructions != new.Cost.CPUInstructions {
+		if old.Cost.CPU != new.Cost.CPU {
 			diffs = append(diffs, DiffField{"gas_cpu",
-				fmt.Sprintf("%d", old.Cost.CPUInstructions),
-				fmt.Sprintf("%d", new.Cost.CPUInstructions)})
+				fmt.Sprintf("%d", old.Cost.CPU),
+				fmt.Sprintf("%d", new.Cost.CPU)})
 		}
 		if old.Cost.MemoryBytes != new.Cost.MemoryBytes {
 			diffs = append(diffs, DiffField{"gas_mem",
@@ -339,11 +345,4 @@ func (d *TraceDiff) RenderHTML() (string, error) {
 		return "", fmt.Errorf("execute diff template: %w", err)
 	}
 	return sb.String(), nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

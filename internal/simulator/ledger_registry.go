@@ -20,9 +20,11 @@ const (
 	EntryKindContract                        // ContractData with Persistent durability
 	EntryKindCode                            // ContractCode (WASM bytecode)
 	EntryKindTTL                             // Time-to-live record for a contract entry
-	EntryKindPersistent                      // Alias for ContractData Persistent (same wire type)
+	_                                        // reserved iota slot
 	EntryKindTemporary                       // ContractData Temporary durability
 	EntryKindConfigSetting                   // Network-wide configurable parameter
+
+	EntryKindPersistent = EntryKindContract // Alias for ContractData Persistent (same wire type)
 )
 
 // String returns a human-readable name for the EntryKind.
@@ -30,7 +32,7 @@ func (k EntryKind) String() string {
 	switch k {
 	case EntryKindAccount:
 		return "account"
-	case EntryKindContract, EntryKindPersistent:
+	case EntryKindContract:
 		return "contract_data_persistent"
 	case EntryKindCode:
 		return "contract_code"
@@ -48,7 +50,11 @@ func (k EntryKind) String() string {
 // Mutation records the before- and after-XDR images of a single written entry.
 // Before is empty when the entry was absent before the write.
 type Mutation struct {
-	Before string // base64 XDR before the write; "" if the entry was absent
+	// Before is the base64-encoded XDR of the entry before the write.
+	// Empty string means the entry was absent before the write (a create
+	// operation). This is unambiguous because valid XDR-encoded LedgerEntries
+	// always have a non-zero serialised length.
+	Before string
 	After  string // base64 XDR after the write
 	Kind   EntryKind
 }
