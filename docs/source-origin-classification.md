@@ -171,6 +171,90 @@ The `Classifier.Classify` method applies these rules in priority order.
 
 ---
 
+## Synthetic path examples
+
+The table below shows representative paths and the classification each receives.
+All examples use a workspace root of `/project` and a Cargo home of `~/.cargo`.
+
+### `OriginClass` (JSON schema output)
+
+| Path | `OriginClass` | Why |
+|---|---|---|
+| `src/lib.rs` | `user` | Relative path — workspace-relative by convention |
+| `/project/src/lib.rs` | `user` | Absolute path inside `ProjectRoot` |
+| `/project/target/wasm32-unknown-unknown/release/contract.wasm` | `generated` | Contains `target/wasm32` |
+| `/project/target/release/build/my_crate/out/generated.rs` | `generated` | Contains `/target/` |
+| `target/debug/build/proc_macro/out/bindings.rs` | `generated` | Starts with `target/` |
+| `/home/user/.cargo/registry/src/index.crates.io-abc/serde-1.0.203/src/lib.rs` | `external` | Contains `/.cargo/registry` |
+| `/home/user/.cargo/git/checkouts/soroban-sdk-abc/def/src/lib.rs` | `external` | Contains `/.cargo/git` |
+| `/usr/local/lib/rustlib/src/rust/library/std/src/lib.rs` | `external` | Absolute path outside `ProjectRoot` |
+| *(empty string)* | `unknown` | Empty path |
+
+### `SourceOrigin` (in-process enum, terminal + URL output)
+
+| Path | `SourceOrigin` | Terminal prefix | External URL generated |
+|---|---|---|---|
+| `src/lib.rs` | `OriginLocal` | `[local]` | None |
+| `/project/src/token.rs` | `OriginLocal` | `[local]` | None |
+| `/home/user/.cargo/registry/src/index.crates.io-abc/serde-1.0.203/src/lib.rs` | `OriginRegistry` | `[crates.io]` | `https://docs.rs/crate/serde/1.0.203/source/src/lib.rs` |
+| `/home/user/.cargo/git/checkouts/soroban-sdk-abc/def/src/token.rs` | `OriginGit` | `[git]` | `https://github.com/stellar/rs-soroban-sdk/blob/<commit>/src/token.rs` |
+| `/opt/toolchain/src/core.rs` | `OriginUnknownSource` | *(none)* | None |
+
+### `ExtraBuildDirs` and `ExtraExternalPrefixes` overrides
+
+When the built-in heuristics do not cover your project layout you can supply
+additional prefixes at classifier construction time.
+
+```go
+c := sourcemap.NewClassifier(sourcemap.ClassifierOptions{
+    ProjectRoot:    "/project",
+    ExtraBuildDirs: []string{
+        "_generated/",          // proto-generated Go files
+        "vendor/generated/",    // vendored codegen output
+    },
+    ExtraExternalPrefixes: []string{
+        "/opt/vendor-sdk/",     // a fixed-location vendor SDK
+    },
+})
+```
+
+| Path | With overrides | Without overrides |
+|---|---|---|
+| `_generated/pb/api.pb.go` | `generated` | `user` |
+| `vendor/generated/mocks.go` | `generated` | `user` |
+| `/opt/vendor-sdk/src/client.rs` | `external` | `external` (via absolute-outside-root rule) |
+
+### Ambiguous and uncertain cases
+
+Some paths are genuinely ambiguous or cannot be classified with confidence.
+These are not presented as definitive — the classifier applies the most
+conservative interpretation rather than guessing.
+
+| Path | Classification | Why it is uncertain |
+|---|---|---|
+| `/tmp/contract.wasm` | `generated` | `.wasm` suffix triggers the generated rule, but `/tmp/` is not inherently a build directory. The wasm rule takes priority. |
+| `/project/vendor/some-crate/src/lib.rs` | `user` | Vendored source under `ProjectRoot` with no matching `ExtraExternalPrefixes` is classified as user code. Add the path to `ExtraExternalPrefixes` if you want it treated as external. |
+| `../../external/sdk/src/lib.rs` | `user` | A relative path with `..` components is classified as user because `Classify` does not resolve relative paths against `ProjectRoot`. Use `filepath.Abs` before calling `Classify` when path traversal is possible. |
+| *(no `workspaceRoot` configured)* | `OriginLocal` (conservative) | Without a workspace root, `ClassifySourcePath` cannot distinguish local from external absolute paths and defaults to `OriginLocal`. No external URL is generated. |
+
+### User overrides
+
+Overrides are applied at classifier construction time — there is no runtime
+override mechanism that alters a classification after the fact.
+
+**To reclassify a path as `generated`:** add its prefix to `ExtraBuildDirs`.
+
+**To reclassify a path as `external`:** add its prefix to `ExtraExternalPrefixes`.
+
+**To suppress `[external]` annotations for a vendored subtree you own:** do
+not add it to `ExtraExternalPrefixes` — the default behaviour (user) will
+apply for paths inside `ProjectRoot`.
+
+If a path matches both `ExtraBuildDirs` and `ExtraExternalPrefixes`, the
+`ExtraBuildDirs` rule wins (it is checked first).
+
+---
+
 ## Cargo.lock parsing for git dependencies
 
 `ExtractGitOrigin(sourcePath, cargoLockPath)` finds the `[[package]]` entry

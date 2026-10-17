@@ -8,6 +8,14 @@ They are enumerated rather than derived because each one corresponds to a
 distinct remediation, and because CI code scanning needs rule IDs that stay
 stable across runs in order to track a rule's history.
 
+> **Relationship to CLI error codes** — The GB1xxx and GB2xxx rules are
+> *findings within a run*, not failure codes for the command itself. A run
+> can exit 0 while still emitting GB1001 warnings, and a
+> `SOURCE_DISCOVERY_FAILED` error code can appear without any GB1xxx result
+> if source discovery failed before SARIF export ran. See
+> [stable-error-codes.md § Cross-reference](stable-error-codes.md#cross-reference-error-codes-and-sarif-rules)
+> for the full mapping between error codes and rule IDs.
+
 ## Source map diagnostics (GB1xxx)
 
 Reported when a WASM instruction offset cannot be mapped back to a Rust source
@@ -100,3 +108,81 @@ Every enumerated rule carries a `shortDescription`, a `fullDescription`, a
 `helpUri` and a `defaultConfiguration.level`, plus `tags` and a `precision`
 label. `sarif.RuleByID` looks one up, and `sarif.DiagnosticRules` returns them
 all in rule-ID order.
+
+---
+
+## Concrete result example
+
+The excerpt below is a single sanitized SARIF result for rule `GB2001`
+(`DeprecatedHostFunction`) with source mapping resolved to a Rust source line.
+It is representative of what `glassbox scan --format sarif` produces and can be
+used to build parsers and CI integrations without reading the full SARIF
+specification.
+
+The example is drawn from the deterministic test input in
+`internal/sarif/families_test.go` (`testWarnings()[0]`), which uses the same
+code path as production output.
+
+```json
+{
+  "ruleId": "GB2001",
+  "level": "warning",
+  "message": {
+    "text": "bytes_new_from_linear_memory: removed in a future protocol release (src/lib.rs:88)"
+  },
+  "locations": [
+    {
+      "physicalLocation": {
+        "artifactLocation": {
+          "uri": "src/lib.rs"
+        },
+        "region": {
+          "startLine": 88
+        }
+      },
+      "logicalLocation": {
+        "name": "bytes_new_from_linear_memory",
+        "kind": "hostFunction"
+      }
+    }
+  ],
+  "fingerprints": {
+    "primaryLocationLineHash/v1": "a3c9f1e24b870d56"
+  }
+}
+```
+
+### Field notes
+
+| Field | Value in example | Notes |
+|---|---|---|
+| `ruleId` | `GB2001` | Registered enumerated rule ID — stable across runs. Not a hash-derived `GB-XXXX` security rule. |
+| `level` | `warning` | `GB2001` default; `GB2002` (`AllowlistedUnsafeHostFunction`) uses `error`. |
+| `message.text` | human-readable | Includes title, description, and resolved location. **Do not parse this string** — key on `ruleId` and `physicalLocation`. |
+| `physicalLocation.artifactLocation.uri` | `src/lib.rs` | Present because source mapping resolved the WASM offset to a Rust source line. When mapping fails this field is absent and only `logicalLocation` is emitted (see the GB1001 example above). |
+| `physicalLocation.region.startLine` | `88` | 1-based. Omitted entirely (rather than set to `0`) when the line is unknown, keeping the result schema-valid. |
+| `logicalLocation.kind` | `hostFunction` | Carries the host function name when a physical location is present. For unmapped results the kind is `wasmOffset`. |
+| `fingerprints` | `primaryLocationLineHash/v1` | 16-char hex prefix of SHA-256(`ruleId + \0 + message + \0 + locationUri + \0 + startLine`). Identical inputs always produce identical fingerprints; use this to deduplicate across runs. |
+
+Missing fields (`suppressions`, `properties`, `partialFingerprints`) are omitted
+here for clarity. They are included in production output when applicable — see
+[sarif-export.md](sarif-export.md) for the full result schema.
+
+---
+
+## Cross-reference: rule IDs and CLI error codes
+
+The SARIF rules and the `ErstErrorCode` values in `docs/stable-error-codes.md`
+are parallel systems — a SARIF rule ID identifies a **finding type**, while an
+error code identifies **why a command failed**. The table below lists the
+verified relationships and explicitly marks cases where no direct mapping
+exists.
+
+| Rule | CLI error code | Relationship |
+|---|---|---|
+| `GB1001` (`SourceMapOffsetNotFound`) | `SOURCE_DISCOVERY_FAILED` | Related, not identical. `GB1001` is a per-offset warning inside a successful run. `SOURCE_DISCOVERY_FAILED` means the entire source-discovery pipeline was aborted before SARIF export. A run can emit `GB1001` warnings and still exit 0. |
+| `GB1002` (`SourceMapDwarfMissing`) | `SOURCE_DISCOVERY_FAILED` | Related. Both indicate a contract built without debug symbols. `GB1002` is emitted when the binary has no DWARF sections; `SOURCE_DISCOVERY_FAILED` is the exit-path error when that condition causes the command to fail. Neither implies the other. |
+| `GB1003` (`SourceMapNoGitRepository`) | *(no mapping)* | Informational `note` — does not cause command failure. No corresponding `ErstErrorCode`. |
+| `GB2001` (`DeprecatedHostFunction`) | *(no mapping)* | A deprecation warning does not fail the simulation. No corresponding `ErstErrorCode`. A deprecated function call may be *correlated* with `SIMULATION_LOGIC_ERROR` if the function is removed in the active protocol version, but there is no guaranteed link. |
+| `GB2002` (`AllowlistedUnsafeHostFunction`) | *(no mapping)* | An `error`-level SARIF finding, but the command still exits 0 when this is the only problem. No corresponding `ErstErrorCode`. |
+| `GB-XXXX` (security findings) | *(no mapping)* | Hash-derived security rule IDs have no stable `ErstErrorCode` counterpart. They describe contract vulnerabilities, not command failures. |

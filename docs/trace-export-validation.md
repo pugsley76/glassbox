@@ -256,6 +256,29 @@ glassbox debug --dry-run \
 - **Markdown**: Shareable in chat/issues, best for collaboration
 - **Text**: Plain CLI output, best for simple logging
 
+#### Format comparison
+
+| | HTML | JSON | Markdown | Text |
+|---|---|---|---|---|
+| **Flag** | `--format html` | `--format json` | `--format markdown` | `--format text` |
+| **Extension** | `.html` | `.json` | `.md` | `.txt` |
+| **Human-readable** | Yes — interactive | No | Yes | Yes |
+| **Machine-readable** | No | **Yes** | No | No |
+| **Round-trip loadable** | No | **Yes** — `glassbox trace` can reload | No | No |
+| **Recoverable** | No | **Yes** — `RecoverTrace()` | No | No |
+| **Integrity metadata** | Optional `.meta.json` | Optional `.meta.json` | Optional `.meta.json` | Optional `.meta.json` |
+| **Max recommended steps** | 50,000 | Unlimited | 10,000 | 100,000 |
+| **Step index validation** | No | **Yes** — sequential index required | No | No |
+| **GitHub import** | No | No | Embed as code block | No |
+| **SARIF consumer** | No | No | No | No |
+| **Best for** | Manual debugging | CI/CD, replay, archival | PR comments, issues | Quick terminal review |
+
+**Key metadata differences:**
+
+- `--output-json` produces a versioned envelope (`schema_version: "1.0"`) that `glassbox trace` can reload and validate. The `--export --format json` flag uses the same content but a different envelope shape (`version: {major, minor, patch}`). Both shapes are detected automatically by `LoadExecutionTrace`.
+- Only JSON format exports carry a step-count integrity check in the `.meta.json` companion file. For HTML, Markdown, and Text exports, the checksum still verifies byte-for-byte integrity, but step count cannot be validated because the format is not machine-parseable.
+- JSON is the only format that supports `--verify-export` step-count checking and `RecoverTrace()` repair. Always export in JSON when archival or recovery capability is required.
+
 ### 3. Organize Output Paths
 
 Use dated directories for trace exports:
