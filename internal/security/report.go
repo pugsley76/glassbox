@@ -177,3 +177,20 @@ func (f *ReportFormatter) FormatRawSecretFindings(findings []SecretFinding) (str
 	}
 	return string(jsonBytes), nil
 }
+
+// FindingsToJSON serialises a slice of findings to a JSON string. This is a
+// thin helper used by the scan command's --format json output path.
+func FindingsToJSON(findings []Finding) string {
+	if findings == nil {
+		findings = []Finding{}
+	}
+	data := map[string]interface{}{
+		"findings": findings,
+		"count":    len(findings),
+	}
+	out, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return `{"findings":[],"count":0}`
+	}
+	return string(out)
+}

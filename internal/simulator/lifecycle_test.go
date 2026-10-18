@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -466,7 +467,7 @@ func TestLifecycleTimeout(t *testing.T) {
 	}
 
 	// Wait should fail due to context timeout
-	timeoutCtx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	_, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 	defer cancel()
 	
 	// The process should be terminated by the context

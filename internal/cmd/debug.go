@@ -1065,6 +1065,32 @@ Local WASM Replay Mode:
 					}
 					doneRPC(err)
 					if err != nil {
+						// Surface structured failover diagnostics before returning.
+						poolDiag := client.PoolDiagnostics()
+						if len(poolDiag.Attempts) > 0 {
+							allFailed := poolDiag.SucceededURL == ""
+							summary := rpc.BuildRPCFailureSummary(poolDiag)
+							if allFailed {
+								states := client.GetHealthReport()
+								diag := rpc.AllNodesFailedDiagnostic{
+									Summary:        summary,
+									Network:        networkFlag,
+									Timestamp:      time.Now(),
+								}
+								if states != nil {
+									diag.ProviderStates = make([]rpc.ProviderState, 0)
+									// Attach circuit-breaker-aware state from the pool when available.
+									if pool := client.ProviderPool(); pool != nil {
+										diag.ProviderStates = pool.ProviderStates()
+									}
+								}
+								fmt.Fprint(cmd.ErrOrStderr(), rpc.FormatAllNodesFailedText(diag))
+							} else if len(poolDiag.Attempts) > 1 {
+								// Partial failover succeeded — report it informatively.
+								fmt.Fprintf(cmd.ErrOrStderr(), "Note: RPC failover occurred (%d attempt(s)) — succeeded via %s\n",
+									len(poolDiag.Attempts), poolDiag.SucceededURL)
+							}
+						}
 						return errors.WrapRPCConnectionFailed(err)
 					}
 

@@ -71,6 +71,21 @@ type checkMeta struct {
 	networkRequired bool
 }
 
+// HealthCheckResult is a machine-readable result for a single health check.
+// It satisfies the requirement for typed (non-raw-string) check output and
+// can be used by callers that need to inspect individual check outcomes
+// programmatically rather than parsing a formatted string.
+type HealthCheckResult struct {
+	// Name is the stable component identifier (matches the value returned by
+	// Checker.Name()).
+	Name string `json:"name"`
+	// Healthy is true when the check passed.
+	Healthy bool `json:"healthy"`
+	// Message provides a human-readable explanation when Healthy is false.
+	// It is empty on success.
+	Message string `json:"message,omitempty"`
+}
+
 // CheckReport is the per-component result in a standalone RunChecks call.
 type CheckReport struct {
 	Status          StatusValue `json:"status"`
@@ -297,6 +312,27 @@ func FormatText(result RunResult) string {
 	}
 	sb.WriteString(fmt.Sprintf("─── overall: %s  checked_at: %s\n", result.Overall, result.CheckedAt))
 	return sb.String()
+}
+
+// CheckResults runs all registered checkers and returns the results as a
+// []HealthCheckResult slice. This is the machine-readable counterpart of
+// RunChecks: callers can inspect individual Name/Healthy/Message fields
+// without parsing a formatted string or decoding an HTTP response.
+//
+// When offline is true, network-required checkers are skipped and appear in
+// the result with Healthy=false and a "skipped in offline mode" message.
+func (h *Handler) CheckResults(ctx context.Context, offline bool) []HealthCheckResult {
+	run := h.RunChecks(ctx, offline)
+	out := make([]HealthCheckResult, 0, len(run.Components))
+	for name, rep := range run.Components {
+		healthy := rep.Status == StatusOK || rep.Status == StatusSkipped
+		out = append(out, HealthCheckResult{
+			Name:    name,
+			Healthy: healthy,
+			Message: rep.Message,
+		})
+	}
+	return out
 }
 
 // SetProtocolVersion stores the current Soroban protocol version for reporting

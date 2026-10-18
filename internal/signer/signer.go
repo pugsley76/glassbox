@@ -50,6 +50,11 @@ type KeyOriginMetadata struct {
 	// CreatedAt records when the key was created, if known.
 	// Zero value means "not reported".
 	CreatedAt string `json:"created_at,omitempty"`
+
+	// MemoryLock describes whether the signing key seed was pinned with
+	// mlock/VirtualLock. When locking is unavailable the value begins with
+	// "WARNING:" so compliance reviewers can spot it in audit metadata.
+	MemoryLock string `json:"memory_lock,omitempty"`
 }
 
 // Error represents an error originating from a signing operation.

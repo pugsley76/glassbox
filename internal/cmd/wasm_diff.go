@@ -46,6 +46,15 @@ equivalent in --semantic mode); non-zero when they differ meaningfully.`,
   # Semantic diff keeping debug sections in the comparison
   glassbox wasm-diff --semantic --ignore-debug=false ./contract.wasm ./onchain.wasm`,
 	Args: cobra.ExactArgs(2),
+	PreRunE: func(cmd *cobra.Command, args []string) error {
+		if err := validateFilePath("local-wasm", args[0]); err != nil {
+			return err
+		}
+		if err := validateFilePath("remote-wasm", args[1]); err != nil {
+			return err
+		}
+		return nil
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		localPath := args[0]
 		remotePath := args[1]

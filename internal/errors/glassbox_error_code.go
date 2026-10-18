@@ -73,6 +73,13 @@ const (
 	// verification alone.
 	ErstAuditDirPolicyViolation ErstErrorCode = "AUDIT_DIR_POLICY_VIOLATION"
 
+	// Footprint XDR decoder [Issue #1114]
+	ErstEmptyFootprint       ErstErrorCode = "FOOTPRINT_EMPTY"
+	ErstOverlappingFootprint ErstErrorCode = "FOOTPRINT_OVERLAP"
+	ErstOversizedFootprint   ErstErrorCode = "FOOTPRINT_OVERSIZED"
+	ErstUnknownLedgerKeyType ErstErrorCode = "FOOTPRINT_UNKNOWN_KEY_TYPE"
+	ErstFootprintXDRVersion  ErstErrorCode = "FOOTPRINT_XDR_VERSION"
+
 	// Internal [Issue #762]
 	// ErstInternalError is returned when a command hits an unexpected
 	// internal failure (e.g. ID generation, unexpected I/O) that does not
@@ -164,6 +171,12 @@ var errorCodeRegistry = map[error]ErstErrorCode{
 	ErrKMSTransientFailure:  ErstKMSTransientFailure,
 	// Audit directory policy [Issue #806]
 	ErrAuditDirPolicyViolation: ErstAuditDirPolicyViolation,
+	// Footprint XDR decoder [Issue #1114]
+	ErrEmptyFootprint:       ErstEmptyFootprint,
+	ErrOverlappingFootprint: ErstOverlappingFootprint,
+	ErrOversizedFootprint:   ErstOversizedFootprint,
+	ErrUnknownLedgerKeyType: ErstUnknownLedgerKeyType,
+	ErrFootprintXDRVersion:  ErstFootprintXDRVersion,
 }
 
 // ClassifyError maps an error to an ErstError with a code and preserves the original error string.

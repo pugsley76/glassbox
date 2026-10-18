@@ -41,13 +41,6 @@ func (c *Client) selectSorobanURL() string {
 	return c.SorobanURL
 }
 
-// PoolDiagnostics returns the diagnostic trace from the most recent pool
-// operation. The returned value is a snapshot; it is overwritten on the next
-// call that uses the pool.
-func (c *Client) PoolDiagnostics() AttemptDiagnostics {
-	return c.LastAttemptDiagnostics
-}
-
 // IsPinned reports whether the client's provider pool is locked to a single
 // endpoint (replay-pin mode).
 func (c *Client) IsPinned() bool {

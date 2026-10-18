@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -24,11 +23,11 @@ const consentFileName = "telemetry_consent.json"
 
 // consentFilePerms is the permission mask applied to the consent file.
 // 0600 ensures the file is readable and writable only by the owning user.
-const consentFilePerms = 0600
+const consentFilePerms os.FileMode = 0600
 
 // consentDirPerms is the permission mask for the config directory when it must
 // be created. 0700 is consistent with the rest of the Glassbox config tree.
-const consentDirPerms = 0700
+const consentDirPerms os.FileMode = 0700
 
 // ConsentState represents the persisted telemetry consent record.
 type ConsentState struct {
@@ -186,5 +185,5 @@ func parseBoolLoose(s string) (bool, error) {
 	case "0", "false", "no", "off":
 		return false, nil
 	}
-	return strconv.ParseBool(s)
+	return false, fmt.Errorf("unrecognised boolean value %q", s)
 }

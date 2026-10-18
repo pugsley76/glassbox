@@ -94,7 +94,24 @@ Validation rules:
 - Every error must be an `ErstError` created via one of the `errors.Wrap*` helpers. Bare `fmt.Errorf` produces no stable error code and no Hint.
 - Include the invalid value and the set of accepted values in the message so users do not have to re-read the help.
 - File-path validation (`validateFilePath`) checks existence and readability. Add a remediation note for missing files (e.g. "Build your contract first").
-- Reject null bytes in any flag that feeds a file path (use `ValidateDebugInputPaths` as a model).
+- Reject null bytes in any flag that feeds a file path (use `validateNoNullBytes` or `ValidateDebugInputPaths` as a model).
+- **The invariant: zero external I/O may occur before `PreRunE` returns.** No network calls, no simulator spawns, no file writes.
+
+### Available validation helpers (cmd_validation.go)
+
+| Helper | Purpose |
+|--------|---------|
+| `validateNetwork(network string)` | Accepts `testnet`, `mainnet`, `futurenet`, `standalone`, `public`; empty OK |
+| `validateFilePath(flag, path string)` | Checks file exists and is readable; empty OK (optional) |
+| `validatePositiveInt(flag string, val int)` | Rejects negative integers |
+| `validateMutuallyExclusive(set, flags...)` | Errors when >1 flag is set |
+| `validateExactlyOne(set, flags...)` | Errors when 0 or >1 flag is set |
+| `validateAtLeastOne(set, flags...)` | Errors when no flag is set |
+| `validateEnum(context, value string, allowed []string)` | Rejects values outside the allowed list |
+| `validateRPCURL(flag, url string)` | Verifies `http://` or `https://` prefix |
+| `validateNonEmptyString(flag, value string)` | Rejects empty or whitespace-only strings |
+| `validateOutputDir(flag, dir string)` | Verifies/creates output directory |
+| `validateNoNullBytes(flag, value string)` | Rejects paths containing null bytes |
 
 ### Adding a new validation helper
 

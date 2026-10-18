@@ -154,6 +154,79 @@ func validateEnum(context, value string, allowed []string) error {
 	))
 }
 
+// validateRPCURL returns an error when rpcURL is set but is not a syntactically
+// valid HTTP or HTTPS URL. It does not perform any network check.
+func validateRPCURL(flag, rpcURL string) error {
+	if rpcURL == "" {
+		return nil
+	}
+	lower := strings.ToLower(strings.TrimSpace(rpcURL))
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		return errors.WrapValidationError(fmt.Sprintf(
+			"--%s %q must be a valid http:// or https:// URL\n"+
+				"  Example: --%s https://soroban-testnet.stellar.org",
+			flag, rpcURL, flag,
+		))
+	}
+	return nil
+}
+
+// validateNonEmptyString returns an error when value is empty or whitespace-only.
+// Use this for required free-form string flags.
+func validateNonEmptyString(flag, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return errors.WrapValidationError(fmt.Sprintf(
+			"--%s must not be empty", flag,
+		))
+	}
+	return nil
+}
+
+// validateOutputDir returns an error when dir is non-empty but is not a
+// writeable directory. If dir does not exist it is created.
+func validateOutputDir(flag, dir string) error {
+	if dir == "" {
+		return nil
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Attempt to create it so the user gets a clear error here rather
+			// than a silent failure deep inside a long command.
+			if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+				return errors.WrapValidationError(fmt.Sprintf(
+					"--%s %q does not exist and could not be created: %v\n"+
+						"  Fix: ensure the parent directory is writable",
+					flag, dir, mkErr,
+				))
+			}
+			return nil
+		}
+		return errors.WrapValidationError(fmt.Sprintf(
+			"--%s: cannot access %q: %v", flag, dir, err,
+		))
+	}
+	if !info.IsDir() {
+		return errors.WrapValidationError(fmt.Sprintf(
+			"--%s %q exists but is not a directory", flag, dir,
+		))
+	}
+	return nil
+}
+
+// validateNoNullBytes returns an error when any path contains a null byte,
+// which can be used for injection attacks on file-system calls.
+func validateNoNullBytes(flag, value string) error {
+	if strings.ContainsRune(value, 0) {
+		return errors.WrapValidationError(fmt.Sprintf(
+			"--%s: path contains null bytes and cannot be used\n"+
+				"  Fix: remove null bytes from the value",
+			flag,
+		))
+	}
+	return nil
+}
+
 // validateGenerateBindingsArgs validates all flags for the generate-bindings
 // command at parse time before any business logic runs.
 // Deprecated: use validateGenerateBindingsFlags instead.

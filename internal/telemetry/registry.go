@@ -13,6 +13,16 @@ import (
 	"sync"
 )
 
+// Event type constants
+// These constants define the canonical event type identifiers for all events
+// emitted by Glassbox. Using named constants instead of inline string literals
+// makes the full event vocabulary visible in one place and prevents typos.
+const (
+	// EventDebugProgress is emitted during long-running debug operations to
+	// report phase transitions and status updates.
+	EventDebugProgress = "debug.progress"
+)
+
 // StabilityLevel indicates the maturity and stability of an event schema.
 type StabilityLevel string
 

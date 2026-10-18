@@ -20,6 +20,12 @@ const (
 	VariantFeeBump EnvelopeVariant = "FeeBumpTransaction"
 )
 
+// MaxLedgerEntries is the Stellar/Soroban protocol maximum number of ledger
+// entries permitted in a single transaction footprint (read-only + read-write).
+// Footprints that exceed this limit are rejected before any allocation of
+// decoded key slices.
+const MaxLedgerEntries = 100
+
 // ErrUnsupportedVariant is returned when the envelope type is not supported by
 // the simulator. The error text is stable so callers can match on it without
 // relying on a sentinel.
@@ -48,6 +54,9 @@ type DecodedFootprint struct {
 	ReadOnly []string
 	// ReadWrite contains base64 XDR LedgerKey values for read-write footprint entries.
 	ReadWrite []string
+	// Truncated is true when the decoder accepted a degraded result (currently
+	// unused for hard-abort cases; reserved for soft failures).
+	Truncated bool
 }
 
 // DecodeEnvelopeXDR decodes a base64-encoded transaction envelope and returns
@@ -184,15 +193,7 @@ func extractFootprint(tx xdr.Transaction) (*DecodedFootprint, error) {
 		return nil, nil
 	}
 	fp := tx.Ext.SorobanData.Resources.Footprint
-	roKeys, err := encodeLedgerKeys(fp.ReadOnly)
-	if err != nil {
-		return nil, fmt.Errorf("footprint read-only keys: %w", err)
-	}
-	rwKeys, err := encodeLedgerKeys(fp.ReadWrite)
-	if err != nil {
-		return nil, fmt.Errorf("footprint read-write keys: %w", err)
-	}
-	return &DecodedFootprint{ReadOnly: roKeys, ReadWrite: rwKeys}, nil
+	return validateAndEncodeFootprint(fp)
 }
 
 func encodeLedgerKeys(keys []xdr.LedgerKey) ([]string, error) {
@@ -208,16 +209,71 @@ func encodeLedgerKeys(keys []xdr.LedgerKey) ([]string, error) {
 }
 
 // DecodeFootprintXDR decodes a base64-encoded XDR LedgerFootprint and returns
-// the read-only and read-write key slices as base64 XDR strings.
+// the read-only and read-write key slices as base64 XDR strings. Boundary
+// conditions (empty, overlap, oversized, unknown key type, wrong XDR version)
+// return stable sentinel errors from internal/errors.
 func DecodeFootprintXDR(b64 string) (*DecodedFootprint, error) {
 	raw, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
 		return nil, fmt.Errorf("decode footprint: invalid base64: %w", err)
 	}
+	return DecodeFootprintBytes(raw)
+}
+
+// DecodeFootprintBytes decodes raw XDR LedgerFootprint bytes with full
+// boundary validation. It never panics on malformed input.
+func DecodeFootprintBytes(raw []byte) (*DecodedFootprint, error) {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("%w: empty input", errors.ErrEmptyFootprint)
+	}
+	// Reject clearly wrong XDR version prefixes (e.g. envelope discriminant
+	// masquerading as a footprint). LedgerFootprint XDR starts with a
+	// 4-byte array length; a discriminant of 0xFFFF0000-style high bits in
+	// the first word that cannot be a plausible entry count is treated as a
+	// version/prefix mismatch.
+	if len(raw) >= 4 {
+		prefix := uint32(raw[0])<<24 | uint32(raw[1])<<16 | uint32(raw[2])<<8 | uint32(raw[3])
+		// XDR array lengths above an absurd threshold indicate a wrong type
+		// prefix (e.g. an envelope type discriminant of 2 encoded into the
+		// wrong offset, or a future version marker).
+		if prefix == 0xFFFFFFFF || prefix == 0xFFFF0000 || (prefix > MaxLedgerEntries*2 && prefix > 1<<20) {
+			return nil, fmt.Errorf("%w: prefix=0x%08X", errors.ErrFootprintXDRVersion, prefix)
+		}
+	}
+
 	var fp xdr.LedgerFootprint
 	if err := xdr.SafeUnmarshal(raw, &fp); err != nil {
+		// Distinguish unknown key-type discriminants from generic XDR errors.
+		if isUnknownLedgerKeyType(err) {
+			return nil, fmt.Errorf("%w: %v", errors.ErrUnknownLedgerKeyType, err)
+		}
 		return nil, fmt.Errorf("decode footprint: XDR unmarshal failed: %w", err)
 	}
+	return validateAndEncodeFootprint(fp)
+}
+
+func validateAndEncodeFootprint(fp xdr.LedgerFootprint) (*DecodedFootprint, error) {
+	total := len(fp.ReadOnly) + len(fp.ReadWrite)
+	if total == 0 {
+		// Empty footprint is ambiguous with a nil result — return a sentinel.
+		return nil, fmt.Errorf("%w: zero read and zero write entries", errors.ErrEmptyFootprint)
+	}
+	if total > MaxLedgerEntries {
+		return nil, fmt.Errorf("%w: %d entries (limit %d)", errors.ErrOversizedFootprint, total, MaxLedgerEntries)
+	}
+
+	// Reject unknown / future ledger key type discriminants before encoding.
+	for i, k := range fp.ReadOnly {
+		if !isKnownLedgerKeyType(k.Type) {
+			return nil, fmt.Errorf("%w: read-only[%d] type=%d", errors.ErrUnknownLedgerKeyType, i, k.Type)
+		}
+	}
+	for i, k := range fp.ReadWrite {
+		if !isKnownLedgerKeyType(k.Type) {
+			return nil, fmt.Errorf("%w: read-write[%d] type=%d", errors.ErrUnknownLedgerKeyType, i, k.Type)
+		}
+	}
+
 	roKeys, err := encodeLedgerKeys(fp.ReadOnly)
 	if err != nil {
 		return nil, fmt.Errorf("decode footprint: read-only: %w", err)
@@ -226,7 +282,65 @@ func DecodeFootprintXDR(b64 string) (*DecodedFootprint, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode footprint: read-write: %w", err)
 	}
+
+	// Detect overlap between read and write sets.
+	roSet := make(map[string]struct{}, len(roKeys))
+	for _, k := range roKeys {
+		roSet[k] = struct{}{}
+	}
+	for _, k := range rwKeys {
+		if _, ok := roSet[k]; ok {
+			return nil, fmt.Errorf("%w: overlapping key %s", errors.ErrOverlappingFootprint, k)
+		}
+	}
+
 	return &DecodedFootprint{ReadOnly: roKeys, ReadWrite: rwKeys}, nil
+}
+
+func isKnownLedgerKeyType(t xdr.LedgerEntryType) bool {
+	switch t {
+	case xdr.LedgerEntryTypeAccount,
+		xdr.LedgerEntryTypeTrustline,
+		xdr.LedgerEntryTypeOffer,
+		xdr.LedgerEntryTypeData,
+		xdr.LedgerEntryTypeClaimableBalance,
+		xdr.LedgerEntryTypeLiquidityPool,
+		xdr.LedgerEntryTypeContractData,
+		xdr.LedgerEntryTypeContractCode,
+		xdr.LedgerEntryTypeConfigSetting,
+		xdr.LedgerEntryTypeTtl:
+		return true
+	default:
+		return false
+	}
+}
+
+func isUnknownLedgerKeyType(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return containsAny(msg,
+		"InvalidEnumValue",
+		"unknown enum",
+		"invalid discriminant",
+		"Unknown",
+		"not a valid LedgerEntryType",
+		"not a valid",
+	)
+}
+
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if len(sub) > 0 && len(s) >= len(sub) {
+			for i := 0; i+len(sub) <= len(s); i++ {
+				if s[i:i+len(sub)] == sub {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // ValidateEnvelopeXDR performs a lightweight validity check on a

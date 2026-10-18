@@ -14,7 +14,16 @@ import (
 // loaded without manual regeneration. Rows older than this must be re-debugged.
 const MinSupportedSchemaVersion = 1
 
-// NOTE: SchemaVersion is defined in store.go (currently 2). When a new migration
+// CurrentSchemaVersion is bumped each time a breaking change is made to the
+// session file format. To add a migration, increment this constant and add a
+// corresponding case to the migration switch in migration.go (migrationTable
+// in this file). The version history is:
+//
+//   v1 — initial schema; backfills env_fingerprint on legacy rows.
+//   v2 — normalises empty Status field to "active".
+//   v3 — backfills audit-chain sentinel and revision baseline.
+//
+// NOTE: SchemaVersion is defined in store.go (currently 5). When a new migration
 // step is appended to migrationTable below, increment that constant to match the
 // highest toVersion in the table.
 
@@ -189,6 +198,32 @@ var migrationTable = []migrationStep{
 			}
 		},
 	},
+	{
+		toVersion:   4,
+		description: "backfill tags_json empty array for pre-tagging sessions",
+		migrate: func(data *Data) {
+			// v3 → v4: the tags_json column is new in schema v4. Rows that
+			// pre-date it have a NULL / empty value. We backfill a canonical
+			// empty JSON array so the Tags() accessor never needs to handle
+			// NULL and all rows are structurally valid from this version onward.
+			if data.TagsJSON == "" {
+				data.TagsJSON = "[]"
+			}
+		},
+	},
+	{
+		toVersion:   5,
+		description: "ensure migration_journal table and record schema history",
+		migrate: func(data *Data) {
+			// v4 → v5: MigrationJournal is a store-level table (created in
+			// initSchema). The per-row schema bump records that the session
+			// was opened under a binary that supports journalled migrations.
+			// No Data field changes are required.
+			if data.TagsJSON == "" {
+				data.TagsJSON = "[]"
+			}
+		},
+	},
 }
 
 // UpgradeSessionData migrates an in-memory session record from an older schema
@@ -215,29 +250,29 @@ func UpgradeSessionData(data *Data) (upgraded bool, err error) {
 	fromVersion := data.SchemaVersion
 
 	// Walk the migration table and apply every step whose target version is
-	// greater than the current schema version. Steps are sorted ascending by
-	// toVersion, so this produces a deterministic, gap-free upgrade path.
+	// greater than the current schema version. Each step is wrapped in
+	// in-memory savepoint semantics: on fault-injection failure the pre-step
+	// snapshot is restored [Issue #1115].
 	for _, step := range migrationTable {
 		if step.toVersion <= data.SchemaVersion {
-			// Already at or past this step — skip.
 			continue
 		}
 		if step.toVersion > SchemaVersion {
-			// Guard against a table that accidentally contains future steps.
 			break
 		}
+		pre := cloneSessionData(data)
 		step.migrate(data)
 		data.SchemaVersion = step.toVersion
+		if migrationFaultHook != nil {
+			if ferr := migrationFaultHook(step.toVersion); ferr != nil {
+				*data = *pre
+				return false, fmt.Errorf("migration to v%d rolled back: %w", step.toVersion, ferr)
+			}
+		}
 	}
 
-	// Ensure we land exactly on the current version even if the table has
-	// gaps (which it shouldn't, but this is a safety net).
 	data.SchemaVersion = SchemaVersion
 
-	// Record the migration in the session's provenance timeline so schema
-	// upgrades are visible in 'glassbox session provenance' output, not just
-	// inferred from the schema_version field. Best-effort: a provenance
-	// recording failure must never block the upgrade itself.
 	_ = RecordProvenance(data, ProvenanceMigrated, ActorSystem, version.Version, "",
 		fmt.Sprintf("schema upgraded from v%d to v%d", fromVersion, SchemaVersion), true)
 

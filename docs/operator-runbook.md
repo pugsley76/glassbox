@@ -522,6 +522,37 @@ generate a diagnostics bundle.
 
 ---
 
+## Plugin policy blocked (untrusted / community plugins)
+
+**Symptoms:**
+- Error message: `plugin "..." has trust level "community" (source: ...) which is not allowed by policy`
+- Plugins fail to load at startup or during `glassbox plugin list` / decoding.
+
+**Evidence to collect:**
+
+```sh
+# List plugins and check their trust levels
+glassbox plugin list
+```
+
+**Safe remediation:**
+By default, Glassbox blocks community and untrusted plugins (`AllowUntrusted = false`) to protect against supply-chain compromises. To allow them explicitly:
+1. **Pass `--allow-untrusted-plugins` on the CLI:**
+   ```sh
+   glassbox --allow-untrusted-plugins plugin list
+   ```
+2. **Or configure in `glassbox.toml`:**
+   ```toml
+   [plugin]
+   allow_untrusted = true
+   ```
+3. **Or set environment variable:**
+   ```sh
+   export GLASSBOX_PLUGIN_ALLOW_UNTRUSTED=true
+   ```
+
+---
+
 ## Generating a diagnostics bundle
 
 When a fix cannot be determined from the steps above, generate a portable

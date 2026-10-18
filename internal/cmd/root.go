@@ -65,6 +65,8 @@ var (
 	RPCAggregateLimitFlag  int64
 )
 
+var AllowUntrustedPluginsFlag bool
+
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "glassbox",
@@ -92,6 +94,11 @@ Get started with 'Glassbox debug --help' or visit the documentation.`,
 		if VersionFlag {
 			fmt.Println(version.Version)
 			os.Exit(0)
+		}
+
+		if AllowUntrustedPluginsFlag {
+			fmt.Fprintln(os.Stderr, "WARNING: --allow-untrusted-plugins is set. Community and untrusted plugins are being allowed for this invocation.")
+			logger.Logger.Warn("Security warning: --allow-untrusted-plugins is enabled; untrusted/community plugins will be executed.")
 		}
 
 		// Disable ANSI colours when --no-color is set or GLASSBOX_NO_COLOR is in the
@@ -126,6 +133,12 @@ Get started with 'Glassbox debug --help' or visit the documentation.`,
 		} else if LogLevelFlag != "" {
 			logger.SetLevel(logger.ParseLevel(LogLevelFlag))
 		}
+
+		// Assign a correlation ID for this CLI invocation and emit a debug log
+		// so that GLASSBOX_LOG_LEVEL=debug output carries the operation_id on
+		// every subsequent log record.
+		_, opID := logger.WithOperation(cmd.Context())
+		logger.Logger.Debug("Operation started", "operation_id", opID)
 
 		// Handle deep link probe invocation before anything else.
 		// The doctor command triggers this to verify OS dispatch works.
@@ -277,6 +290,10 @@ func init() {
 		"Maximum bytes per RPC response (0 = default 32 MiB, min 1 KiB)")
 	rootCmd.PersistentFlags().Int64Var(&RPCAggregateLimitFlag, "rpc-aggregate-limit", 0,
 		"Maximum total bytes across all RPC responses (0 = default 512 MiB, min 1 MiB)")
+
+	// Plugin security flags
+	rootCmd.PersistentFlags().BoolVar(&AllowUntrustedPluginsFlag, "allow-untrusted-plugins", false,
+		"Allow community and untrusted plugins to load (WARNING: executes unverified code)")
 }
 
 func checkForUpdatesAsync() {

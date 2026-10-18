@@ -613,3 +613,85 @@ func TestRunChecks_NeverExposesCredentials(t *testing.T) {
 		t.Errorf("FormatText should not expose credential tokens: %s", text)
 	}
 }
+
+// ── HealthCheckResult / CheckResults ─────────────────────────────────────────
+
+func TestCheckResults_HealthyFields(t *testing.T) {
+	h := NewHandler()
+	h.RegisterWithMeta(newPassChecker("rpc"), CheckRequired, false)
+	h.RegisterWithMeta(newPassChecker("cache"), CheckOptional, false)
+
+	results := h.CheckResults(context.Background(), false)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	for _, r := range results {
+		if r.Name == "" {
+			t.Error("HealthCheckResult.Name must not be empty")
+		}
+		if !r.Healthy {
+			t.Errorf("component %q: expected Healthy=true", r.Name)
+		}
+		if r.Message != "" {
+			t.Errorf("component %q: expected empty Message on success, got %q", r.Name, r.Message)
+		}
+	}
+}
+
+func TestCheckResults_UnhealthyFields(t *testing.T) {
+	h := NewHandler()
+	h.RegisterWithMeta(newFailChecker("simulator", "binary not found"), CheckRequired, false)
+
+	results := h.CheckResults(context.Background(), false)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	r := results[0]
+	if r.Name != "simulator" {
+		t.Errorf("Name = %q, want %q", r.Name, "simulator")
+	}
+	if r.Healthy {
+		t.Error("expected Healthy=false for failing checker")
+	}
+	if r.Message == "" {
+		t.Error("expected non-empty Message for failing checker")
+	}
+}
+
+func TestCheckResults_OfflineSkippedIsHealthy(t *testing.T) {
+	h := NewHandler()
+	h.RegisterWithMeta(newPassChecker("local"), CheckRequired, false)
+	h.RegisterWithMeta(newPassChecker("rpc"), CheckRequired, true) // network-required → skipped offline
+
+	results := h.CheckResults(context.Background(), true /* offline */)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	for _, r := range results {
+		if !r.Healthy {
+			t.Errorf("component %q: skipped-offline checks should be Healthy=true, got false", r.Name)
+		}
+	}
+}
+
+func TestHealthCheckResult_StructFields(t *testing.T) {
+	// Verify the struct has the required typed fields with the right zero values.
+	var r HealthCheckResult
+	if r.Name != "" {
+		t.Errorf("zero-value Name should be empty string, got %q", r.Name)
+	}
+	if r.Healthy {
+		t.Error("zero-value Healthy should be false")
+	}
+	if r.Message != "" {
+		t.Errorf("zero-value Message should be empty string, got %q", r.Message)
+	}
+	// Construct and verify non-zero values.
+	r = HealthCheckResult{Name: "db", Healthy: true, Message: ""}
+	if r.Name != "db" {
+		t.Errorf("Name = %q, want %q", r.Name, "db")
+	}
+	if !r.Healthy {
+		t.Error("Healthy should be true")
+	}
+}

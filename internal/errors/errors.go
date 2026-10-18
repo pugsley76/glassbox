@@ -76,6 +76,12 @@ var (
 	ErrConfigFailed           = stdliberrors.New("configuration error")
 	ErrNetworkNotFound        = stdliberrors.New("network not found")
 	ErrMissingLedgerKey       = stdliberrors.New("missing ledger key in footprint")
+	// Footprint XDR decoder sentinels [Issue #1114]
+	ErrEmptyFootprint         = stdliberrors.New("empty ledger footprint")
+	ErrOverlappingFootprint   = stdliberrors.New("overlapping ledger key in footprint")
+	ErrOversizedFootprint     = stdliberrors.New("footprint exceeds MAX_LEDGER_ENTRIES")
+	ErrUnknownLedgerKeyType   = stdliberrors.New("unknown ledger key type")
+	ErrFootprintXDRVersion    = stdliberrors.New("footprint encoded with wrong XDR version prefix")
 	ErrWasmInvalid            = stdliberrors.New("invalid WASM file")
 	ErrSpecNotFound           = stdliberrors.New("contract spec not found")
 	ErrShellExit              = stdliberrors.New("exit")
@@ -266,6 +272,19 @@ func WrapAllRPCFailed() error {
 	return &ErstError{
 		Code:    ErstAllRPCFailed,
 		Message: "all RPC endpoints failed",
+		Hint: "All configured RPC endpoints failed. Provide a working endpoint with --rpc-url <url>, " +
+			"run 'glassbox doctor' for a full environment check, or check 'glassbox status --network <name>'.",
+	}
+}
+
+// WrapAllRPCFailedWithDiagnostics wraps an all-endpoints-failed condition and
+// embeds the failure summary as part of the remediation hint so JSON output
+// carries the diagnostic context.
+func WrapAllRPCFailedWithDiagnostics(summary string) error {
+	return &ErstError{
+		Code:    ErstAllRPCFailed,
+		Message: "all RPC endpoints failed",
+		Hint:    summary,
 	}
 }
 
@@ -585,6 +604,10 @@ const (
 	CodeSimMemoryLimitExceeded ErstErrorCode = "ERR_MEMORY_LIMIT_EXCEEDED"
 	CodeSimLogicError          ErstErrorCode = "SIM_LOGIC_ERROR"
 	CodeSimProtoUnsup          ErstErrorCode = "SIM_PROTOCOL_UNSUPPORTED"
+	// Aliases used by the simulator lifecycle mapper.
+	CodeSimulatorError    = CodeSimExecFailed
+	CodeSimulatorNotFound = CodeSimNotFound
+	CodeSimulatorCrashed  = CodeSimCrash
 
 	// Shared / general
 	CodeValidationFailed ErstErrorCode = "VALIDATION_FAILED"
@@ -663,6 +686,16 @@ func IsErstCode(err error, code ErstErrorCode) bool {
 		return e.Code == code
 	}
 	return false
+}
+
+// GetCode returns the ErstErrorCode carried by err, or CodeUnknown when the
+// error is not an *ErstError.
+func GetCode(err error) ErstErrorCode {
+	var e *ErstError
+	if As(err, &e) {
+		return e.Code
+	}
+	return CodeUnknown
 }
 
 // ── KMS signing errors [Issue #805] ─────────────────────────────────────────

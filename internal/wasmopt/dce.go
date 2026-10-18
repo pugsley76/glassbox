@@ -31,6 +31,10 @@ type Report struct {
 	OriginalDefinedFunctions int
 	KeptDefinedFunctions     int
 	RemovedDefinedFunctions  int
+	// RemovedFunctionCount is the total number of defined functions removed
+	// during the dead-code elimination pass. It equals RemovedDefinedFunctions
+	// and is exposed for --verbose output and programmatic consumption.
+	RemovedFunctionCount int
 }
 
 // EliminateDeadCode removes unreachable, non-imported functions from a WASM module.
@@ -149,6 +153,7 @@ func EliminateDeadCode(module []byte) ([]byte, Report, error) {
 		OriginalDefinedFunctions: len(codeBodies),
 		KeptDefinedFunctions:     keptCount,
 		RemovedDefinedFunctions:  len(codeBodies) - keptCount,
+		RemovedFunctionCount:     len(codeBodies) - keptCount,
 	}
 	if report.RemovedDefinedFunctions == 0 {
 		return module, report, nil

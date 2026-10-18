@@ -338,8 +338,89 @@ non-empty target path:
   Example: {"my_crate": "/path/to/my_crate/src"}
 ```
 
-Alias target directories that don't exist on disk produce a **warning** (not
-an error) so debugging can continue if only some aliases are stale.
+Every alias target must be an existing directory. A missing target is
+rejected with `alias: target for "<name>" must point to an existing directory`.
+A relative target is resolved against the directory that holds the alias file.
+
+### Path remapping example
+
+Suppose a contract was built in CI, so its DWARF embeds paths like
+`/ci/build/my_crate/src/lib.rs`, and your checkout is at
+`/home/dev/my_crate/src`. Map the embedded prefix to the local directory:
+
+```json
+{
+  "/ci/build/my_crate/src": "/home/dev/my_crate/src"
+}
+```
+
+```bash
+glassbox debug --dry-run --source-alias ./aliases.json <tx-hash>   # validate first
+glassbox debug --source-alias ./aliases.json <tx-hash>
+```
+
+Normalization rules (`AliasResolver.Resolve` in `internal/sourcemap/alias.go`):
+
+- Separators are converted to `/` before comparison. Matching is
+  case-sensitive.
+- An alias matches when it equals the whole path, or when the path starts with
+  `<alias>/`. `/ci/build/my_crate/src` therefore does **not** match
+  `/ci/build/my_crate/srcx/lib.rs`.
+- The rest of the path is joined onto the target:
+  `/ci/build/my_crate/src/lib.rs` → `/home/dev/my_crate/src/lib.rs`.
+- Paths that match no alias are left unchanged. Avoid overlapping aliases,
+  because the order in which they are tried is not defined.
+
+**Confirming that it worked:** the `Location:` line always shows the
+*embedded* path, not the remapped one. Remapping worked if a source excerpt,
+with `> ` marking the current line, appears below that line. If only the
+`Location:` line is printed, the remapped file could not be read. In that
+case, check the target path, or add `--contract-source` as a fallback.
+
+## Artifact naming and search order
+
+Glassbox finds artifacts by **content hash, not by file name**. There are no
+sidecar names to follow.
+
+**WASM discovery** (`DiscoverLocalSymbols`, `internal/sourcemap/discovery.go`):
+
+| Rule | Detail |
+|------|--------|
+| Directory scanned | `<project-root>/target/wasm32-unknown-unknown/release/` only |
+| Files considered | Any name ending in `.wasm`, for example `my_contract.wasm` |
+| Not considered | Subdirectories (such as `deps/`), and files with other extensions |
+| Validation | The file must start with `\0asm`. Other files are skipped with a warning |
+| Matching | The SHA-256 of the file is compared to the on-chain hash |
+
+Separate debug-info files are **not** supported: `.dwp`, `.debug`, `.map`,
+and split-DWARF sidecars are not searched. DWARF must be embedded in the
+`.wasm` file itself.
+
+Minimal layout:
+
+```
+my-project/
+├── src/lib.rs
+└── target/wasm32-unknown-unknown/release/
+    └── my_contract.wasm      # discovered; any *.wasm name works
+```
+
+**Source file lookup** (`displaySourceLocation`, `internal/cmd/debug.go`).
+For each embedded path, Glassbox tries these locations in order and stops at
+the first readable file:
+
+1. The path after `--source-alias` remapping (or the embedded path if no alias
+   matches)
+2. `<--contract-source>/<path>`
+3. `<--contract-source>/<basename of path>`
+4. `src/<path>` relative to the current directory
+
+If the default search cannot find your files, use the explicit overrides
+[`--contract-source`](#--contract-source-override) and
+[`--source-alias`](#--source-alias-alias-mapping).
+
+For symptom-based help, see
+[source-mapping-troubleshooting.md](source-mapping-troubleshooting.md).
 
 ## Dry-run source discovery checks
 
@@ -349,7 +430,6 @@ simulation runs:
 ```
 [OK]   Source directory: ./src
 [OK]   Source alias file: ./aliases.json (2 mapping(s))
-       Warning: source-alias target for "old_crate" does not exist: "/tmp/old_crate/src"
 ```
 
 Failures appear as numbered items in the `Dry-run FAILED` summary with a

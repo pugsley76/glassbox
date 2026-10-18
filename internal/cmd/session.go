@@ -24,6 +24,9 @@ var (
 	sessionPinEndpointFlag string
 	sessionSavePlanFlag    bool // --plan: show execution plan without saving
 	sessionSaveForceFlag   bool // --force: overwrite even on revision conflict [Issue #813]
+	sessionResumeReadOnly  bool // --read-only: resume without migrating [Issue #1115]
+	sessionMigrateDryRun   bool // migrate --dry-run [Issue #1115]
+	sessionMigrateIDFlag   string
 
 	// Session encryption [Issue #560]. Persistent flags on sessionCmd so
 	// every subcommand that opens the store (save, load, list, doctor,
@@ -104,12 +107,13 @@ allowing you to:
   • Analyze patterns across multiple sessions
 
 Available subcommands:
-  save    - Save current session to disk
-  resume  - Restore a saved session
-  list    - View all saved sessions
-  delete  - Remove a saved session
-  recover - Restore a session interrupted by an unexpected process exit
-  doctor  - Check saved sessions for schema and integrity problems`,
+  save        - Save current session to disk
+  resume      - Restore a saved session
+  list        - View all saved sessions
+  delete      - Remove a saved session
+  recover     - Restore a session interrupted by an unexpected process exit
+  doctor      - Check saved sessions for schema and integrity problems
+  lock:status - Print the advisory lock status for a session`,
 	Example: `  # Save current debug session
   glassbox session save
 
@@ -346,17 +350,41 @@ Use 'Glassbox session list' to see available session IDs and names.`,
 		}
 
 		// Resolve session by exact ID, partial ID prefix, tx hash, or fuzzy match.
-		// Load validates schema compatibility and auto-upgrades older sessions.
-		data, resolveErr := resolveSessionInput(ctx, store, sessionID)
-		if resolveErr != nil {
-			if session.IsSchemaError(resolveErr) {
-				return resolveErr
+		// Load validates schema compatibility and auto-upgrades older sessions
+		// unless --read-only is set [Issue #1115].
+		var data *session.Data
+		if sessionResumeReadOnly {
+			loaded, warn, loadErr := store.LoadReadOnly(ctx, sessionID)
+			if loadErr != nil {
+				// Try bookmark name → id without migrating.
+				if id, nameErr := store.LookupIDByName(ctx, sessionID); nameErr == nil {
+					loaded, warn, loadErr = store.LoadReadOnly(ctx, id)
+				}
 			}
-			return fmt.Errorf(
-				"session %q not found: %w\n"+
-					"Hint: run 'glassbox session list' to see all available sessions",
-				sessionID, resolveErr,
-			)
+			if loadErr != nil {
+				return fmt.Errorf(
+					"session %q not found: %w\n"+
+						"Hint: run 'glassbox session list' to see all available sessions",
+					sessionID, loadErr,
+				)
+			}
+			if warn != "" {
+				fmt.Fprintln(os.Stderr, warn)
+			}
+			data = loaded
+		} else {
+			var resolveErr error
+			data, resolveErr = resolveSessionInput(ctx, store, sessionID)
+			if resolveErr != nil {
+				if session.IsSchemaError(resolveErr) {
+					return resolveErr
+				}
+				return fmt.Errorf(
+					"session %q not found: %w\n"+
+						"Hint: run 'glassbox session list' to see all available sessions",
+					sessionID, resolveErr,
+				)
+			}
 		}
 
 		// ── Integrity check ───────────────────────────────────────────────────
@@ -580,6 +608,10 @@ If the checkpoint references a session that was never flushed to the store (the
 process crashed before saving), the stale checkpoint is cleared and guidance is
 printed so you know how to re-run the debug command.
 
+This command also checks for stale advisory lock files left by the crashed
+process and removes them before attempting to reload the session, so subsequent
+save operations are not blocked by a phantom lock.
+
 Validation:
   The checkpoint file is validated for completeness before it is trusted.
   Missing session ID, transaction hash, network, or invalid PID values are
@@ -646,6 +678,17 @@ Validation:
 		fmt.Printf("  Network : %s\n", cp.Network)
 		fmt.Printf("  Started : %s\n", cp.StartedAt.Format(time.RFC3339))
 		fmt.Println()
+
+		// Recover stale advisory lock that the crashed process may have left
+		// behind.  This must happen before we try to open the store and save,
+		// otherwise the store's AcquireLock call will be blocked by the phantom
+		// lock from the dead process.
+		if lockRecovered, lockErr := session.RecoverStaleLock(cp.SessionID); lockErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: stale lock recovery probe failed for session %s: %v\n",
+				cp.SessionID, lockErr)
+		} else if lockRecovered {
+			fmt.Printf("Removed stale advisory lock left by PID %d.\n", cp.PID)
+		}
 
 		// Attempt to load the session from the store.
 		store, storeErr := openSessionStore()
@@ -720,6 +763,70 @@ Validation:
 	},
 }
 
+var sessionLockStatusCmd = &cobra.Command{
+	Use:   "lock:status <session-id>",
+	Short: "Print the advisory lock status for a session",
+	Long: `Print the advisory lock metadata for a session without attempting to acquire
+the lock. This is a read-only diagnostic command.
+
+If the session has an active advisory lock the command prints the lock holder's
+PID, hostname, Glassbox version, and the time the lock was acquired.
+
+If no lock file exists for the session the command prints "not locked".
+
+Use this command to diagnose SESSION_LOCK_HELD errors before deciding whether
+to wait for the holder to finish or to run 'glassbox session recover' to remove
+a stale lock from a crashed process.`,
+	Example: `  # Check whether a session is currently locked
+  glassbox session lock:status <session-id>
+
+  # If locked by a dead process, recover it
+  glassbox session recover`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		sessionID := strings.TrimSpace(args[0])
+		if sessionID == "" {
+			return errors.WrapValidationError(
+				"session ID is required\n" +
+					"Usage: glassbox session lock:status <session-id>",
+			)
+		}
+
+		meta, err := session.ReadLockMetadata(sessionID)
+		if err != nil {
+			return errors.WrapValidationError(fmt.Sprintf(
+				"failed to read lock metadata for session %q: %v", sessionID, err))
+		}
+
+		out := cmd.OutOrStdout()
+		if meta == nil {
+			fmt.Fprintf(out, "Session %q: not locked\n", sessionID)
+			return nil
+		}
+
+		fmt.Fprintf(out, "Session %q: locked\n", sessionID)
+		fmt.Fprintf(out, "  PID              : %d\n", meta.PID)
+		fmt.Fprintf(out, "  Hostname         : %s\n", meta.Hostname)
+		fmt.Fprintf(out, "  Acquired at      : %s\n", meta.AcquiredAt.Format(time.RFC3339))
+		fmt.Fprintf(out, "  Glassbox version : %s\n", meta.GlassboxVersion)
+
+		// Surface whether the holder is still alive as a convenience hint.
+		if meta.PID > 0 {
+			alive, aliveErr := session.IsLockHolderAlive(sessionID)
+			if aliveErr == nil {
+				if alive {
+					fmt.Fprintf(out, "  Status           : LIVE (process %d is running)\n", meta.PID)
+				} else {
+					fmt.Fprintf(out, "  Status           : STALE (process %d is no longer running)\n", meta.PID)
+					fmt.Fprintf(out, "\nHint: run 'glassbox session recover' to remove the stale lock.\n")
+				}
+			}
+		}
+
+		return nil
+	},
+}
+
 var sessionDoctorCmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "Check saved sessions for schema and integrity problems",
@@ -790,12 +897,50 @@ with actionable remediation hints for each degraded session.`,
 	},
 }
 
+var sessionMigrateCmd = &cobra.Command{
+	Use:   "migrate",
+	Short: "Inspect or apply session schema migrations",
+	Long: `Show the pending schema migration plan for the session database, or
+apply migrations. Use --dry-run to print the plan without modifying any
+session files [Issue #1115].`,
+	Example: `  glassbox session migrate --dry-run
+  glassbox session migrate --dry-run --id <session-id>`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dbPath := session.DefaultDBPath()
+		if sessionMigrateDryRun {
+			steps, err := session.DryRunMigrationPlanForSession(dbPath, sessionMigrateIDFlag)
+			if err != nil {
+				return err
+			}
+			if len(steps) == 0 {
+				fmt.Println("No pending migrations — schema is current.")
+				return nil
+			}
+			fmt.Println("Pending migration plan (dry-run, no changes made):")
+			for i, step := range steps {
+				fmt.Printf("  %d. v%d → v%d: %s\n", i+1, step.FromVersion, step.ToVersion, step.Description)
+			}
+			return nil
+		}
+		return fmt.Errorf("apply mode not requested; pass --dry-run to print the migration plan")
+	},
+}
+
 func init() {
 	sessionSaveCmd.Flags().StringVar(&sessionIDFlag, "id", "", "Custom session ID (default: auto-generated)")
 	sessionSaveCmd.Flags().StringVar(&sessionNameFlag, "name", "", "Bookmark name for this session snapshot")
 	sessionSaveCmd.Flags().StringVar(&sessionPinEndpointFlag, "pin-endpoint", "", "Pin an RPC endpoint URL with this session")
 	sessionSaveCmd.Flags().BoolVar(&sessionSavePlanFlag, "plan", false, "Print the execution plan (DB path, session ID) without saving")
 	sessionSaveCmd.Flags().BoolVar(&sessionSaveForceFlag, "force", false, "Overwrite the session even if another process has saved a newer revision (bypasses conflict check)")
+
+	sessionResumeCmd.Flags().BoolVar(&sessionResumeReadOnly, "read-only", false,
+		"Open the session without running schema migrations (warns if schema is stale)")
+
+	sessionMigrateCmd.Flags().BoolVar(&sessionMigrateDryRun, "dry-run", false,
+		"Print the pending migration plan without modifying the session database")
+	sessionMigrateCmd.Flags().StringVar(&sessionMigrateIDFlag, "id", "",
+		"Limit the dry-run plan to a single session ID")
 
 	sessionCmd.PersistentFlags().BoolVar(&sessionEncryptFlag, "session-encrypt", false,
 		"Encrypt sensitive session fields at rest (or set GLASSBOX_SESSION_ENCRYPTION)")
@@ -811,6 +956,8 @@ func init() {
 	sessionCmd.AddCommand(sessionDeleteCmd)
 	sessionCmd.AddCommand(sessionRecoverCmd)
 	sessionCmd.AddCommand(sessionDoctorCmd)
+	sessionCmd.AddCommand(sessionMigrateCmd)
+	sessionCmd.AddCommand(sessionLockStatusCmd)
 
 	rootCmd.AddCommand(sessionCmd)
 }

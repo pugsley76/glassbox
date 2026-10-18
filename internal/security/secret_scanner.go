@@ -229,10 +229,8 @@ func (s *SecretScanner) GetErrorMessage(result ScanResult) string {
 		parts = append(parts, "\nExport blocked due to strict mode.")
 		parts = append(parts, "To allow this export:")
 		parts = append(parts, "  1. Remove the secret from the data, or")
-		parts = append(strings.Join([]string{
-			"  2. Use opt-in mode instead of strict mode, or",
-			"  3. Add an explicit override for this location if it's a test fixture",
-		}, "\n"))
+		parts = append(parts, "  2. Use opt-in mode instead of strict mode, or")
+		parts = append(parts, "  3. Add an explicit override for this location if it's a test fixture")
 	} else {
 		parts = append(parts, "\nWarning: secrets detected but export allowed in opt-in mode.")
 	}

@@ -14,6 +14,10 @@ import (
 	"github.com/dotandev/glassbox/internal/logger"
 )
 
+// DefaultWASMCacheTTL is the TTL applied when NewWASMCache is called with a
+// zero or negative ttl argument.
+const DefaultWASMCacheTTL = 72 * time.Hour
+
 // WASMEntry is one persisted cache record. It stores both the full CacheKey
 // (for later auditing / diagnostics) and the analysis output as raw bytes.
 type WASMEntry struct {
@@ -36,7 +40,8 @@ type WASMEntry struct {
 	CachedAt time.Time `json:"cached_at"`
 
 	// ExpiresAt is the wall-clock time after which the entry is treated as
-	// stale and will be evicted on the next read or GC sweep.
+	// stale and will be evicted on the next read or GC sweep. A zero time.Time
+	// is interpreted as "already expired" and will cause immediate eviction.
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
@@ -57,14 +62,21 @@ type WASMCache struct {
 	manager *Manager
 	ttl     time.Duration
 	diag    *Diagnostics
-	mu      sync.RWMutex // protects in-flight reads so concurrent readers are safe
+	mu      sync.RWMutex // protects concurrent access to cache operations (Set, Get, Invalidate)
 }
 
 // NewWASMCache creates a WASMCache backed by manager with the given TTL.
+// A zero or negative ttl uses DefaultWASMCacheTTL (72 hours).
 // diag may be nil; if provided, all hits and misses are recorded.
 func NewWASMCache(manager *Manager, ttl time.Duration, diag *Diagnostics) *WASMCache {
-	if ttl <= 0 {
-		ttl = 72 * time.Hour
+	if manager == nil {
+		panic("cache: NewWASMCache called with nil manager")
+	}
+	if ttl < 0 {
+		panic("cache: NewWASMCache called with negative TTL")
+	}
+	if ttl == 0 {
+		ttl = DefaultWASMCacheTTL
 	}
 	return &WASMCache{
 		manager: manager,
