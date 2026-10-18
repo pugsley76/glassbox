@@ -105,6 +105,93 @@ Include **only the fields required to hit the code path under test**. Omit or
 zero-value every other field. A fixture that reproduces the failure in 5 fields
 is better than one that copies a full real-world response.
 
+The guide below shows a before/after pair for an RPC fixture.  The same
+principle applies to every layer.
+
+#### Before — copied from a real response
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "hash":           "5c0a1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab",
+    "status":         "SUCCESS",
+    "ledger":         50023190,
+    "createdAt":      "1751234567",
+    "feeCharged":     "100",
+    "applicationOrder": 1,
+    "feeBump":        false,
+    "envelopeXdr":    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "resultXdr":      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "resultMetaXdr":  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    "operationResults": [],
+    "txHash":         "5c0a1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"
+  }
+}
+```
+
+That fixture has 11 fields.  The bug under test is that a missing `status`
+field triggers a panic instead of a validation error.  Only two fields are
+needed to reach that code path:
+
+#### After — trimmed to the fields that matter
+
+```json
+{
+  "_comment": "Reproduces issue #NNN: missing status field causes panic instead of BoundaryError.",
+  "_failure_class": "panic-on-bad-input",
+  "_issue": "NNN",
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "hash": "5c0a1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab"
+  }
+}
+```
+
+The irrelevant fields (`ledger`, `createdAt`, `feeCharged`, etc.) are dropped
+entirely.  The only remaining fields are those that exercise the `status`
+validation path.
+
+**The guiding question is relevance, not size.**  Ask: "if I remove this
+field, does the test still hit the same code path?"  Remove it if yes.  Keep
+it if no, or if it provides context that makes the fixture self-documenting.
+
+### When larger fixtures are justified
+
+Binary fixtures (e.g. minimal WASM stubs in `fixtures/sourcemap/`) are
+justified when the code under test is a binary parser and a smaller input
+would not trigger the same parser branch.  Some situations that legitimately
+produce larger fixtures:
+
+- **Binary format coverage** — a WASM section header that triggers a specific
+  opcode decoder must contain all the preceding header bytes to reach that
+  decoder.  Trimming them would produce an invalid input that the parser
+  rejects earlier.
+
+- **Multi-part schemas** — an XDR-encoded footprint that exercises overlap
+  detection must contain at least two ledger keys; a single-key fixture would
+  not reach the comparison code.
+
+- **Signed audit logs** — a signed log fixture must retain the full canonical
+  envelope because any structural change invalidates the signature.  In that
+  case, document the regeneration command in `_regenerate` and keep the
+  original signature intact.
+
+For these cases, add a `_size_justification` comment to the fixture:
+
+```json
+{
+  "_size_justification": "Binary WASM fixture: all preceding section headers are required to reach the custom-section decoder under test.",
+  ...
+}
+```
+
+Binary fixtures in `fixtures/sourcemap/` should also include a companion
+`.md` file explaining what contract behaviour the WASM encodes, because binary
+content is opaque in code review.
+
 ### Secret avoidance
 
 Fixtures must **never** contain:
@@ -120,6 +207,68 @@ both the filename and a comment at the top of the file.
 ---
 
 ## 4. Write the test
+
+### Copyable template
+
+The snippet below is a self-contained, one-layer template you can copy and
+fill in.  It is intentionally minimal so it compiles from day one, even before
+the fixture is wired to a real code path.
+
+**Fixture file** (`test/regression/fixtures/rpc/rpc_template_issueNNN.json`):
+
+```json
+{
+  "_comment": "Template: replace this comment with the original failure description. (Closes #NNN.)",
+  "_failure_class": "<failure-class-slug>",
+  "_issue": "NNN",
+  "_template": true,
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32600,
+    "message": "<describe the error the server returns>"
+  }
+}
+```
+
+Mark the fixture with `"_template": true` until an actual test consumes it.
+Remove the key (or set it to `false`) when the real test is wired up.
+
+**Test file** (`internal/cmd/rpc_template_regression_test.go`):
+
+```go
+// TestRegression_RPC_Template_IssueNNN verifies that <describe expected behaviour>.
+//
+// Original failure: <describe what the user saw>.  (Closes #NNN.)
+func TestRegression_RPC_Template_IssueNNN(t *testing.T) {
+    // Failure class: <failure-class-slug>
+
+    // 1. Arrange — build the minimal fixture.
+    //    Replace NotFound() with the builder method that matches your failure.
+    fixture := testhelpers.NewRPCFixture().NotFound().Build()
+
+    // 2. Act — exercise the code path under test.
+    //    Replace this placeholder with the real function call.
+    err := fmt.Errorf("transaction not found: %s", testhelpers.CanonicalTxHash)
+
+    // 3. Assert — verify the exact failure class was reproduced.
+    if err == nil {
+        t.Fatal("<what must be true> must return an error, got nil")
+    }
+    if !strings.Contains(strings.ToLower(err.Error()), "<expected keyword>") {
+        t.Errorf("error should mention '<expected keyword>', got: %q", err.Error())
+    }
+    _ = fixture // suppress unused-variable error until Step 2 is wired
+}
+```
+
+**Naming**: follow `TestRegression_<Layer>_<Scenario>_<Observation>` exactly.
+Every test in this repository that starts with `TestRegression_` is picked up
+by the `go-regression` CI job.
+
+**Issue link**: the `// (Closes #NNN.)` comment in the test and the `_issue`
+field in the fixture must agree.  CI validates that no fixture has an empty
+`_issue` field once `_template` is removed.
 
 ### File location
 
@@ -252,6 +401,7 @@ comment. If none fits, add a new one and describe it here.
 | Class | Description |
 |-------|-------------|
 | `rpc-not-found-masquerade` | NOT_FOUND presented as a connectivity error |
+| `rpc-error-normalization` | RPC error envelope parsed/normalised incorrectly (wrong code, leaked body, wrong category) |
 | `budget-exhaustion-silent` | CPU/memory exhaustion swallowed without a diagnostic |
 | `empty-trace-silent-export` | Zero-step trace written to disk without an error |
 | `late-validation` | Flag/input validated after an expensive operation instead of at startup |

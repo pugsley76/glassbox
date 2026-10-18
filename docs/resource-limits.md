@@ -67,43 +67,109 @@ type AggregateLimitExceededError struct {
 
 ## Default Limits
 
-| Limit Type | Default Value | Description |
-|------------|---------------|-------------|
-| `DefaultResponsePayloadLimit` | 32 MiB | Maximum bytes per single RPC response |
-| `DefaultAggregateFetchLimit` | 512 MiB | Maximum total bytes across all responses |
-| `DefaultEnvelopeLimit` | 1 MiB | Maximum size for transaction envelopes |
-| `DefaultLedgerEntriesLimit` | 1 MiB | Maximum size for ledger entries responses |
+| Limit | Constant | Default | Type | Flag to raise it |
+|-------|----------|---------|------|-----------------|
+| Per-response payload | `DefaultResponsePayloadLimit` | 32 MiB | Hard cap | `--rpc-response-limit` |
+| Aggregate fetch (session) | `DefaultAggregateFetchLimit` | 512 MiB | Hard cap | `--rpc-aggregate-limit` |
+| Transaction envelope | `DefaultEnvelopeLimit` | 1 MiB | Hard cap | *(programmatic only)* |
+| Ledger entries response | `DefaultLedgerEntriesLimit` | 1 MiB | Hard cap | *(programmatic only)* |
 
-## Configuration
+### Hard caps vs warning thresholds
 
-### CLI Flags
-
-```bash
-# Set per-response limit (default: 32 MiB)
-glassbox debug --rpc-response-limit 64000000 abc123...
-
-# Set aggregate limit (default: 512 MiB)
-glassbox debug --rpc-aggregate-limit 1073741824 abc123...
-
-# Use both limits together
-glassbox debug --rpc-response-limit 64000000 --rpc-aggregate-limit 1073741824 abc123...
-```
-
-### Programmatic Configuration
+Every limit in this table is a **hard cap**: when it is reached the request
+is rejected immediately with a typed error and no partial data is returned.
+There are currently no soft warning thresholds (values that log a warning but
+continue).  If you need to understand how close a workload is to a limit
+before it is hit, query the aggregate tracker stats programmatically:
 
 ```go
-import "github.com/dotandev/glassbox/internal/rpc"
+totalBytes, requestCount, limit := client.aggregateTracker.GetStats()
+// Compare totalBytes against limit before issuing the next request.
+```
 
-// Set per-response limit to 64 MiB
-client, err := rpc.NewClient(
-    rpc.WithNetwork(rpc.Mainnet),
-    rpc.WithResponsePayloadLimit(64 * 1024 * 1024),
+## Identifying which limit caused a failure
+
+Use the error symptom in the table below to map an observed failure to its
+setting name, default value, and unit.
+
+| Symptom | Error code | Setting constant | Default | Unit | Flag |
+|---------|-----------|-----------------|---------|------|------|
+| `rpc: <op> response exceeded size limit` | `ERR_PAYLOAD_TOO_LARGE` | `DefaultResponsePayloadLimit` | 32 | MiB | `--rpc-response-limit` |
+| `rpc: aggregate fetch limit exceeded` | `ERR_AGGREGATE_LIMIT_EXCEEDED` | `DefaultAggregateFetchLimit` | 512 | MiB | `--rpc-aggregate-limit` |
+| `rpc: envelope exceeded size limit` | `ERR_ENVELOPE_TOO_LARGE` | `DefaultEnvelopeLimit` | 1 | MiB | *(programmatic)* |
+| `rpc: ledger entries response exceeded size limit` | `ERR_LEDGER_ENTRIES_TOO_LARGE` | `DefaultLedgerEntriesLimit` | 1 | MiB | *(programmatic)* |
+
+Check the `code` field in the JSON error output first — it is the most
+reliable discriminator when multiple limits are configured.
+
+## Per-category examples
+
+Each example below changes **only the limit relevant to that category**.
+Run these against a real or mock RPC endpoint.
+
+### Per-response limit — large `getLedgerEntries` response
+
+Symptom: a contract with a large state footprint causes
+`ERR_PAYLOAD_TOO_LARGE` on `getLedgerEntries`.
+
+```bash
+# Raise the per-response limit to 64 MiB (leave aggregate at its default).
+glassbox debug --rpc-response-limit 67108864 <tx-hash>
+```
+
+Programmatic equivalent:
+
+```go
+client, _ := rpc.NewClient(
+    rpc.WithNetwork(rpc.Testnet),
+    rpc.WithResponsePayloadLimit(64 * 1024 * 1024), // 64 MiB
 )
+```
 
-// Set aggregate limit to 1 GiB
-client, err := rpc.NewClient(
-    rpc.WithNetwork(rpc.Mainnet),
-    rpc.WithAggregateFetchLimit(1024 * 1024 * 1024),
+### Aggregate limit — long debugging session with many requests
+
+Symptom: after several `debug` or `regression-test` invocations,
+`ERR_AGGREGATE_LIMIT_EXCEEDED` fires mid-session.
+
+```bash
+# Raise the aggregate limit to 1 GiB (leave per-response at its default).
+glassbox debug --rpc-aggregate-limit 1073741824 <tx-hash>
+```
+
+Programmatic equivalent:
+
+```go
+client, _ := rpc.NewClient(
+    rpc.WithNetwork(rpc.Testnet),
+    rpc.WithAggregateFetchLimit(1024 * 1024 * 1024), // 1 GiB
+)
+```
+
+### Envelope limit — unusually large transaction envelope
+
+Symptom: `ERR_ENVELOPE_TOO_LARGE` when submitting a multi-operation
+transaction whose XDR encoding exceeds 1 MiB.
+
+This limit is not yet exposed as a CLI flag.  Raise it programmatically:
+
+```go
+client, _ := rpc.NewClient(
+    rpc.WithNetwork(rpc.Testnet),
+    rpc.WithEnvelopeLimit(4 * 1024 * 1024), // 4 MiB
+)
+```
+
+### Ledger entries limit — contract with wide state footprint
+
+Symptom: `ERR_LEDGER_ENTRIES_TOO_LARGE` when the `getLedgerEntries`
+response for a contract with many storage slots exceeds 1 MiB.
+
+This limit is not yet exposed as a CLI flag.  Raise it programmatically:
+
+```go
+client, _ := rpc.NewClient(
+    rpc.WithNetwork(rpc.Testnet),
+    rpc.WithLedgerEntriesLimit(8 * 1024 * 1024), // 8 MiB
 )
 ```
 
@@ -158,28 +224,31 @@ Errors are serialized to compact JSON for machine-readable handling:
 
 ## Operational Tuning
 
-### When to Increase Limits
+### When to increase a limit
 
-Increase limits when:
-- Working with legitimate large transactions (e.g., complex contracts)
-- Fetching many ledger entries in a single request
-- Debugging contracts with large state or trace payloads
+Increase a specific limit when you have identified it as the cause of a
+failure (use the symptom table above to confirm).  Raise only the relevant
+limit — leave the others at their defaults so the remaining protections stay
+in place.
 
-### Recommended Limits by Use Case
+Legitimate reasons to raise a limit:
+- A contract with large on-chain state causes `getLedgerEntries` to exceed the
+  per-response limit.
+- A long debugging session with many RPC calls approaches the aggregate limit.
+- An unusual multi-operation transaction has an envelope larger than 1 MiB.
 
-| Use Case | Per-Response | Aggregate |
-|----------|--------------|-----------|
-| Typical debugging | 32 MiB (default) | 512 MiB (default) |
-| Large contracts | 64 MiB | 1 GiB |
-| Batch operations | 128 MiB | 2 GiB |
-| Stress testing | 256 MiB | 4 GiB |
+### Safety guidelines
 
-### Safety Guidelines
+- **Raise limits selectively.** Change the one limit that matches the error
+  code in the failure.  Raising all limits at once removes the protection they
+  provide without addressing the underlying scope.
+- **A zero value is unlimited.** Passing `0` to `WithResponsePayloadLimit` or
+  `--rpc-response-limit 0` disables that limit entirely.  This is appropriate
+  only for controlled local testing; never use it against untrusted endpoints.
+- **Prefer smaller request scope first.** Before raising a limit, try reducing
+  the number of ledger keys in the footprint or splitting a batch into smaller
+  chunks.  A smaller scope is faster and safer than a higher limit.
 
-1. **Never disable limits**: Use 0 to use defaults, not to disable enforcement
-2. **Monitor aggregate usage**: Check aggregate stats before long-running operations
-3. **Use request batching**: Break large requests into smaller chunks when possible
-4. **Validate endpoints**: Use trusted RPC endpoints in production
 
 ## Implementation Details
 
