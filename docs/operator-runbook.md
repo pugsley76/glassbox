@@ -239,6 +239,13 @@ glassbox doctor --verbose
    ```sh
    glassbox doctor --fix
    ```
+   In an interactive terminal, Glassbox asks before each fix. In CI or another
+   non-interactive environment, use `--yes` only when the job is authorized to
+   apply those fixes; without it, the command returns an error instead of
+   accepting the prompts automatically:
+   ```sh
+   glassbox --non-interactive doctor --fix --yes
+   ```
 2. **Build manually:**
    ```sh
    cd simulator && cargo build --release

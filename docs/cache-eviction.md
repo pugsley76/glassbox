@@ -123,6 +123,23 @@ Ties are broken by entry key so a `--dry-run` report is stable across runs.
 
 `--dry-run` prints the candidates and their scores without deleting anything.
 
+## Non-interactive use
+
+When there is cache data to delete, `cache clean`, `cache clear`, and `cache
+artifact clear` prompt for confirmation. In CI or another non-interactive
+environment, they return an error unless the command's `--force` flag is
+supplied. `--non-interactive` disables prompts; it does not approve deletion.
+
+Use `--force` only in a job that is explicitly intended to remove the selected
+cache data:
+
+```bash
+glassbox --non-interactive cache clean --force
+glassbox --non-interactive cache clear --force
+glassbox --non-interactive cache artifact clear \
+  --type contract_code --network testnet --force
+```
+
 ## API
 
 ```go

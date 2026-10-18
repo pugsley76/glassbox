@@ -134,6 +134,29 @@ go test ./internal/cmd/... -run TestCompletionSnapshot -update -count=1
 
 Commit the updated files under `internal/cmd/testdata/completion/`.
 
+### Contributor workflow
+
+Regenerate snapshots when an intentional change to the public command tree,
+flags, aliases, or completion output changes a generated script. From the
+repository root, run the supported generator:
+
+```bash
+./scripts/gen-completion-snapshots.sh
+```
+
+Review the generated diffs before committing:
+
+```bash
+git diff -- internal/cmd/testdata/completion/
+```
+
+The diff should correspond to the intentional CLI change. If it shows unrelated
+commands, flags, or shell-script changes, investigate the command tree or
+completion generator rather than accepting the snapshots blindly. The script
+writes only the checked-in completion snapshots; it does not install shell
+completions on the local machine. To check existing snapshots without updating
+them, run `go test ./internal/cmd/... -run 'TestCompletionSnapshot' -count=1`.
+
 ---
 
 ## Adding a new enum-valued flag

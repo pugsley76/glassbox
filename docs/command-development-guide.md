@@ -40,6 +40,49 @@ Naming rules:
 - Keep `Short` under 60 characters. `Long` is the place for full context, accepted values, environment variable names, and gotchas.
 - Always set `GroupID` — it controls where the command appears in `--help`.
 
+### Root persistent flags
+
+These flags are registered on the root command and inherited by its
+subcommands. Their defaults below are the values registered with Cobra; some
+flags document an automatic behavior when left at that default. Command-local
+flags are intentionally not included. Hidden internal flags are omitted.
+
+| Flag | Default | Purpose |
+|---|---:|---|
+| `--audit-log` | empty | Write a signed operation audit log |
+| `--audit-log-provider` | empty | Select the audit signing provider |
+| `--audit-log-software-private-key` | empty | Supply the software audit signing key |
+| `--audit-log-pkcs11-module` | empty | Set the PKCS#11 module path |
+| `--audit-log-pkcs11-pin` | empty | Supply the PKCS#11 PIN |
+| `--audit-log-pkcs11-token-label` | empty | Select the PKCS#11 token |
+| `--audit-log-pkcs11-key-label` | empty | Select the PKCS#11 key by label |
+| `--audit-log-pkcs11-key-id` | empty | Select the PKCS#11 key by hex ID |
+| `--audit-log-meta` | empty | Add audit metadata as `key=value` entries |
+| `--deterministic-seed` | empty | Set the deterministic replay seed |
+| `--deterministic` | `false` | Enable deterministic replay mode |
+| `--rpc-response-limit` | `0` | Set the response limit; `0` uses the 32 MiB default |
+| `--rpc-aggregate-limit` | `0` | Set the aggregate limit; `0` uses the 512 MiB default |
+| `--allow-untrusted-plugins` | `false` | Allow community and untrusted plugins to load |
+| `--timestamp` | `0` | Override the ledger header timestamp |
+| `--window` | `0` | Set the simulation time window in seconds |
+| `--profile` | `false` | Enable CPU and memory profiling |
+| `--profile-format` | `html` | Choose `html` or `svg` profile output |
+| `--log-level` | empty | Set log verbosity; empty leaves the configured level unchanged |
+| `--verbose` | `false` | Enable debug-level output |
+| `--no-color` | `false` | Disable ANSI color output |
+| `--non-interactive` | `false` | Disable prompts and terminal controls; CI and pipes are also detected |
+| `--telemetry` | `false` | Opt in to anonymized command usage telemetry |
+| `--telemetry-anonymized` | `true` | Send telemetry in anonymized mode |
+| `--version`, `-V` | `false` | Print the Glassbox version |
+
+For example, a root persistent flag can be used with a subcommand:
+
+```bash
+glassbox --no-color debug <transaction-hash>
+```
+
+Options such as `debug --network` belong to that command, not this table.
+
 ### Help text requirements
 
 The `Long` field and `Example` field are required, not optional. Help must cover:
@@ -295,6 +338,23 @@ if tc.IsInteractive() {
 ```
 
 Non-interactive mode is auto-detected from CI environment variables and pipe/redirect detection. Users can also force it with `--non-interactive`. Your command gets this for free from `PersistentPreRunE` — just query `termctx.IsNonInteractive()` at the point where you would display interactive UI.
+
+Non-interactive mode does not mean “answer yes.” A command that needs
+confirmation either requires its explicit confirmation flag or returns an
+actionable error. Use the command-specific flag only when the job is intended
+to perform the operation:
+
+```bash
+glassbox --non-interactive cache clear --force
+glassbox --non-interactive doctor --fix --yes
+glassbox --non-interactive update --yes
+```
+
+`--force` authorizes cache deletion, `doctor --fix --yes` skips fix prompts,
+and `update --yes` proceeds with the update. Without those flags, non-interactive
+cache, doctor, and update confirmation paths fail rather than silently
+approving the action. See [cache eviction](cache-eviction.md) for cache-specific
+behavior.
 
 Color output follows the same pattern. Call `visualizer.SetNoColor(true)` only if you add a new color subsystem; all built-in helpers already check the global flag.
 
