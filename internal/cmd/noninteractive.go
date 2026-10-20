@@ -58,3 +58,34 @@ func requireInteractiveShell(cmd *cobra.Command) error {
 	}
 	return nil
 }
+
+// CacheCleanupAutomationExample is the documented CI recipe for bounded cache
+// cleanup. It is kept next to the non-interactive helpers so the flags and the
+// force requirements stay in sync with the code that enforces them.
+//
+// Impact: `cache rpc --older-than 7 --network testnet` only removes cached RPC
+// responses for the testnet network that are older than 7 days. It never
+// touches other networks, other cache kinds, or entries newer than the cutoff.
+//
+// Non-interactive rules:
+//   - `cache clean` and `cache clear` prompt for confirmation and therefore
+//     require `--force` when termctx.GlobalNonInteractive() is true (see
+//     internal/cache/cache.go and confirmWithForceOrNonInteractive above).
+//   - A full `cache clear` is not routine CI behavior: it discards every cache
+//     entry and forces cold rebuilds. Prefer age/network-scoped cleanup.
+const CacheCleanupAutomationExample = `# Bounded cache cleanup for CI.
+#
+# Impact: removes only cached RPC responses for the testnet network that are
+# older than 7 days. Other networks, other cache kinds, and newer entries are
+# left untouched. This is NOT a full cache clear.
+#
+# Note: 'cache clean' and 'cache clear' prompt for confirmation and require
+# --force in non-interactive mode. Avoid a blanket 'cache clear' in CI; it
+# discards all entries and forces cold rebuilds.
+set -euo pipefail
+
+if ! glassbox cache rpc --older-than 7 --network testnet; then
+  echo "cache rpc cleanup failed" >&2
+  exit 1
+fi
+`

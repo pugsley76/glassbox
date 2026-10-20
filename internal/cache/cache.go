@@ -285,6 +285,69 @@ func (m *Manager) Clean(force bool) (*CleanupStatus, error) {
 	return status, nil
 }
 
+// Troubleshooting guidance for cache size, access, and stale-entry symptoms.
+// The first step for every symptom is observational (cache status) before any
+// cleanup, and targeted cleanup is preferred over full cache removal.
+//
+// RPC cache lives in the SQLite cache.db under ~/.glassbox/ and is separate
+// from the file-based caches under ~/.glassbox/cache (sourcemap and artifact).
+const cacheTroubleshootingDoc = `# Cache Troubleshooting
+
+Glassbox keeps two kinds of local cache:
+
+- **RPC cache** — a SQLite database (cache.db) under ~/.glassbox/. It stores
+  RPC responses and is managed with the cache rpc commands.
+- **File-based caches** — stored under ~/.glassbox/cache. These include the
+  **sourcemap** cache and the **artifact** cache, managed with the cache
+  artifact commands.
+
+Because they are separate, a large or stale RPC cache will not be fixed by
+clearing the artifact cache, and vice versa. Always identify which cache is
+affected before cleaning anything.
+
+## Symptom: unexpected cache size
+
+1. Observe first: run ` + "`Glassbox cache status`" + ` to see the total size and
+   per-cache breakdown. For the RPC cache specifically, run
+   ` + "`Glassbox cache status --rpc`" + `.
+2. Compare the reported size against the configured limit. If only the RPC
+   cache is oversized, prefer targeted cleanup:
+   - ` + "`Glassbox cache rpc --older-than <duration>`" + ` to drop old entries.
+   - ` + "`Glassbox cache rpc --network <network>`" + ` to drop entries for a
+     single network.
+3. If only the artifact cache is oversized, prefer targeted cleanup:
+   - ` + "`Glassbox cache artifact clear --type <type> --network <network>`" + `.
+4. Only if targeted cleanup is insufficient should you consider a full
+   ` + "`Glassbox cache clear`" + `, which removes all local caches.
+
+## Symptom: permission errors
+
+1. Observe first: run ` + "`Glassbox cache status`" + ` (and
+   ` + "`Glassbox cache status --rpc`" + ` for the RPC cache) to confirm which
+   cache path is failing.
+2. Check ownership and permissions on ~/.glassbox/ and ~/.glassbox/cache.
+   The cache directory is created with mode 0700; if it was created by another
+   user, fix ownership rather than deleting the cache.
+3. If cache.db is locked or unreadable, ensure no other Glassbox process is
+   running before retrying.
+4. Do not run a full ` + "`Glassbox cache clear`" + ` to work around permissions —
+   it will fail for the same reason and may remove data you still need.
+
+## Symptom: stale or missed entries
+
+1. Observe first: run ` + "`Glassbox cache status`" + ` and
+   ` + "`Glassbox cache status --rpc`" + ` to confirm the entry is present and
+   when it was last updated.
+2. For stale RPC responses, target the affected network:
+   ` + "`Glassbox cache rpc --network <network>`" + `, or age out old entries with
+   ` + "`Glassbox cache rpc --older-than <duration>`" + `.
+3. For stale sourcemaps or artifacts, target the affected type and network:
+   ` + "`Glassbox cache artifact clear --type <type> --network <network>`" + `.
+4. Re-run the original command to repopulate only the entries you removed.
+   Avoid a full ` + "`Glassbox cache clear`" + ` unless the problem spans every
+   cache.
+`
+
 // formatBytes converts bytes to human-readable format
 func formatBytes(bytes int64) string {
 	units := []string{"B", "KiB", "MiB", "GiB", "TiB"}
