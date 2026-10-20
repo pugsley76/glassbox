@@ -879,3 +879,53 @@ func shellQuote(s string) string {
 func verificationError(issues []string) error {
 	return fmt.Errorf("protocol registration verification failed: %s", strings.Join(issues, "; "))
 }
+
+// ReversibleWorkflowHelp documents the safe, reversible protocol registration
+// workflow. It is intended to be appended to the protocol:register Long help so
+// users understand that --dry-run is non-mutating and that registration can be
+// rolled back with protocol:unregister.
+const ReversibleWorkflowHelp = `Reversible registration workflow:
+
+Protocol registration changes operating-system state (registry keys, desktop
+files, or LaunchServices bundles). Use the following ordered sequence so every
+change is previewed, verified, and reversible:
+
+  1. Preview (non-mutating)
+       glassbox protocol:register --dry-run
+
+     --dry-run does NOT modify any OS state. It only runs the same diagnostics
+     as 'glassbox protocol:diagnose' and renders the exact plan of artefacts
+     that would be written or modified. No registry keys, desktop files, or
+     app bundles are created, changed, or removed. Run this first to confirm
+     the target paths and commands before touching the system.
+
+  2. Register
+       glassbox protocol:register
+
+     Applies the plan shown by the dry-run. This is the only step that mutates
+     OS state.
+
+  3. Verify
+       glassbox protocol:verify
+       glassbox protocol:verify --probe
+
+     Confirms the handler is registered and points at the expected binary.
+     --probe additionally performs a live end-to-end check of the handler.
+
+  4. Inspect status
+       glassbox protocol:status
+
+     Summarises the current registration state and health.
+
+Rollback / recovery:
+
+  glassbox protocol:unregister
+
+  Removes the registration artefacts created by step 2 (registry keys, desktop
+  files, wrapper scripts, or the macOS app bundle). After unregistering, the
+  glassbox:// handler is no longer associated with this binary. Re-running
+  'glassbox protocol:register' restores the handler, so the workflow is fully
+  reversible — you can unregister and re-register at any time.
+
+If any step reports a problem, run 'glassbox protocol:diagnose' for details and
+'glassbox protocol:repair' to restore a healthy registration before retrying.`

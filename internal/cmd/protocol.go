@@ -248,15 +248,41 @@ appropriate flags.
 URI format:
   glassbox://debug/<64-char-hex>?network=<network>[&op=<n>][&view=<mode>]
 
-Required parameters:
-  network   One of: testnet, mainnet, futurenet
+Only the glassbox:// scheme is accepted. Other schemes (for example
+https://, file://, or custom schemes) are rejected as invalid URIs.
 
-Optional parameters:
-  op        Zero-based operation index (e.g. op=0 for the first operation)
-  operation Alias for op (legacy; op takes precedence when both are provided)
-  view      Initial view mode: trace, flamegraph, events, auth, budget, storage
-  source    Free-form source identifier (e.g. "dashboard")
-  signature Free-form signature hint
+URI PARAMETER REFERENCE
+
+  Parameter   Required  Default  Accepted values / validation
+  ----------  --------  -------  ---------------------------------------------
+  network     yes       —        testnet | mainnet | futurenet
+                                 (any other value, e.g. devnet, is invalid)
+  op          no        —        Zero-based non-negative integer (op=0, op=1, …)
+                                 Negative values (op=-1) and non-integers are invalid
+  operation   no        —        Legacy alias for op; must be a non-negative integer
+                                 When both op and operation are present, op wins
+  view        no        —        trace | flamegraph | events | auth | budget | storage
+                                 Unknown values (e.g. view=unknown) are invalid
+  source      no        —        Free-form source identifier (e.g. source=dashboard)
+  signature   no        —        Free-form signature hint
+
+  The 64-character hexadecimal transaction hash is part of the URI path, not a
+  query parameter, and is required for every glassbox://debug/ URI.
+
+Valid examples:
+  glassbox://debug/<64-hex>?network=testnet
+  glassbox://debug/<64-hex>?network=testnet&op=0&view=trace
+  glassbox://debug/<64-hex>?network=futurenet&op=1&view=flamegraph
+  glassbox://debug/<64-hex>?network=mainnet&source=dashboard&signature=abc
+
+Invalid examples:
+  https://debug/<64-hex>?network=testnet     (wrong scheme — only glassbox:// is accepted)
+  glassbox://debug/<64-hex>                  (missing required network parameter)
+  glassbox://debug/<64-hex>?network=devnet   (network must be testnet, mainnet, or futurenet)
+  glassbox://debug/<64-hex>?network=testnet&view=unknown   (unknown view mode)
+  glassbox://debug/<64-hex>?network=testnet&op=-1          (op must be non-negative)
+
+Run 'glassbox protocol:handle --help' for this reference at any time.
 
 Exit codes:
   0  — dispatch succeeded
