@@ -99,3 +99,83 @@ glassbox config show --explain --json \
 
 The environment bindings and their supported variable names are documented in
 [Bindings and environment variables](bindings-environments.md).
+
+## Migrating a Configuration File
+
+`glassbox config migrate` upgrades a config file to the current schema version.
+It accepts these flags:
+
+| Flag | Description |
+|------|-------------|
+| `--path <file>` | Config file to migrate (defaults to the standard user config path) |
+| `--dry-run` | Preview the migration without writing changes |
+| `--backup` | Write a `.bak` copy of the original before migrating (default: true) |
+| `--no-backup` | Skip the backup copy |
+
+Migration changes local state, so preserve the original file before applying
+anything. A safe sequence:
+
+```bash
+# 1. Back up the original file yourself
+cp ~/.glassbox/config.toml ~/.glassbox/config.toml.bak
+
+# 2. Inspect the current effective configuration and per-field sources
+glassbox config show --explain
+
+# 3. Preview the migration without writing
+glassbox config migrate --dry-run
+
+# 4. Apply the migration (writes a .bak copy by default)
+glassbox config migrate
+
+# 5. Review the result and validate
+glassbox config show
+```
+
+Notes:
+
+- Migration is idempotent. Running it again on an up-to-date file reports
+  `Nothing to migrate` and leaves the file unchanged.
+- Files written before schema versioning are treated as version 1.
+- `--dry-run` is the only preview mechanism; it reports the changes that would
+  be made without modifying the file.
+
+## Troubleshooting Configuration
+
+| Symptom | Likely source | Next action |
+|---------|---------------|-------------|
+| Invalid value rejected (e.g. `request_timeout` <= 0 or > 300, `max_trace_depth` out of range, invalid `network` or `log_level`) | A bad value in a config file or environment variable | Run `glassbox config show --explain` to locate the field and its source, then correct it |
+| Unknown field warning | A key that is not part of the documented schema | Compare the file against the documented keys and remove or rename the entry |
+| A setting does not take effect as expected | Precedence conflict (flag > env > file > default) | Run `glassbox config show --explain --json` to see the per-field `source` |
+| `schema_version` newer than supported | Config written by a newer release | Run `glassbox config migrate` to upgrade the file |
+
+See [Config Show Command](#config-show-command) above for inspection output and
+[Bindings and environment variables](bindings-environments.md) for supported
+variable names.
+
+## Redacting Sensitive Values
+
+`config show` already masks sensitive values: `rpc_token` and
+`network_passphrase` are displayed as `[redacted]`. With `--explain`, each field
+also carries a redaction status so you can tell which values were masked.
+
+When sharing logs or diagnostics output, run the redaction script before
+uploading:
+
+```bash
+scripts/redact-logs.sh <staging-dir>
+```
+
+Sensitive classes include RPC tokens, network passphrases, and any account
+identifiers. Example of safe, synthetic output:
+
+```json
+{
+  "rpc_url": { "value": "https://rpc.example.test", "source": "file" },
+  "rpc_token": { "value": "[redacted]", "source": "environment" },
+  "network_passphrase": { "value": "[redacted]", "source": "file" }
+}
+```
+
+Never paste real tokens, passphrases, or account identifiers into issues or
+chat; use placeholder values as above.
