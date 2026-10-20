@@ -63,6 +63,48 @@ type DiagnosticReport struct {
 	TraceContext *URITraceContext `json:"trace_context,omitempty"`
 }
 
+// ExampleDiagnoseJSON is a sanitized example of the JSON emitted by
+// `glassbox protocol:diagnose --format json`. It is wrapped in the standard
+// clioutput.Envelope (schema_version, command, glassbox_version, generated_at,
+// data) where data is a DiagnosticReport.
+//
+// Stable fields (same shape across environments): platform, scheme, status,
+// checks, issues, remediation_steps, handler_matches_self, conflict_detected.
+//
+// Environment-dependent fields (values vary per machine): executable_path,
+// registered_handler, conflicting_handler, generated_at, glassbox_version.
+//
+// All paths below are illustrative and sanitized; they do not reflect a real
+// installation. This example performs diagnosis only — it never registers or
+// modifies the protocol handler.
+const ExampleDiagnoseJSON = `{
+  "schema_version": "1",
+  "command": "protocol:diagnose",
+  "glassbox_version": "0.0.0-example",
+  "generated_at": "2026-01-01T00:00:00Z",
+  "data": {
+    "platform": "linux",
+    "scheme": "glassbox",
+    "status": "degraded",
+    "checks": [
+      "Desktop file found: /home/example/.local/share/applications/glassbox-protocol.desktop",
+      "Desktop file declares the correct MIME type",
+      "Desktop file Exec entry points to: /home/example/.local/bin/glassbox-protocol-handler",
+      "xdg-mime resolves x-scheme-handler/glassbox to glassbox-protocol.desktop"
+    ],
+    "issues": [
+      "Protocol helper script does not reference current binary.\n  Found:    /opt/example/bin/glassbox\n  Expected: /home/example/.local/bin/glassbox\n  This is a stale path — run 'glassbox protocol:repair' to update it."
+    ],
+    "remediation_steps": [
+      "Run 'glassbox protocol:repair' to update the helper script to the current executable path."
+    ],
+    "executable_path": "/home/example/.local/bin/glassbox",
+    "registered_handler": "/home/example/.local/bin/glassbox-protocol-handler",
+    "handler_matches_self": false,
+    "conflict_detected": false
+  }
+}`
+
 // RepairResult describes the outcome of a Repair attempt.
 type RepairResult struct {
 	// Repaired is true when the repair completed without errors.
