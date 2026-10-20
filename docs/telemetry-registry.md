@@ -202,6 +202,46 @@ To deprecate an event, set the stability to deprecated and specify the replaceme
 }
 ```
 
+## Sampling terminology
+
+Sampling and event eligibility are distinct concepts. An event can be eligible
+without being sampled, and the sampling rate never changes which events are
+eligible.
+
+- **Eligible event**: An event whose category is permitted at the current
+  `ConsentLevel`, as determined by `IsCategoryAllowed` in
+  `internal/telemetry/policy.go`. At `anonymous`, the `usage` and `performance`
+  categories are eligible; at `full`, all four categories (`usage`,
+  `performance`, `diagnostics`, `crash`) are eligible; at `disabled`, no
+  categories are eligible.
+- **Sampled event**: An eligible event that passes the sampling decision and is
+  emitted.
+- **Sampled-out event**: An eligible event that does not pass the sampling
+  decision and is dropped.
+
+The sampling rate governs the fraction of *eligible* events that are sampled.
+It does not promise a fixed event count: the number of sampled events depends
+on how many events are eligible and on the sampling decision for each one.
+Ineligible events are never sampled, regardless of the sampling rate.
+
+### Example
+
+Consider a synthetic sequence of five events. Assume the sampling rate is 0.5
+and the sampling decision is deterministic for this illustration.
+
+| # | Category      | Eligible at `anonymous` | Sampled | Outcome     |
+|---|---------------|-------------------------|---------|-------------|
+| 1 | `usage`       | yes                     | yes     | sampled     |
+| 2 | `performance` | yes                     | no      | sampled-out |
+| 3 | `diagnostics` | no                      | n/a     | not eligible|
+| 4 | `usage`       | yes                     | yes     | sampled     |
+| 5 | `performance` | yes                     | no      | sampled-out |
+
+Here three events are eligible (1, 2, 4, 5 minus the ineligible 3 — four are
+eligible, of which two are sampled and two are sampled-out). Event 3 is
+ineligible at `anonymous` and is never considered for sampling. The example
+contains no user identifiers; event payloads are omitted.
+
 ## Generating Documentation
 
 Generate the event registry documentation:
