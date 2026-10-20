@@ -46,18 +46,53 @@ Cache location: ~/.glassbox/cache (configurable via GLASSBOX_CACHE_DIR)
 Available subcommands:
   status  - View cache size and usage statistics
   clean   - Remove old files using LRU strategy
-  clear   - Delete all cached data`,
-	Example: `  # Check cache status
-  Glassbox cache status
+  clear   - Delete all cached data
+  rpc     - Manage the local SQLite RPC fetch cache
+  artifact - Manage cached contract artifacts and ledger entries
 
-  # Clean old cache entries
+clean vs clear:
+  clean is a narrow, partial operation: it removes the oldest cached files
+  (LRU order) until the cache is reduced to 50% of its maximum size. It has
+  no network filter and never deletes the whole cache directory.
+  clear is a full, irreversible operation: it deletes ALL cached data by
+  removing the entire cache directory.
+
+  +------------------+------------------------------+------------------------------+
+  |                  | clean                        | clear                        |
+  +------------------+------------------------------+------------------------------+
+  | Scope            | Oldest files (LRU) only      | All cached data              |
+  | Selection        | Automatic LRU selection      | None (everything)            |
+  | Target size      | Reduced to 50% of max size   | Cache directory removed      |
+  | Network filter   | Not supported                | Not supported                |
+  | Confirmation     | Prompted (skipped by --force)| Prompted (skipped by --force)|
+  | Reversible       | Partially (re-fetched)       | No                           |
+  +------------------+------------------------------+------------------------------+
+
+Network-specific cleanup is available on the specialized caches:
+  Glassbox cache rpc --network <name>            (e.g. mainnet, testnet)
+  Glassbox cache artifact clear --type <t> --network <n>
+
+Prefer clean (or a scoped rpc/artifact cleanup) over clear when you only
+need to free space or drop entries for a single network.`,
+	Example: `  # Check cache status (add --rpc for RPC cache statistics)
+  Glassbox cache status
+  Glassbox cache status --rpc
+
+  # Clean old cache entries (LRU, prompts for confirmation)
   Glassbox cache clean
 
   # Force clean without confirmation
   Glassbox cache clean --force
 
-  # Clear all cache
-  Glassbox cache clear --force`,
+  # Clear all cache (irreversible; prompts unless --force)
+  Glassbox cache clear --force
+
+  # Network-specific cleanup of the RPC cache
+  Glassbox cache rpc --network testnet
+  Glassbox cache rpc --older-than 7 --network testnet
+
+  # Scoped artifact cleanup
+  Glassbox cache artifact clear --type contract_code --network testnet --force`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return cmd.Help()

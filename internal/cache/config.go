@@ -31,6 +31,37 @@ func DefaultGlobalConfig() GlobalConfig {
 	}
 }
 
+// Cache directory discovery
+//
+// The cache location is resolved from the user's home directory as reported by
+// os.UserHomeDir. No environment variable override is currently consulted when
+// resolving the cache directory; the GLASSBOX_CACHE_DIR variable mentioned in
+// some help text is not yet read by the resolver and should not be relied upon.
+//
+// Verified resolved paths (per platform):
+//
+//	Platform        File cache path          RPC SQLite cache path
+//	Linux           ~/.glassbox/cache        ~/.glassbox/cache.db
+//	macOS           ~/.glassbox/cache        ~/.glassbox/cache.db
+//	Windows         %USERPROFILE%\.glassbox\cache   %USERPROFILE%\.glassbox\cache.db
+//
+// The file cache path comes from getCacheDir in internal/cmd/cache.go, which
+// joins os.UserHomeDir with ".glassbox" and "cache". The RPC SQLite cache path
+// comes from rpc.GetCachePath, which joins os.UserHomeDir with the CacheDirName
+// ".Glassbox" and the file "cache.db".
+//
+// Fallbacks: if os.UserHomeDir fails, callers fall back to their default
+// configuration and log a debug message (see LoadConfig below). The cache
+// directory itself is not created until a write occurs.
+//
+// Safe inspection: use `Glassbox cache status` for the file cache and
+// `Glassbox cache status --rpc` for the RPC SQLite cache. These commands only
+// read metadata and do not modify the cache.
+//
+// Cleanup advice: only remove files inside the resolved cache directory shown
+// by the inspection commands. Never delete the parent directory or paths
+// outside the resolved cache location.
+
 // getConfigPath returns the path to the config file
 func getConfigPath() (string, error) {
 	homeDir, err := os.UserHomeDir()
