@@ -824,6 +824,7 @@ Pins an RPC endpoint URL with the saved session so that when the session is resu
 
 ---
 
+- [Cancellation & interruption](./cli-commands.md) — Ctrl+C / SIGTERM behavior and partial artifacts
 - [`glassbox profile`](./trace-profiling.md) — gas usage analysis, pprof flamegraph generation, and profiling export
 - [`glassbox doctor`](./sandboxed-replay.md) — environment setup checker
 - [`glassbox session`](./session-bookmarking.md) — save and restore debug sessions

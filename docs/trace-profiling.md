@@ -231,17 +231,115 @@ invalid --profile-format "pdf" — must be one of: html, svg
   Fix: use --profile-format html (interactive flamegraph) or svg (raw SVG)
 ```
 
-When the flamegraph is generated for an empty trace, the HTML page is still
-written but shows no frames. A warning is printed to stderr:
+When the simulation produces no execution steps, `glassbox debug --profile`
+does **not** write a flamegraph file. It prints this warning to stderr instead:
 
 ```
-Warning: trace contains no execution steps — flamegraph will be empty.
-  Possible causes:
-    - The simulation produced no diagnostic events
-    - The trace was captured by an older simulator version
-  Tip: use 'glassbox profile --xdr <tx.xdr>' for a live gas report,
-       or re-run with 'glassbox debug --save-snapshots <file>'
+Warning: flamegraph skipped — no diagnostic events available.
+  Run with --snapshots or ensure the simulator produces diagnostic events.
 ```
+
+`--profile-format svg` additionally requires the simulator to return a raw
+flamegraph SVG. When it does not, no SVG file is written and Glassbox suggests
+`--profile-format html`, which builds the flamegraph from trace gas data.
+
+See [Empty Flamegraph Troubleshooting](#empty-flamegraph-troubleshooting) for
+a diagnostic sequence.
+
+---
+
+## Flamegraph Output Lifecycle
+
+This section describes where profiling outputs are written, how they are named,
+and what happens when you run the same export twice.
+
+### Default file names and locations
+
+| Command | Output | Default name | Default location | Path flag |
+|---------|--------|--------------|------------------|-----------|
+| `glassbox debug --profile` | HTML flamegraph | `<tx8>.flamegraph.html` | Current working directory | None |
+| `glassbox debug --profile --profile-format svg` | SVG flamegraph | `<tx8>.flamegraph.svg` | Current working directory | None |
+| `glassbox profile <trace-file>` | pprof profile | `profile.pb.gz` | Current working directory | `-o`, `--output` |
+| `glassbox profile --xdr ...` | JSON report | Not written by default | — | `--out-json` |
+
+`<tx8>` is the first 8 characters of the transaction hash. For example,
+debugging `5c0a1234...` with `--profile` writes `5c0a1234.flamegraph.html`.
+
+There is no `--output-dir` flag for flamegraph export. `glassbox debug
+--profile` always writes into the directory you run it from. To place the
+flamegraph somewhere else, run the command from that directory (see the
+examples below).
+
+### Collision and overwrite rules
+
+Profiling exports **overwrite existing files without prompting**. Glassbox
+does not append timestamps, version suffixes, or counters:
+
+- Rerunning `glassbox debug --profile` for the same transaction in the same
+  directory replaces `<tx8>.flamegraph.html` (or `.svg`).
+- Two transactions whose hashes share the same first 8 characters also map to
+  the same flamegraph file name; the later run wins.
+- `glassbox profile` truncates and rewrites the `--output` file (default
+  `profile.pb.gz`) on every run, and `--out-json` replaces its target file.
+- HTML and SVG exports use different extensions, so exporting both formats for
+  the same transaction does not cause a collision.
+- When a flamegraph is skipped (empty trace, or SVG unavailable from the
+  simulator), any existing file from an earlier run is left in place. Check
+  the command output for `Flamegraph exported to:` before assuming a file is
+  current.
+
+To keep results from multiple runs, give each run its own directory or file
+name, as in the examples below.
+
+### Export examples
+
+**HTML flamegraph (default format), written to the current directory:**
+
+```sh
+glassbox debug --profile --profile-format html <tx-hash>
+# -> ./<tx8>.flamegraph.html
+```
+
+**SVG flamegraph, written to the current directory:**
+
+```sh
+glassbox debug --profile --profile-format svg <tx-hash>
+# -> ./<tx8>.flamegraph.svg (only if the simulator returned a raw flamegraph)
+```
+
+**Flamegraph in a temporary directory.** The subshell changes directory only
+for this command, so your shell's working directory is unchanged:
+
+```sh
+mkdir -p /tmp/glassbox-profiles
+(cd /tmp/glassbox-profiles && glassbox debug --profile --profile-format html <tx-hash>)
+# -> /tmp/glassbox-profiles/<tx8>.flamegraph.html
+```
+
+**Flamegraph in a per-run custom directory, to avoid overwrites:**
+
+```sh
+RUN_DIR="./profiles/$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$RUN_DIR"
+(cd "$RUN_DIR" && glassbox debug --profile --profile-format svg <tx-hash>)
+```
+
+If you use relative paths for other flags (for example `--contract-source`),
+remember they are resolved from the directory the subshell changed into.
+
+**pprof profile and JSON report with explicit output paths:**
+
+```sh
+mkdir -p ./profiles ./reports
+glassbox profile ./execution.json -o ./profiles/gas.pb.gz
+glassbox profile --xdr ./envelope.xdr --network testnet --out-json ./reports/gas-report.json
+
+# Temporary location
+glassbox profile ./execution.json -o /tmp/gas.pb.gz
+```
+
+`--output` and `--out-json` must name a file, not a directory, and the parent
+directory must already exist (see [Pre-flight Validation](#pre-flight-validation)).
 
 ---
 
@@ -297,6 +395,91 @@ glassbox profile ./execution.json -o ./gas.pb.gz
 # And open the interactive trace viewer
 glassbox trace ./execution.json
 ```
+
+---
+
+## Empty Flamegraph Troubleshooting
+
+A blank or missing flamegraph has one of two root causes. They need different
+fixes, so identify which one you have **before** changing any filter or export
+settings.
+
+| | Empty trace input | Export / renderer failure |
+|-|-------------------|---------------------------|
+| **What happened** | The trace has zero execution steps, or every step was filtered out because it reported zero gas | The trace has gas-bearing steps, but generating or writing the HTML/SVG failed |
+| **Typical messages** | `flamegraph skipped — no diagnostic events available`<br>`trace contains no execution steps`<br>`no gas samples found in trace` | `failed to generate flamegraph HTML: ...`<br>`flamegraph export validation failed: ...`<br>`Failed to write flamegraph to "...": ...`<br>`--profile-format=svg requires the simulator to return a raw flamegraph SVG` |
+| **File written?** | No flamegraph file (`debug --profile`); an empty but valid `profile.pb.gz` (`glassbox profile`) | No file, or the write error names the path |
+| **Fix** | Regenerate the trace or use live mode | Fix the format, path, or permissions |
+
+### Diagnostic sequence
+
+Run these steps in order and stop at the first one that explains the result.
+
+**1. Read the command output.** A successful export always prints
+`Flamegraph exported to: <path>`. If that line is missing, the stderr warning
+printed instead tells you which branch you are in (see the table above). An
+existing `<tx8>.flamegraph.*` file without that line is left over from an
+earlier run (see [collision rules](#collision-and-overwrite-rules)).
+
+**2. Count the execution steps in the input trace.** Export the trace and note
+the step count Glassbox reports:
+
+```sh
+glassbox debug --generate-trace <tx-hash>
+# Exporting 42-step trace as json to trace-<tx8>.json...
+# or: Warning: trace export skipped — the simulator produced no diagnostic events ...
+```
+
+For a trace file you already have, `glassbox profile` prints the step count
+before it writes the profile:
+
+```sh
+glassbox profile ./execution.json -o /tmp/step-check.pb.gz
+# Analyzing trace: ./execution.json
+# Steps: 0
+```
+
+You can also count steps directly. The `(.trace // .)` handles both plain and
+versioned-envelope trace files:
+
+```sh
+jq '(.trace // .) | .states | length' ./execution.json
+```
+
+If the step count is **0**, the input is empty. Go to the
+["trace contains no execution steps"](#trace-contains-no-execution-steps)
+fixes below. Changing export settings will not help.
+
+**3. Count steps that carry gas.** Zero-gas steps are filtered out of the
+profile (see [Zero-gas Traces](#zero-gas-traces)). Count the remaining
+samples:
+
+```sh
+jq '[(.trace // .) | .states[] | select((.host_state.gas_used // 0) > 0)] | length' ./execution.json
+```
+
+If steps exist but this count is **0**, every step was filtered out. This is
+still an empty-input problem, not a renderer problem. See
+["no gas samples found in trace"](#no-gas-samples-found-in-trace).
+
+**4. Only now look at export settings.** If the trace has gas-bearing steps
+and the flamegraph is still missing or blank, the renderer or the file write
+failed:
+
+- `--profile-format=svg requires the simulator to return a raw flamegraph SVG`:
+  rerun with `--profile-format html`, which builds the flamegraph from trace
+  gas data.
+- `failed to generate flamegraph HTML` or `flamegraph export validation failed`:
+  regenerate the trace and retry. If it persists, run `glassbox doctor` to
+  check simulator compatibility and include the message when reporting the
+  issue.
+- `Failed to write flamegraph to "<path>"`: the current directory is not
+  writable. Run from a writable directory, as shown in
+  [Export examples](#export-examples).
+
+> Do not lower thresholds, remove filters, or switch export formats until
+> steps 2 and 3 show a non-zero count. When the input is empty, these changes
+> hide the real cause and produce a flamegraph that is still blank.
 
 ---
 

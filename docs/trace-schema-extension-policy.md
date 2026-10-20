@@ -89,6 +89,144 @@ tx_hash = trace.get("transaction_hash")
 tx_hash = trace["transaction_hash"]  # Only for required fields
 ```
 
+## Compatibility rules
+
+These rules apply when a trace produced by one Glassbox version is read by a
+different Glassbox version or by an external consumer.
+
+### Version rules
+
+| Direction | Example | Supported? | Behavior |
+|-----------|---------|------------|----------|
+| **Backward** (newer reader, older trace) | 2.0.0 reader loads a `1.0` / `1.0.0` trace | Yes | Migrated to the current version by a deterministic adapter; new optional fields are left absent |
+| **Forward, same major** (older reader, newer minor trace) | 2.0.0 consumer reads a 2.1.0 trace | Yes, for consumers that follow this policy | New optional fields are ignored or preserved; required fields and their types are unchanged |
+| **Forward, new major** | 2.x consumer reads a 3.0.0 trace | No | Rejected with `unsupported trace schema version`; a migration is required |
+
+Glassbox itself only loads versions listed in `SupportedTraceSchemaVersions`
+(currently `1.0`, `1.0.0`, and `2.0.0`). See
+[Event schemas: compatibility policy](./event-schemas.md#compatibility-policy).
+
+### Unknown optional fields: ignore or preserve
+
+A field your consumer does not recognise is treated as optional. It must never
+cause trace processing to fail.
+
+- **Ignore** it if you only read data (viewers, reports, CI checks).
+- **Preserve** it if you rewrite the trace (filters, redactors, converters),
+  so data added by newer producers is not lost. Glassbox does this when it
+  loads and re-exports a trace; see
+  [Event schemas: unknown field handling](./event-schemas.md#unknown-field-handling).
+- The same applies to unknown `x_*` extension namespaces and to unknown
+  `event_type` enum values: skip or pass them through.
+
+### Missing, malformed, or unknown required fields: reject
+
+Required fields are the contract. A trace that breaks it is **rejected during
+validation and never silently accepted**:
+
+- A missing `schema_version` is rejected:
+  `trace schema validation failed: missing 'schema_version' field`.
+- A `schema_version` outside the supported set is rejected:
+  `unsupported trace schema version "3.0.0"`.
+- A missing required field (`transaction_hash`, `start_time`, `end_time`,
+  `states`) is rejected:
+  `trace schema validation failed: missing required field "states"`.
+- A required field with the wrong type, such as `states` as an object or
+  `step` as a string, must be treated as malformed. Do not coerce it, default
+  it, or skip it.
+
+Consumers must not "tolerate" a broken required field the way they tolerate an
+unknown optional field. If a trace declares a major version you do not support,
+treat any requirement it introduces as unknown and reject the trace rather
+than guessing.
+
+### Consumer example
+
+This consumer accepts 1.x and 2.x traces, ignores unknown optional fields, and
+rejects malformed required fields. It also unwraps versioned export envelopes,
+where the trace body sits under a `trace` key.
+
+```javascript
+const SUPPORTED_MAJORS = new Set([1, 2]);
+const REQUIRED = {
+  transaction_hash: "string",
+  start_time: "string",
+  end_time: "string",
+  states: "array",
+};
+
+function typeOf(value) {
+  return Array.isArray(value) ? "array" : typeof value;
+}
+
+function parseTrace(json) {
+  const doc = JSON.parse(json);
+  const body = doc.trace ?? doc; // versioned envelope or plain trace
+
+  // 1. Version gate: reject unknown majors outright.
+  const version = doc.schema_version ?? body.schema_version;
+  if (typeof version !== "string") {
+    throw new Error("rejected: missing schema_version");
+  }
+  const major = Number.parseInt(version.split(".")[0], 10);
+  if (!SUPPORTED_MAJORS.has(major)) {
+    throw new Error(`rejected: unsupported schema_version ${version}`);
+  }
+
+  // 2. Required fields: must be present with the right type.
+  for (const [field, type] of Object.entries(REQUIRED)) {
+    if (!(field in body)) throw new Error(`rejected: missing required field ${field}`);
+    if (typeOf(body[field]) !== type) {
+      throw new Error(`rejected: ${field} must be ${type}, got ${typeOf(body[field])}`);
+    }
+  }
+
+  // 3. Optional fields: read if present, default if absent, ignore the rest.
+  return {
+    version,
+    transactionHash: body.transaction_hash,
+    states: body.states,
+    hostCalls: body.host_calls ?? [], // added in 2.0.0; absent in 1.x traces
+    trapCause: body.trap_cause ?? null, // added in 2.0.0
+    // Unknown fields such as "x_glassbox" or a future "io_trace" are ignored.
+  };
+}
+```
+
+How it handles payloads from different Glassbox versions:
+
+```json
+// 1.0.0 trace: accepted; host_calls defaults to []
+{ "schema_version": "1.0.0", "transaction_hash": "5c0a…", "start_time": "…", "end_time": "…", "states": [] }
+
+// 2.1.0 trace with a new optional field: accepted; "io_trace" is ignored
+{ "schema_version": "2.1.0", "transaction_hash": "5c0a…", "start_time": "…", "end_time": "…", "states": [], "io_trace": {} }
+
+// Malformed required field: rejected ("states must be array, got object")
+{ "schema_version": "2.0.0", "transaction_hash": "5c0a…", "start_time": "…", "end_time": "…", "states": {} }
+
+// Unsupported major: rejected ("unsupported schema_version 3.0.0")
+{ "schema_version": "3.0.0", "states": [] }
+```
+
+Note that this consumer accepts any 2.x minor version, while Glassbox's own
+loader accepts only the versions in `SupportedTraceSchemaVersions`. External
+consumers may be more permissive with minor versions because minor bumps are
+additive, but they must stay strict about required fields and major versions.
+
+### Validating traces
+
+- [Trace schema](./schema/trace-schema.md#validation) — required fields and
+  `trace.ValidateTraceSchema()` checks
+- [Event schemas](./event-schemas.md#validation) — schema versioning, loading,
+  and validation entry points
+- [Trace export validation](./trace-export-validation.md) — pre-export and
+  format compatibility checks
+- [Trace migration guide](./schema/trace-migration-guide.md) — upgrading older
+  traces
+- `node docs/schema/validate-schemas.js` — validates the JSON Schema files in
+  CI
+
 ## Extension namespaces
 
 New event kinds and diagnostic data should use the `x_` prefix to indicate

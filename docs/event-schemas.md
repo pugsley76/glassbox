@@ -193,4 +193,5 @@ and exported without data loss, though unrecognized features won't be used.
 
 - [Trace Schema Documentation](schema/trace-schema.md) - Detailed schema specification
 - [Trace Migration Guide](schema/trace-migration-guide.md) - Migration procedures
+- [Trace Schema and Extension Policy](trace-schema-extension-policy.md#compatibility-rules) - Compatibility rules for unknown optional and required fields
 - [JSON Output Documentation](json-output.md) - JSON export format details

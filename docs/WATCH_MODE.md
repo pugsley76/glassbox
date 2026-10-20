@@ -53,3 +53,5 @@ glassbox debug <transaction-hash> --contract-source ./contracts/my_contract --wa
 ```
 
 The `--watch-timeout` and `--watch-interval` flags bound the network wait; they do not change the file watcher's debounce behavior. Always confirm the flag names and defaults against `glassbox debug --help` for your installed version.
+
+For how interruption affects in-progress reruns and partial artifacts, see [Cancellation & Interruption](./cli-commands.md).
