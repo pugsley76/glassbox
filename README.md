@@ -128,8 +128,34 @@ Validate all inputs and check the environment without running a simulation:
 glassbox debug --dry-run --network testnet <transaction-hash>
 ```
 
-This checks the transaction hash format, network validity, RPC reachability, simulator
-binary presence, and protocol version — no simulation is executed.
+This checks the transaction hash format, network validity, RPC reachability, and simulator
+binary presence — no simulation is executed.
+
+### Advanced Debug Options
+
+Select a specific operation:
+
+```bash
+glassbox debug --op 0 <transaction-hash>
+```
+
+Replay against the current validated ledger state:
+
+```bash
+glassbox debug --live <transaction-hash>
+```
+
+Override the Soroban protocol version:
+
+```bash
+glassbox debug --protocol-version 20 <transaction-hash>
+```
+
+Control trace detail level:
+
+```bash
+glassbox debug --trace-verbosity verbose <transaction-hash>
+```
 
 ### Comparing Networks
 
@@ -157,6 +183,12 @@ glassbox debug --save-snapshots ./snapshots/my-tx.json --network testnet <transa
 
 # Replay later without any network connection
 glassbox debug --load-snapshots ./snapshots/my-tx.json
+```
+
+Load pre-captured ledger state from a JSON snapshot during debugging:
+
+```bash
+glassbox debug --snapshot ./state.json --network testnet <transaction-hash>
 ```
 
 ### Audit Log Signing (software / HSM)
@@ -415,10 +447,28 @@ We are building this open-source to help the entire Stellar community. All contr
 
 ### Prerequisites
 
-- Go 1.24.0+
-- Rust 1.70+ (for building the simulator binary)
+- Go 1.26+
+- Rust 1.86.0+ (for building the simulator binary)
+- Node.js 20+ (for TypeScript development)
 - Stellar CLI (for comparing results)
 - `make` (for running standard development tasks)
+
+### Platform Support
+
+Glassbox is tested and supported on the following platforms:
+
+| Platform | Architectures | Status |
+|----------|---------------|--------|
+| Linux | amd64, arm64 | ✅ Fully supported |
+| macOS | amd64, arm64 (Apple Silicon) | ✅ Fully supported |
+| Windows | amd64 | ✅ Fully supported |
+
+Cross-compilation targets are available via Makefile:
+```bash
+make release-linux    # Linux amd64 + arm64
+make release-darwin   # macOS amd64 + arm64
+make release-windows  # Windows amd64
+```
 
 ### Getting Started
 
@@ -434,24 +484,33 @@ We are building this open-source to help the entire Stellar community. All contr
     cd simulator && cargo fetch && cd ..
     ```
 
-3.  Build the Rust simulator:
+3.  Install the wasm32 target (required for Soroban contracts):
     ```bash
-    cd simulator
-    cargo build --release
-    cd ..
+    rustup target add wasm32-unknown-unknown
     ```
 
-4.  Run tests:
+4.  Build the Rust simulator:
+    ```bash
+    # Using Make (recommended)
+    make rust-build
+
+    # Or manually
+    cd simulator && cargo build --release && cd ..
+    ```
+
+    **Alternative**: Use `glassbox doctor --fix` to automatically build and install the simulator binary after building the Go CLI.
+
+5.  Run tests:
     ```bash
     go test ./...
-    cargo test --release -p glassbox-sim
+    make rust-test
     ```
 
 ## Development
 
 ### Code Quality & Linting
 
-This project enforces strict linting rules to maintain code quality. See [docs/STRICT_LINTING.md](docs/STRICT_LINTING.md) for details.
+This project enforces strict linting rules to maintain code quality.
 
 Quick commands:
 
@@ -696,8 +755,6 @@ To prevent regressions in artifact sizes, Glassbox tracks the compiled sizes of 
 
 ### Development Roadmap
 
-See [docs/proposal.md](docs/proposal.md) for the detailed proposal.
-
 1.  [x] **Phase 1**: Research RPC endpoints for fetching historical ledger keys.
 2.  [x] **Phase 2**: Build a basic "Replay Harness" that can execute a loaded WASM file.
 3.  [x] **Phase 3**: Connect the harness to live mainnet data.
@@ -718,7 +775,20 @@ go tool pprof cpu.prof
 
 #### Building for a specific OS
 ```bash
+# Linux amd64
 GOOS=linux GOARCH=amd64 go build -o glassbox-linux-amd64 ./cmd/glassbox
+
+# Linux arm64
+GOOS=linux GOARCH=arm64 go build -o glassbox-linux-arm64 ./cmd/glassbox
+
+# macOS amd64
+GOOS=darwin GOARCH=amd64 go build -o glassbox-darwin-amd64 ./cmd/glassbox
+
+# macOS arm64 (Apple Silicon)
+GOOS=darwin GOARCH=arm64 go build -o glassbox-darwin-arm64 ./cmd/glassbox
+
+# Windows amd64
+GOOS=windows GOARCH=amd64 go build -o glassbox-windows-amd64.exe ./cmd/glassbox
 ```
 
 #### Cleaning build artifacts
