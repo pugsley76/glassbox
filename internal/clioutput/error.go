@@ -12,12 +12,14 @@
 //	  "glassbox_version": "...",
 //	  "generated_at":    "...",
 //	  "command":         "debug",          // omitted when unknown
-//	  "error": {
-//	    "code":        "RPC_CONNECTION_FAILED",
-//	    "severity":    "error",
-//	    "message":     "RPC connection failed: dial tcp ...",
-//	    "remediation": "Check your internet connection ...",
-//	    "context":     { ... }              // optional, command-specific
+//	  "data": {
+//	    "error": {
+//	      "code":        "RPC_CONNECTION_FAILED",
+//	      "severity":    "error",
+//	      "message":     "RPC_CONNECTION_FAILED: RPC connection failed: dial tcp ...",
+//	      "remediation": "The RPC endpoint could not be reached. ...",
+//	      "context":     { ... }            // optional, command-specific
+//	    }
 //	  }
 //	}
 package clioutput
