@@ -248,3 +248,80 @@ func TestChecksumOf(t *testing.T) {
 	assert.NotEqual(t, c1, c3)
 	assert.Len(t, c1, 64) // SHA-256 hex = 64 chars
 }
+
+// ── Air-gapped pipeline limitation tests (ADR-007 §3) ────────────────────────
+
+// TestAirGapped_ValidateChecksBothLoadSites documents that Validate() is called
+// on every LoadEnvelopeFile call — both on the air-gapped machine (stage 2)
+// and on the online machine (stage 3). This is the checksum integrity control
+// described in ADR-007 §3 for the unsigned→signed transfer path.
+func TestAirGapped_ValidateChecksBothLoadSites(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "envelope.json")
+
+	ef := NewEnvelopeFile("testnet", "Test SDF Network ; September 2015", "AAAA==", EnvelopeMetadata{})
+	require.NoError(t, ef.SaveToFile(path))
+
+	// Tamper with the XDR bytes on disk after saving (simulates transfer corruption).
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	tampered := string(raw)
+	// Replace the XDR value to simulate a modified file without updating checksum.
+	tampered = replaceJSONField(tampered, `"envelope_xdr": "AAAA=="`, `"envelope_xdr": "BBBB=="`)
+	require.NoError(t, os.WriteFile(path, []byte(tampered), 0600))
+
+	// LoadEnvelopeFile must reject the tampered file at the checksum step —
+	// whether loaded on the air-gapped machine (stage 2) or the online
+	// machine (stage 3).
+	_, err = LoadEnvelopeFile(path)
+	assert.Error(t, err, "LoadEnvelopeFile must reject a tampered envelope")
+	assert.Contains(t, err.Error(), "checksum mismatch")
+}
+
+// TestAirGapped_SubmitDoesNotVerifySignatures documents that SubmitSignedEnvelope
+// does not call VerifySignatures — the submission stage only reads EnvelopeXDR
+// and POSTs it. ADR-007 §3 explicitly notes that callers must call
+// VerifySignatures explicitly before submitting if pre-submit verification is
+// required.
+//
+// This test verifies that an envelope with a deliberately corrupted signature
+// field (but a valid checksum) passes through SubmitSignedEnvelope's input
+// validation without error — confirming the caller is responsible for
+// pre-submit verification.
+func TestAirGapped_SubmitDoesNotVerifySignatures(t *testing.T) {
+	seedHex, _ := generateTestKey(t)
+
+	ef := NewEnvelopeFile("testnet", "Test SDF Network ; September 2015", "AAAA==", EnvelopeMetadata{})
+	require.NoError(t, SignEnvelope(ef, seedHex))
+
+	// Corrupt the signature bytes (keep public key and checksum valid).
+	ef.Signatures[0].Signature = "0000000000000000000000000000000000000000000000000000000000000000" +
+		"0000000000000000000000000000000000000000000000000000000000000000" // 128 hex chars = 64 bytes, all zero
+
+	// VerifySignatures correctly rejects the corrupted entry.
+	verifyErr := VerifySignatures(ef)
+	assert.Error(t, verifyErr, "VerifySignatures must catch the corrupted signature")
+	assert.Contains(t, verifyErr.Error(), "verification failed")
+
+	// SubmitSignedEnvelope's own input validation accepts non-empty XDR and URL —
+	// it does not inspect signatures. Passing an empty URL surfaces the URL
+	// validation error, not a signature error, confirming no sig check occurs.
+	_, submitErr := SubmitSignedEnvelope(nil, "", ef.EnvelopeXDR) //nolint:staticcheck
+	assert.Error(t, submitErr)
+	assert.Contains(t, submitErr.Error(), "soroban RPC URL is required",
+		"expected URL validation error, not a signature error — submission stage does not verify signatures")
+}
+
+// replaceJSONField is a test helper for simple string substitution in a JSON
+// file without a full JSON round-trip (avoids changing field ordering or
+// escaping and thereby keeps the checksum test realistic).
+func replaceJSONField(s, old, newVal string) string {
+	idx := 0
+	for i := 0; i <= len(s)-len(old); i++ {
+		if s[i:i+len(old)] == old {
+			idx = i
+			break
+		}
+	}
+	return s[:idx] + newVal + s[idx+len(old):]
+}

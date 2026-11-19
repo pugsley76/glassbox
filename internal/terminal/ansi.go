@@ -135,6 +135,9 @@ func (r *ANSIRenderer) Symbol(name string) string { //nolint:gocyclo // Large sw
 		case "check":
 			return "[OK]"
 		case "cross":
+			// Intentional TTY/non-TTY divergence: "[FAIL]" is more descriptive
+			// for terminal output; "[X]" is the compact form for plain-text logs.
+			// Documented in docs/no-color.md §"Symbol divergence between TTY and non-TTY modes".
 			return "[FAIL]"
 		case "warn":
 			return "[!]"

@@ -21,6 +21,50 @@ func TestWantsJSON(t *testing.T) {
 	}
 }
 
+// TestWantsJSON_CaseInsensitive verifies that --format matching is
+// case-insensitive, as documented in docs/json-output.md.
+func TestWantsJSON_CaseInsensitive(t *testing.T) {
+	cases := []struct {
+		format string
+		want   bool
+	}{
+		{"json", true},
+		{"JSON", true},
+		{"Json", true},
+		{"jSoN", true},
+		{"text", false},
+		{"TEXT", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		got := WantsJSON(false, c.format)
+		if got != c.want {
+			t.Errorf("WantsJSON(false, %q) = %v, want %v", c.format, got, c.want)
+		}
+	}
+}
+
+// TestWantsJSON_WhitespaceTrimmed verifies that leading/trailing whitespace
+// in the --format value does not prevent JSON detection.
+func TestWantsJSON_WhitespaceTrimmed(t *testing.T) {
+	cases := []string{"  json", "json  ", "  json  ", "  JSON  "}
+	for _, c := range cases {
+		if !WantsJSON(false, c) {
+			t.Errorf("WantsJSON(false, %q) = false, want true (whitespace should be trimmed)", c)
+		}
+	}
+}
+
+// TestWantsJSON_FlagTakesPrecedence verifies that jsonFlag=true enables JSON
+// output regardless of the format string value.
+func TestWantsJSON_FlagTakesPrecedence(t *testing.T) {
+	for _, format := range []string{"text", "yaml", "", "not-json"} {
+		if !WantsJSON(true, format) {
+			t.Errorf("WantsJSON(true, %q) = false; --json flag must take precedence", format)
+		}
+	}
+}
+
 func TestWriteEnvelope(t *testing.T) {
 	var buf bytes.Buffer
 	payload := map[string]string{"status": "ok"}

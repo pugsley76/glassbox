@@ -20,43 +20,49 @@ The flag is persistent, so it applies to every subcommand in the invocation.
 
 ### Environment variables
 
-Two environment variables are honoured:
+Three environment variables affect color output:
 
-| Variable          | Description                                                  |
-|-------------------|--------------------------------------------------------------|
-| `NO_COLOR`        | Standard convention (<https://no-color.org>). Any non-empty value disables color. |
-| `GLASSBOX_NO_COLOR` | Glassbox-specific override. Useful when `NO_COLOR` is already claimed by other tools. |
+| Variable      | Effect | Precedence |
+|---------------|--------|------------|
+| `NO_COLOR`    | Any value present (even empty) disables color. Standard convention (<https://no-color.org>). | Highest — overrides `FORCE_COLOR` |
+| `FORCE_COLOR` | Any non-empty value forces color on, even when stdout is not a TTY. | Overrides automatic TTY detection |
+| `TERM=dumb`   | Disables color; used by headless CI environments. | Below `FORCE_COLOR` |
+
+> **Note:** `GLASSBOX_NO_COLOR` is documented in some places as a Glassbox-specific
+> override. In practice, the `internal/terminal.ANSIRenderer` only checks the
+> standard `NO_COLOR` variable. The `--no-color` CLI flag sets `NO_COLOR` in
+> the process environment, so child processes honour it automatically.
 
 ```bash
-# Using the standard convention
+# Standard convention (recommended)
 NO_COLOR=1 glassbox debug <tx-hash>
 
-# Using the Glassbox-specific variable
-GLASSBOX_NO_COLOR=1 glassbox debug <tx-hash>
+# Force color in a CI environment that sets TERM=dumb
+FORCE_COLOR=1 glassbox debug <tx-hash>
 ```
 
-Setting either variable is equivalent to passing `--no-color` on the command
-line. The `--no-color` flag additionally propagates `NO_COLOR=1` to any child
-processes spawned during the command.
-
 **Note:** The `--non-interactive` flag (and CI/pipe detection) also suppresses
-color output independently of `--no-color`. See `docs/command-development-guide.md`
+color output independently of `NO_COLOR`. See `docs/command-development-guide.md`
 for details on non-interactive mode.
 
 ## Precedence
 
-No-color sources are checked in this order (first match wins):
+Color detection is performed by `internal/terminal.ANSIRenderer.IsTTY()`.
+Sources are checked in this order (first match wins):
 
-1. `--no-color` CLI flag
-2. `GLASSBOX_NO_COLOR` environment variable
-3. `NO_COLOR` environment variable
-4. `FORCE_COLOR` environment variable (overrides automatic detection to *enable* color)
-5. `TERM=dumb`
-6. Automatic TTY detection (colors enabled only when stdout is a terminal)
+1. `--non-interactive` flag (or `termctx.GlobalNonInteractive()`) — always disables color and cursor-control sequences
+2. `NO_COLOR` environment variable (any value present) — disables color
+3. `FORCE_COLOR` environment variable (non-empty) — forces color on
+4. `TERM=dumb` — disables color
+5. Automatic TTY detection: `isatty.IsTerminal(os.Stdout.Fd())` — colors enabled only when stdout is a terminal
 
-Non-interactive mode (`--non-interactive` flag, `CI=true`, or piped stdout)
-suppresses all terminal control sequences including color, regardless of the
-above precedence.
+**`NO_COLOR` always takes precedence over `FORCE_COLOR`.** If both are set,
+color is disabled. This matches the [no-color.org](https://no-color.org) specification
+and is verified by `TestTTYDetection_CrossPlatformEnvVars` in
+`internal/terminal/platform_tty_test.go`.
+
+Non-interactive mode suppresses all terminal control sequences including
+cursor movement (`ClearLine`), regardless of the variables above.
 
 ## Affected output
 
@@ -65,20 +71,28 @@ No-color mode disables ANSI escape sequences across all Glassbox output:
 - Execution trace trees (`glassbox trace --print`)
 - Status indicators (`[OK]`, `[!]`, `[FAIL]`)
 - Contract boundary separators
-- All `Colorize`/`Success`/`Warning`/`Error` visualizer helpers
+- All `Colorize`/`Success`/`Warning`/`Error`/`Symbol` calls on the `Renderer` interface
 
 The structured JSON output produced by `--json` or `glassbox trace --output-json`
-is unaffected — it never contains ANSI codes.
+is unaffected — it never contains ANSI codes. `Colorize` returns plain text
+when `IsTTY()` is false, so JSON consumers will never receive escape sequences.
+
+### Symbol divergence between TTY and non-TTY modes
+
+The `Symbol("cross")` call returns `"[FAIL]"` in TTY mode and `"[X]"` in
+non-TTY mode. This is intentional: `"[FAIL]"` is more descriptive in a
+terminal context, while `"[X]"` is the compact non-TTY form used in logs and
+plain-text output. All other symbol names return the same string in both modes.
 
 ## CI / log capture usage
 
-For CI pipelines, set `NO_COLOR` or `GLASSBOX_NO_COLOR` in the environment
-rather than modifying every command invocation:
+For CI pipelines, set `NO_COLOR` in the environment rather than modifying
+every command invocation:
 
 ```yaml
 # GitHub Actions example
 env:
-  GLASSBOX_NO_COLOR: "1"
+  NO_COLOR: "1"
 ```
 
 ```bash
@@ -103,16 +117,18 @@ The script builds the binary if needed and tests both piped output and `NO_COLOR
 ### Unit tests
 
 Key test files for no-color behavior:
+- `internal/terminal/ansi_test.go` — `NO_COLOR`, `FORCE_COLOR`, `TERM=dumb` behavior; `NO_COLOR` overrides `FORCE_COLOR`
+- `internal/terminal/platform_tty_test.go` — cross-platform env-var precedence; `NO_COLOR` overrides `FORCE_COLOR`; non-TTY `Colorize` strips ANSI
 - `internal/cmd/no_color_test.go` — CLI flag and environment variable activation
 - `internal/visualizer/color_test.go` — Visualizer color enabling logic
-- `internal/terminal/ansi_test.go` — ANSI renderer color behavior
 - `internal/termctx/termctx_test.go` — Terminal context and non-interactive mode
 
 Run the no-color specific tests:
 
 ```bash
-go test ./internal/cmd/... -run NoColor
-go test ./internal/visualizer/... -run Color
-go test ./internal/terminal/... -run ANSI
+go test ./internal/terminal/... -run TestANSI
+go test ./internal/terminal/... -run TestTTY
+go test ./internal/terminal/... -run TestColorize
+go test ./internal/terminal/... -run TestSymbol
 go test ./internal/termctx/... -run NonInteractive
 ```

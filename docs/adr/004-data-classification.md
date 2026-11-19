@@ -105,9 +105,82 @@ the controls applied.
 | `PersistedSnapshot` (ledger entries, linear memory, metadata) | Host → Filesystem | Atomic write (write-to-tmp then rename) | Fingerprint computed and embedded; verified on load |
 | Session state | Host → SQLite (`modernc.org/sqlite`) | In-process SQL | No credentials stored; session IDs only |
 | Signed audit log | Host → Filesystem | Write to operator-specified path | Secrets redacted before signing; canonical form is the signed artifact |
+| Closed audit segment (`segment-NNNNNN-timestamp.jsonl`) | Host → Filesystem | Atomic rename of active segment | Immutable after close; SHA-256 of body embedded in `SegmentManifest` |
+| `SegmentManifest` (`.manifest.json`) | Host → Filesystem | Atomic write (temp+rename) | Immutable after write; records `sha256`, `previous_segment_hash`, sequence, timestamps, record count |
+
+**Audit log segment structure:**
+
+Each closed audit segment is paired with an immutable manifest file. The
+manifest is written atomically before the segment body is renamed, so a
+crash leaves the active file intact rather than a half-committed closed
+segment. The chain is:
+
+```
+segment-000001-20260728T120000Z.jsonl          ← segment body (JSONL records)
+segment-000001-20260728T120000Z.manifest.json  ← immutable manifest:
+  {
+    "schema_version": "1",
+    "segment": "segment-000001-20260728T120000Z.jsonl",
+    "sequence": 1,
+    "created_at": "2026-07-28T11:00:00Z",
+    "closed_at": "2026-07-28T12:00:00Z",
+    "record_count": 42,
+    "size_bytes": 8192,
+    "sha256": "<64-char-hex>",
+    "previous_segment_hash": ""         ← empty for genesis segment
+  }
+```
+
+Each non-genesis manifest's `previous_segment_hash` equals the `sha256` of
+the immediately preceding closed segment body, forming a tamper-evident
+chain. `VerifyDirectory` checks every link; a mismatch is reported as a
+structural issue.
+
+**Audit segment retention:**
+
+`internal/audit/retention.go` implements a dry-run / apply model for
+removing old closed segments. The active segment (`current.jsonl`) is never
+eligible for removal.
+
+`RetentionConfig` fields (all optional; zero value = unlimited):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `MaxAge` | `time.Duration` | Remove segments whose `ClosedAt` (or file `ModTime` as fallback) is older than this duration |
+| `MaxSizeBytes` | `int64` | Keep newest segments up to this total byte budget; delete oldest first |
+| `MaxSegments` | `int` | Keep at most this many closed segments; delete oldest first |
+
+Multiple constraints are evaluated additively: a segment is removed if it
+violates **any** configured constraint. All three constraints can be set
+simultaneously.
+
+**Retention example (dry-run then apply):**
+
+```sh
+# Suppose the audit log directory contains 3 closed segments:
+#   segment-000001-…  (oldest, 2 days ago)
+#   segment-000002-…  (1 day ago)
+#   segment-000003-…  (most recent)
+
+# Dry-run: see what PlanRetention(MaxSegments=1) would remove
+# (no files deleted; plan printed):
+#   keep:   [segment-000003-…]
+#   remove: [segment-000001-…, segment-000002-…]
+
+# Apply (deletes segment body + manifest for each removed entry):
+# ApplyRetention(dir, RetentionConfig{MaxSegments: 1}, dryRun=false)
+# → removes segment-000001-… and segment-000002-… (body + manifest pair)
+# → segment-000003-… retained
+```
+
+`PlanRetention` never deletes; `ApplyRetention` with `dryRun=true` is
+identical. `ApplyRetention` deletes both the segment body and its manifest
+atomically per segment; a partial failure (e.g. body deleted, manifest
+delete returns `ENOENT`) is ignored (`os.IsNotExist` is treated as success).
 
 **What does NOT cross this boundary:**
-- Raw signing credentials (the key is never written to the snapshot store or session DB)
+- Raw signing credentials (the key is never written to the snapshot store, session DB, or audit segment)
+- The signing key seed or PKCS#11 PIN (never stored in `SegmentManifest` or any audit record)
 
 #### Boundary F: OS / Browser → CLI (Deep Link)
 
@@ -210,6 +283,10 @@ approach is planned as the `AuditPayloadSchema` matures.
 | Hash fingerprinting for telemetry | `docs/security-warnings.md` |
 | URL credential stripping in `config show` | `docs/security-warnings.md` |
 | Snapshot atomic write + fingerprint | `internal/snapshot/`, `docs/snapshot-deduplication.md` |
+| Audit segment: atomic rename + immutable manifest | `internal/audit/rotation.go` (`rotateLocked`), `internal/audit/segment.go` (`WriteManifestAtomic`) |
+| Audit segment: SHA-256 chain link (`previous_segment_hash`) | `internal/audit/rotation.go`, `internal/audit/verify.go` (`VerifyDirectory`) |
+| Audit segment retention: `RetentionConfig` / `PlanRetention` / `ApplyRetention` | `internal/audit/retention.go` |
+| Audit retention: active segment never eligible | `internal/audit/retention.go` (`PlanRetention` operates on `ListSegments` output, which excludes `current.jsonl`) |
 | Deep link null-byte / base64 / length validation | `internal/protocolreg/uri.go`, `docs/adr/deeplink-parameters.md` |
 | Browser bindings exclude `child_process`/`fs`/`path` | `docs/bindings-environments.md` |
 | Crash reporting opt-in, no payload | `cmd/glassbox/main.go` |

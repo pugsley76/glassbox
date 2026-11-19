@@ -451,3 +451,120 @@ func TestManifestIsImmutableAfterWrite(t *testing.T) {
 		t.Fatal("expected checksum mismatch after tamper")
 	}
 }
+
+// TestRetention_MultiConstraintAdditive verifies that RetentionConfig constraints
+// are additive: a segment is removed if it violates ANY configured axis (MaxAge,
+// MaxSegments, or MaxSizeBytes), not only when it violates all of them.
+//
+// This matches ADR-004 §Boundary-E which documents the retention model for
+// the audit segment store. The active segment (current.jsonl) is never eligible.
+func TestRetention_MultiConstraintAdditive(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+
+	// Three closed segments: oldest violates MaxAge; newest two are within age
+	// but together exceed MaxSizeBytes, so the second-oldest is also removed.
+	segments := []SegmentInfo{
+		{
+			Path:      "seg1.jsonl",
+			SizeBytes: 100,
+			ModTime:   now.Add(-72 * time.Hour),
+			Manifest: SegmentManifest{
+				Sequence: 1,
+				ClosedAt: now.Add(-72 * time.Hour),
+				SHA256:   strings.Repeat("a", 64),
+			},
+		},
+		{
+			Path:      "seg2.jsonl",
+			SizeBytes: 60,
+			ModTime:   now.Add(-12 * time.Hour),
+			Manifest: SegmentManifest{
+				Sequence: 2,
+				ClosedAt: now.Add(-12 * time.Hour),
+				SHA256:   strings.Repeat("b", 64),
+			},
+		},
+		{
+			Path:      "seg3.jsonl",
+			SizeBytes: 60,
+			ModTime:   now,
+			Manifest: SegmentManifest{
+				Sequence: 3,
+				ClosedAt: now,
+				SHA256:   strings.Repeat("c", 64),
+			},
+		},
+	}
+
+	// MaxAge=48h removes seg1; MaxSizeBytes=80 means only seg3 (60 bytes) fits
+	// within budget after age removal, so seg2 is also removed.
+	plan := planRetention(segments, RetentionConfig{
+		MaxAge:       48 * time.Hour,
+		MaxSizeBytes: 80,
+	}, now)
+
+	if len(plan.Keep) != 1 || plan.Keep[0].Path != "seg3.jsonl" {
+		t.Fatalf("expected keep=[seg3.jsonl], got keep=%v", pathsOf(plan.Keep))
+	}
+	if len(plan.Remove) != 2 {
+		t.Fatalf("expected remove=[seg1.jsonl, seg2.jsonl], got remove=%v", pathsOf(plan.Remove))
+	}
+}
+
+// TestRetention_ZeroConfigKeepsAll verifies that a zero RetentionConfig
+// (all fields at zero value) keeps every segment and removes nothing.
+func TestRetention_ZeroConfigKeepsAll(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	segments := []SegmentInfo{
+		{
+			Path:    "s1.jsonl",
+			ModTime: now.Add(-100 * time.Hour),
+			Manifest: SegmentManifest{
+				Sequence: 1,
+				ClosedAt: now.Add(-100 * time.Hour),
+				SHA256:   strings.Repeat("d", 64),
+			},
+		},
+	}
+	plan := planRetention(segments, RetentionConfig{}, now)
+	if len(plan.Remove) != 0 {
+		t.Fatalf("zero RetentionConfig should remove nothing, got remove=%v", pathsOf(plan.Remove))
+	}
+}
+
+// TestRetention_ActiveSegmentNotEligible demonstrates that ListSegments (and
+// therefore PlanRetention) only enumerates closed segments whose filenames
+// match the segment-NNNNNN-timestamp.jsonl pattern. current.jsonl is excluded
+// by IsClosedSegmentName and is therefore never eligible for removal.
+func TestRetention_ActiveSegmentNotEligible(t *testing.T) {
+	dir := t.TempDir()
+	w, err := OpenWriter(dir, RotationConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Write one record but do NOT rotate — it stays in current.jsonl.
+	if err := w.WriteRecord([]byte(`{"n":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+
+	// current.jsonl was written but no rotation happened — ListSegments returns
+	// an empty slice because there are no closed segments.
+	plan, err := PlanRetention(dir, RetentionConfig{MaxSegments: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Keep) != 0 || len(plan.Remove) != 0 {
+		t.Fatalf("expected empty plan when only active segment exists, got keep=%d remove=%d",
+			len(plan.Keep), len(plan.Remove))
+	}
+}
+
+// pathsOf is a test helper that extracts Path strings from a SegmentInfo slice.
+func pathsOf(ss []SegmentInfo) []string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = s.Path
+	}
+	return out
+}

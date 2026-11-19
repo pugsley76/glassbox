@@ -46,6 +46,14 @@ type Signer interface {
 
     // Algorithm returns the signing algorithm name (e.g. "ed25519").
     Algorithm() string
+
+    // KeyOrigin returns non-sensitive metadata describing the origin of the
+    // signing key (provider name, algorithm, public key fingerprint).
+    // This metadata is embedded in signed audit envelopes so verifiers can
+    // identify the key without accessing secrets.
+    // The returned value must never contain PINs, private key material, or
+    // other sensitive data.
+    KeyOrigin() KeyOriginMetadata
 }
 ```
 
@@ -54,8 +62,11 @@ signing path passes only:
 - the 32-byte SHA-256 digest (as `data []byte`) — never the raw canonical payload
 - and receives a 64-byte signature and 32-byte public key in return
 
-This is the minimal interface needed to sign and verify; no key material, PIN,
-or credential is reachable through it.
+The `KeyOrigin()` method is read-only metadata for audit embedding; no
+credential crosses the interface through it.
+
+This is the minimal interface needed to sign, verify, and attribute a
+signature; no key material, PIN, or credential is reachable through it.
 
 ### 2. Provider selection and lifecycle
 
@@ -65,15 +76,23 @@ of the process.
 
 Selection precedence as implemented in `factory.go` (first match wins):
 
-| Priority | Config path |
-|---|---|
-| 1 | `GLASSBOX_SIGNER_TYPE` environment variable — values: `software`, `pkcs11` |
-| 2 | Default: `software` (when env var is absent or empty) |
+| Priority | Config path | Values |
+|---|---|---|
+| 1 | `GLASSBOX_SIGNER_TYPE` environment variable | `software`, `pkcs11` |
+| 2 | Default | `software` (when env var is absent or empty) |
 
 The higher-level `cmd` layer reads `audit.signing_provider` from the TOML config
 and translates it to the correct `GLASSBOX_SIGNER_TYPE` / `ProviderConfig` before
 calling the factory. AWS KMS is wired through the registry (`internal/signer/registry.go`)
 and the `cmd` layer directly; it is not handled by `NewFromEnv()` in `factory.go`.
+
+**Mock provider:** `GLASSBOX_SIGNER_TYPE=mock` activates a test-only provider
+registered in `DefaultRegistry` (see [§6](#6-mock--test-provider)). It is not
+listed in the precedence table above because `NewFromEnv()` does not handle it;
+the mock is only reachable via `Registry.CreateSigner("mock", cfg)` from the
+`cmd` layer. The `glassbox.example.toml` documents the associated environment
+variables (`GLASSBOX_MOCK_HSM_LATENCY_MS`, `GLASSBOX_MOCK_HSM_FAILURE_RATE`,
+`GLASSBOX_MOCK_HSM_SEED`).
 
 Once the factory constructs a provider, the raw configuration values (PIN,
 key bytes, AWS credentials) are consumed and not stored as accessible fields on
@@ -81,6 +100,38 @@ the returned `Signer`. The lifecycle is:
 
 ```
 startup → factory / registry → Signer interface → use → process exit
+```
+
+**Example — software provider (default):**
+
+```sh
+# Minimal: key from environment; factory defaults to "software".
+export GLASSBOX_SOFTWARE_PRIVATE_KEY_HEX=<64-char-hex-seed>
+glassbox audit:sign --payload audit.json --output audit-signed.json
+# Expected: exit 0, audit-signed.json written with Ed25519 signature
+
+# Explicit provider type:
+export GLASSBOX_SIGNER_TYPE=software
+glassbox audit:sign --payload audit.json --output audit-signed.json
+```
+
+**Example — PKCS#11 provider:**
+
+```sh
+export GLASSBOX_SIGNER_TYPE=pkcs11
+export GLASSBOX_PKCS11_MODULE=/usr/lib/softhsm/libsofthsm2.so
+export GLASSBOX_PKCS11_PIN=1234
+# Preflight (no signing committed):
+glassbox audit:sign --validate-only --signing-provider pkcs11
+# Expected: exit 0 on success; each validation step printed as [OK] or [FAIL]
+```
+
+**Example — mock provider (CI / local testing only):**
+
+```sh
+export GLASSBOX_SIGNER_TYPE=mock
+glassbox audit:sign --payload audit.json --output audit-signed.json
+# Expected: exit 0; key is ephemeral — signatures are NOT verifiable across invocations
 ```
 
 There is no runtime provider switching. A session that starts with the PKCS#11
@@ -260,8 +311,9 @@ process restart. Rejected; the single-provider model is simpler to audit.
 
 | Claim | Verified in |
 |---|---|
-| `Signer` interface definition (3 methods: `Sign`, `PublicKey`, `Algorithm`) | `internal/signer/signer.go` |
+| `Signer` interface definition (4 methods: `Sign`, `PublicKey`, `Algorithm`, `KeyOrigin`) | `internal/signer/signer.go` |
 | Provider selected via `GLASSBOX_SIGNER_TYPE`; AWS KMS wired through registry/cmd | `internal/signer/factory.go`, `internal/signer/registry.go` |
+| Mock provider registered in `DefaultRegistry`, not in `NewFromEnv` | `internal/signer/registry.go`, `glassbox.example.toml` |
 | Provider registered in registry | `internal/signer/registry.go` |
 | Software provider: key validated at construction | `internal/signer/provider_software.go` |
 | PKCS#11: module path/type validated before load | `internal/signer/provider_pkcs11.go`, `docs/audit-signing.md` |
@@ -271,6 +323,7 @@ process restart. Rejected; the single-provider model is simpler to audit.
 | KMS: `kms:GetPublicKey` called once at construction | `internal/signer/kms.go` |
 | Mock provider documented as test-only | `glassbox.example.toml` |
 | Only SHA-256 digest (not payload) passed as `data` to `Signer.Sign` | `internal/cmd/audit.go` |
+| `KeyOrigin()` returns non-sensitive metadata only; never contains credentials | `internal/signer/signer.go` (`KeyOriginMetadata`) |
 
 ## Consequences
 

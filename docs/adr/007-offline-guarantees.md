@@ -58,30 +58,81 @@ provided the required local inputs are available:
 environments where the signing machine has no network access:
 
 ```
-Stage 1 (online machine):   Fetch transaction → produce EnvelopeFile
-Stage 2 (air-gapped signer): Load EnvelopeFile → sign → produce SignedEnvelopeFile
-Stage 3 (online machine):   Load SignedEnvelopeFile → submit to RPC
+Stage 1 (online machine):    Fetch transaction → produce EnvelopeFile
+Stage 2 (air-gapped signer): Load EnvelopeFile → sign → save signed EnvelopeFile
+Stage 3 (online machine):    Load signed EnvelopeFile → submit to RPC
 ```
 
-**EnvelopeFile structure:**
-- Payload (canonical JSON blob)
-- SHA-256 checksum of the payload (computed before transfer to air-gapped machine)
-- Metadata (timestamp, network, transaction hash)
+**EnvelopeFile structure** (on-disk JSON, format version 1):
 
-**Signing stage controls:**
-- The signer computes its own SHA-256 of the received payload and compares it
-  to the embedded checksum before signing. A mismatch is a hard error; the
-  operation is aborted.
-- The signer uses the local software or PKCS#11 provider; no network call is
-  made.
-- The output `SignedEnvelopeFile` carries the signature, the public key, and
-  the original payload checksum.
+```json
+{
+  "version":            1,
+  "network":            "testnet",
+  "network_passphrase": "Test SDF Network ; September 2015",
+  "envelope_xdr":       "<base64-encoded unsigned TransactionEnvelope XDR>",
+  "checksum":           "<64-char hex SHA-256 of envelope_xdr string>",
+  "signatures": [
+    {
+      "public_key": "<hex-encoded Ed25519 public key>",
+      "signature":  "<hex-encoded Ed25519 signature over envelope_xdr bytes>",
+      "signed_at":  "2026-07-28T12:00:00Z"
+    }
+  ],
+  "metadata": {
+    "created_at":      "2026-07-28T11:00:00Z",
+    "description":     "optional human-readable label",
+    "source_address":  "G…",
+    "tx_hash":         "optional transaction hash",
+    "GLASSBOX_version": "optional version tag"
+  }
+}
+```
 
-**Submission stage:**
-- `internal/offline/submitter.go` reads the `SignedEnvelopeFile`, re-verifies
-  the signature against the embedded public key, and submits via RPC.
-- Re-verification before submission ensures the file was not tampered with
-  during the transfer from the air-gapped machine back to the online machine.
+Key field semantics:
+- `envelope_xdr` — the base64-encoded unsigned `TransactionEnvelope` XDR that will be submitted.
+- `checksum` — `SHA-256(envelope_xdr_string)` as lowercase hex. Computed by `checksumOf` in `envelope.go` and re-verified in `Validate()` on every load.
+- `signatures` — each entry records a hex-encoded Ed25519 signature over the raw bytes of `envelope_xdr`. Multiple signers can append entries; duplicate public keys are rejected.
+- `network_passphrase` — required; validated as non-empty before any signing work begins.
+
+**Signing stage controls (`internal/offline/signer.go`):**
+- `LoadEnvelopeFile` calls `Validate()` which re-computes `SHA-256(envelope_xdr)` and
+  compares it against the stored `checksum`. A mismatch is a hard error; signing
+  is aborted before the key is accessed.
+- Signing is performed with `ed25519.Sign` over the raw `envelope_xdr` bytes in
+  process memory; no network call is made.
+- Duplicate-signer detection: `SignEnvelope` rejects a second signature from the
+  same public key with an explicit error.
+- The updated file (with the new `SignatureEntry` appended) is saved back to disk
+  via `SaveToFile`; it is the same `EnvelopeFile` JSON format, now with
+  `signatures` populated.
+
+**Submission stage (`internal/offline/submitter.go`):**
+- `SubmitSignedEnvelope` reads the `envelope_xdr` from the loaded file and POST it
+  to the Soroban JSON-RPC `sendTransaction` endpoint.
+- **Note:** the submission stage does not call `VerifySignatures` before submitting.
+  Operators who require pre-submission signature verification should call
+  `VerifySignatures(ef)` explicitly after `LoadEnvelopeFile` on the online machine
+  before passing `ef.EnvelopeXDR` to `SubmitSignedEnvelope`. The `offline_test.go`
+  `TestRoundTrip_SaveSignLoadVerify` test demonstrates this sequence.
+
+**Complete round-trip example:**
+
+```go
+// Stage 1 — online machine
+ef := offline.NewEnvelopeFile("testnet", passphrase, envelopeXDR, offline.EnvelopeMetadata{})
+ef.SaveToFile("unsigned.json")
+
+// Stage 2 — air-gapped machine
+ef, _ = offline.LoadEnvelopeFile("unsigned.json") // Validate() checks checksum
+offline.SignEnvelope(ef, privateKeyHex)
+ef.SaveToFile("signed.json")
+
+// Stage 3 — online machine (optional pre-submit verification)
+ef, _ = offline.LoadEnvelopeFile("signed.json")
+offline.VerifySignatures(ef) // confirm signatures before network call
+offline.SubmitSignedEnvelope(ctx, sorobanURL, ef.EnvelopeXDR)
+```
 
 ### 4. Snapshot replay guarantees
 
@@ -135,8 +186,9 @@ When the primary RPC endpoint is unavailable, the CLI applies the configured
 
 | Strategy | Behaviour |
 |---|---|
-| `round-robin` | Cycle through `soroban_rpc_urls` list in order |
-| `first-available` | Try each URL in order, use the first that responds |
+| `weighted` | Probabilistic selection proportional to endpoint health score (default); healthy endpoints receive more traffic |
+| `sticky` | Always use the healthiest endpoint; switch only on failure |
+| `round_robin` | Cycle through all healthy endpoints in order |
 | (none configured) | Single URL; error immediately on failure |
 
 Failover applies to live transaction fetching and RPC submission only. It does
@@ -178,9 +230,13 @@ that never holds the signing key.
 ### Why is the payload checksum verified again on the air-gapped machine?
 
 A transfer medium (USB drive, QR code, encrypted email) between the online fetch
-stage and the air-gapped signing stage is not trusted. The checksum verification
-ensures the air-gapped signer is signing exactly the payload that was prepared
-by the online stage, not a modified version.
+stage and the air-gapped signing stage is not trusted. The checksum in
+`EnvelopeFile.Checksum` is `SHA-256(envelope_xdr)` — the SHA-256 of the
+base64-encoded XDR string as written to the file. `Validate()` (called by
+`LoadEnvelopeFile` on the air-gapped machine) re-derives this hash from the
+loaded `EnvelopeXDR` field and compares it against the stored `Checksum`. A
+mismatch aborts signing before the key is used, ensuring the signer operates
+on exactly the XDR prepared by the online stage.
 
 ### Why is the snapshot content hash omitted from provenance metadata?
 
@@ -218,15 +274,19 @@ explicit snapshot capture. Automatic caching is a candidate for a future `--auto
 
 | Claim | Verified in |
 |---|---|
-| Air-gapped envelope: checksum verified before signing | `internal/offline/envelope.go` |
-| Air-gapped envelope: re-verified before RPC submission | `internal/offline/submitter.go` |
+| Air-gapped envelope: `Checksum` = `SHA-256(envelope_xdr)`; verified by `Validate()` before signing | `internal/offline/envelope.go` (`checksumOf`, `Validate`) |
+| Air-gapped envelope: `Validate()` called on every `LoadEnvelopeFile` | `internal/offline/envelope.go` (`LoadEnvelopeFile`) |
+| Air-gapped signing: `ed25519.Sign` over raw `envelope_xdr` bytes; no network call | `internal/offline/signer.go` (`SignEnvelope`) |
+| Air-gapped signing: duplicate public key rejected | `internal/offline/signer.go` (`SignEnvelope`) |
+| Submission stage: does NOT call `VerifySignatures`; caller must do so explicitly | `internal/offline/submitter.go` (`SubmitSignedEnvelope`) |
+| Pre-submit verification: `VerifySignatures(ef)` available for caller use | `internal/offline/signer.go` (`VerifySignatures`), `internal/offline/offline_test.go` (`TestRoundTrip_SaveSignLoadVerify`) |
 | Software + PKCS#11 providers require no network | `internal/signer/inmemory.go`, `internal/signer/provider_pkcs11.go` |
 | KMS provider requires network for every sign call | `internal/signer/kms.go`, `docs/audit-kms-signing.md` |
 | Snapshot replay uses local store, no RPC | `internal/snapshot/`, `docs/snapshot-deduplication.md` |
 | Snapshot fingerprint: mismatch logged as `DRIFT WARNING` (load proceeds) | `docs/snapshot-deduplication.md` |
 | `audit:verify` requires no network | `docs/audit-verify-command.md` |
 | Telemetry / crash report failures are silent | `cmd/glassbox/main.go` |
-| RPC failover strategy (round-robin / first-available) | `glassbox.example.toml` |
+| RPC failover strategy (round-robin / first-available / weighted / sticky) | `glassbox.example.toml` |
 
 ## Consequences
 
