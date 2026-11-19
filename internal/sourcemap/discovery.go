@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/dotandev/glassbox/internal/wasmvalidate"
 )
 
 const wasmTargetPath = "target/wasm32-unknown-unknown/release"
@@ -59,6 +61,9 @@ func CheckHashMismatch(path, onChainHash string) error {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("failed to read WASM file %q: %w", path, err)
+	}
+	if len(content) < 8 || content[0] != 0x00 || content[1] != 0x61 || content[2] != 0x73 || content[3] != 0x6d {
+		return fmt.Errorf("not a valid WASM binary: %q does not start with WASM magic bytes", path)
 	}
 	sum := sha256.Sum256(content)
 	local := hex.EncodeToString(sum[:])
@@ -167,6 +172,17 @@ func DiscoverLocalSymbols(projectRoot string) (*DiscoveryResult, error) {
 						"  to ensure the file is a proper WASM binary.",
 					fullPath,
 				))
+			continue
+		}
+
+		// Structurally validate the module before indexing it. A file with a
+		// valid magic number but a corrupt or hostile section table would
+		// otherwise be hashed and offered as a resolution candidate, only to
+		// fail later — deeper in DWARF parsing — with a far less specific
+		// error.
+		if report := wasmvalidate.Validate(content, wasmvalidate.DefaultLimits()); !report.OK {
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("%q failed WASM validation and was skipped: %v", fullPath, report.Error()))
 			continue
 		}
 

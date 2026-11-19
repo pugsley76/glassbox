@@ -39,6 +39,10 @@ Setting either variable is equivalent to passing `--no-color` on the command
 line. The `--no-color` flag additionally propagates `NO_COLOR=1` to any child
 processes spawned during the command.
 
+**Note:** The `--non-interactive` flag (and CI/pipe detection) also suppresses
+color output independently of `--no-color`. See `docs/command-development-guide.md`
+for details on non-interactive mode.
+
 ## Precedence
 
 No-color sources are checked in this order (first match wins):
@@ -49,6 +53,10 @@ No-color sources are checked in this order (first match wins):
 4. `FORCE_COLOR` environment variable (overrides automatic detection to *enable* color)
 5. `TERM=dumb`
 6. Automatic TTY detection (colors enabled only when stdout is a terminal)
+
+Non-interactive mode (`--non-interactive` flag, `CI=true`, or piped stdout)
+suppresses all terminal control sequences including color, regardless of the
+above precedence.
 
 ## Affected output
 
@@ -77,4 +85,34 @@ env:
 # Shell script example
 export NO_COLOR=1
 glassbox debug "$TX_HASH" | tee debug.log
+```
+
+## Verification
+
+### Automated verification
+
+The repository includes a verification script to confirm no ANSI escape sequences are emitted when output is piped:
+
+```bash
+# Run the verification script
+./scripts/verify_no_ansi.sh
+```
+
+The script builds the binary if needed and tests both piped output and `NO_COLOR=1` behavior.
+
+### Unit tests
+
+Key test files for no-color behavior:
+- `internal/cmd/no_color_test.go` — CLI flag and environment variable activation
+- `internal/visualizer/color_test.go` — Visualizer color enabling logic
+- `internal/terminal/ansi_test.go` — ANSI renderer color behavior
+- `internal/termctx/termctx_test.go` — Terminal context and non-interactive mode
+
+Run the no-color specific tests:
+
+```bash
+go test ./internal/cmd/... -run NoColor
+go test ./internal/visualizer/... -run Color
+go test ./internal/terminal/... -run ANSI
+go test ./internal/termctx/... -run NonInteractive
 ```

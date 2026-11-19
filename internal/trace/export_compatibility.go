@@ -177,12 +177,22 @@ func LoadVersionedTrace(path string, compatOpts CompatibilityOptions) (*Executio
 				joinVersions(SupportedJSONSchemaVersions),
 			)
 		}
+		// Validate the schema version string itself (format, numeric components).
+		if err := ValidateJSONSchemaVersion(probe.SchemaVersion); err != nil {
+			return nil, fmt.Errorf(
+				"malformed schema_version %q in trace file %q: %w\n"+
+					"  Fix: re-export the trace with the current CLI — schema_version must be \"MAJOR.MINOR\"",
+				probe.SchemaVersion, path, err)
+		}
 		if probe.SchemaVersion != CurrentJSONSchemaVersion {
 			fmt.Fprintf(os.Stderr,
 				"Warning: trace file %q uses schema_version %q; current is %q\n"+
 					"  Consider re-exporting with the current CLI for full compatibility\n",
 				path, probe.SchemaVersion, CurrentJSONSchemaVersion,
 			)
+			// For schema version migration, we would need to reload the full envelope
+			// and apply MigrateTrace. For now, we load the trace directly since
+			// the structure is compatible between 1.0 and 2.0 schema versions.
 		}
 		return probe.Trace, nil
 	}

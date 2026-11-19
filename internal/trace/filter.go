@@ -22,20 +22,33 @@ type FilterExpression struct {
 	ContractID   string `json:"contract_id,omitempty"`
 	Function     string `json:"function,omitempty"`
 	EventType    string `json:"event_type,omitempty"`
-	Severity     string `json:"severity,omitempty"`     // "error", "warning", "info", "all"
+	Severity     string `json:"severity,omitempty"` // "error", "warning", "info", "all"
 	SourceFile   string `json:"source_file,omitempty"`
-	StepMin      int    `json:"step_min,omitempty"`     // 0 = no lower bound
-	StepMax      int    `json:"step_max,omitempty"`     // 0 = no upper bound
+	StepMin      int    `json:"step_min,omitempty"` // 0 = no lower bound
+	StepMax      int    `json:"step_max,omitempty"` // 0 = no upper bound
+	// LineMin and LineMax filter by source line number (ExecutionState.SourceLine).
+	// Both are inclusive. 0 means no bound on that side.
+	// A step with SourceLine == 0 (line not recorded) never matches a non-zero
+	// line range, so the filter has no false positives on steps without source info.
+	LineMin int `json:"line_min,omitempty"` // 0 = no lower bound
+	LineMax int `json:"line_max,omitempty"` // 0 = no upper bound
+	// Exclude reverses the filter: a step matches when it does NOT match the
+	// other criteria. Useful for "show everything except contract X".
+	Exclude bool `json:"exclude,omitempty"`
+
 	ContractIDRe *regexp.Regexp `json:"-"`
 	FunctionRe   *regexp.Regexp `json:"-"`
 }
 
-// Severity levels for filtering.
+// Filter severity levels. Named distinctly from AnnotationSeverity
+// (reviewer_comments.go) since the two are unrelated concepts that happen to
+// share level names — this one grades trace step filtering, that one grades
+// reviewer comments.
 const (
-	SeverityError   = "error"
-	SeverityWarning = "warning"
-	SeverityInfo    = "info"
-	SeverityAll     = "all"
+	FilterSeverityError   = "error"
+	FilterSeverityWarning = "warning"
+	FilterSeverityInfo    = "info"
+	FilterSeverityAll     = "all"
 )
 
 // Validate checks that the filter expression is well-formed.
@@ -46,10 +59,10 @@ func (f *FilterExpression) Validate() error {
 	}
 
 	// Validate severity
-	if f.Severity != "" && f.Severity != SeverityError &&
-		f.Severity != SeverityWarning && f.Severity != SeverityInfo && f.Severity != SeverityAll {
+	if f.Severity != "" && f.Severity != FilterSeverityError &&
+		f.Severity != FilterSeverityWarning && f.Severity != FilterSeverityInfo && f.Severity != FilterSeverityAll {
 		return fmt.Errorf("invalid severity %q: must be one of %s, %s, %s, %s, %s",
-			f.Severity, SeverityError, SeverityWarning, SeverityInfo, SeverityAll, "")
+			f.Severity, FilterSeverityError, FilterSeverityWarning, FilterSeverityInfo, FilterSeverityAll, "")
 	}
 
 	// Validate event type
@@ -88,10 +101,23 @@ func (f *FilterExpression) Validate() error {
 		return fmt.Errorf("step_min (%d) cannot be greater than step_max (%d)", f.StepMin, f.StepMax)
 	}
 
+	// Validate line range
+	if f.LineMin < 0 {
+		return fmt.Errorf("line_min (%d) cannot be negative", f.LineMin)
+	}
+	if f.LineMax < 0 {
+		return fmt.Errorf("line_max (%d) cannot be negative", f.LineMax)
+	}
+	if f.LineMin > 0 && f.LineMax > 0 && f.LineMin > f.LineMax {
+		return fmt.Errorf("line_min (%d) cannot be greater than line_max (%d)", f.LineMin, f.LineMax)
+	}
+
 	return nil
 }
 
 // Matches checks if a single ExecutionState matches the filter.
+// When Exclude is true the result is inverted: steps that would normally
+// match are rejected, and steps that would normally be rejected are included.
 func (f *FilterExpression) Matches(state *ExecutionState) bool {
 	if f == nil {
 		return true
@@ -99,7 +125,11 @@ func (f *FilterExpression) Matches(state *ExecutionState) bool {
 	if state == nil {
 		return false
 	}
+	return applyExclude(f.matchesInclusive(state), f.Exclude)
+}
 
+// matchesInclusive evaluates all criteria without applying the Exclude flag.
+func (f *FilterExpression) matchesInclusive(state *ExecutionState) bool {
 	// Contract ID filter
 	if f.ContractID != "" {
 		if f.ContractIDRe != nil {
@@ -130,14 +160,14 @@ func (f *FilterExpression) Matches(state *ExecutionState) bool {
 	}
 
 	// Severity filter
-	if f.Severity != "" && f.Severity != SeverityAll {
+	if f.Severity != "" && f.Severity != FilterSeverityAll {
 		hasError := state.Error != ""
 		switch f.Severity {
-		case SeverityError:
+		case FilterSeverityError:
 			if !hasError {
 				return false
 			}
-		case SeverityInfo:
+		case FilterSeverityInfo:
 			if hasError {
 				return false
 			}
@@ -159,10 +189,34 @@ func (f *FilterExpression) Matches(state *ExecutionState) bool {
 		return false
 	}
 
+	// Source line range filter.
+	// A step with no recorded source line (SourceLine == 0) does not match a
+	// non-zero line range, avoiding false positives on steps without DWARF info.
+	if f.LineMin > 0 || f.LineMax > 0 {
+		if state.SourceLine == 0 {
+			return false
+		}
+		if f.LineMin > 0 && state.SourceLine < f.LineMin {
+			return false
+		}
+		if f.LineMax > 0 && state.SourceLine > f.LineMax {
+			return false
+		}
+	}
+
 	return true
 }
 
+// applyExclude inverts matched when exclude is true.
+func applyExclude(matched bool, exclude bool) bool {
+	if exclude {
+		return !matched
+	}
+	return matched
+}
+
 // And combines two filter expressions with logical AND.
+// Fields from other override fields from f when both are set.
 func (f *FilterExpression) And(other *FilterExpression) *FilterExpression {
 	result := &FilterExpression{}
 	if f != nil {
@@ -173,6 +227,9 @@ func (f *FilterExpression) And(other *FilterExpression) *FilterExpression {
 		result.SourceFile = f.SourceFile
 		result.StepMin = f.StepMin
 		result.StepMax = f.StepMax
+		result.LineMin = f.LineMin
+		result.LineMax = f.LineMax
+		result.Exclude = f.Exclude
 	}
 	if other != nil {
 		if other.ContractID != "" {
@@ -196,6 +253,15 @@ func (f *FilterExpression) And(other *FilterExpression) *FilterExpression {
 		if other.StepMax > 0 {
 			result.StepMax = other.StepMax
 		}
+		if other.LineMin > 0 {
+			result.LineMin = other.LineMin
+		}
+		if other.LineMax > 0 {
+			result.LineMax = other.LineMax
+		}
+		if other.Exclude {
+			result.Exclude = true
+		}
 	}
 	return result
 }
@@ -211,7 +277,8 @@ type FilteredTrace struct {
 
 // ApplyFilter returns a FilteredTrace containing only the steps that match the
 // filter expression, preserving parent context for matched descendants.
-// The original trace is never modified.
+// The original trace is never modified. Sequence IDs are preserved to maintain
+// deterministic ordering across filtering operations.
 func ApplyFilter(t *ExecutionTrace, expr *FilterExpression) (*FilteredTrace, error) {
 	if t == nil {
 		return nil, fmt.Errorf("trace is nil")

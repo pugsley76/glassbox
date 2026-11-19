@@ -95,6 +95,7 @@ var (
 	saveSnapshotsFlag     string
 	wasmBase64            string
 	contractSourceFlag    string
+	buildManifestFlag     string
 	debugJSONFlag         bool
 	debugFormatFlag       string
 	skipSourceMappingFlag bool
@@ -191,10 +192,10 @@ func (d *DebugCommand) runDebug(cmd *cobra.Command, cmdArgs []string) error {
 		return errors.WrapValidationError(fmt.Sprintf("failed to create client: %v", err))
 	}
 
-	fmt.Printf("Debugging transaction: %s\n", txHash)
-	fmt.Printf("Network: %s\n", networkFlag)
+	fmt.Fprintf(cmd.OutOrStdout(), "Debugging transaction: %s\n", txHash)
+	fmt.Fprintf(cmd.OutOrStdout(), "Network: %s\n", networkFlag)
 	if rpcURLFlag != "" {
-		fmt.Printf("RPC URL: %s\n", rpcURLFlag)
+		fmt.Fprintf(cmd.OutOrStdout(), "RPC URL: %s\n", rpcURLFlag)
 	}
 
 	// Fetch transaction details
@@ -203,7 +204,7 @@ func (d *DebugCommand) runDebug(cmd *cobra.Command, cmdArgs []string) error {
 		return errors.WrapRPCConnectionFailed(err)
 	}
 
-	fmt.Printf("Transaction fetched successfully. Envelope size: %d bytes\n", len(resp.EnvelopeXdr))
+				fmt.Fprintf(cmd.OutOrStdout(), "Transaction fetched successfully. Envelope size: %d bytes\n", len(resp.EnvelopeXdr))
 
 	simReq := &simulator.SimulationRequest{
 		EnvelopeXdr:   resp.EnvelopeXdr,
@@ -260,30 +261,33 @@ Local WASM Replay Mode:
 	Args: cobra.MaximumNArgs(1),
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		if hotReloadFlag && wasmPath == "" {
-			return errors.WrapValidationError("--hot-reload requires --wasm; provide --wasm <path> to enable hot reload")
+			return errors.WrapValidationError(
+				"--hot-reload requires --wasm; provide --wasm <path> to enable hot reload\n" +
+					"  Example: glassbox debug --wasm ./contract.wasm --hot-reload")
 		}
 
 		// Demo mode, local WASM replay, local envelope file input, and offline
 		// registry load don't need a transaction hash or network connectivity.
 		if xdrFileFlag != "" && jsonFileFlag != "" {
 			return errors.WrapValidationError(
-				"only one of --xdr-file or --json-file may be specified; remove one of the two flags")
+				"only one of --xdr-file or --json-file may be specified\n" +
+					"  Fix: remove one of the two flags — they provide the same local envelope input")
 		}
 		if xdrFileFlag != "" || jsonFileFlag != "" {
 			if len(args) > 0 {
 				return errors.WrapValidationError(
-					"cannot specify both a transaction hash and a local envelope file; " +
-						"use either a hash or --xdr-file/--json-file, not both")
+					"cannot specify both a transaction hash and a local envelope file\n" +
+						"  Fix: use either a hash argument or --xdr-file/--json-file, not both")
 			}
 			if watchFlag {
 				return errors.WrapValidationError(
-					"--watch cannot be used with local envelope input; " +
-						"remove --watch or provide a transaction hash instead")
+					"--watch cannot be used with local envelope input\n" +
+						"  Fix: remove --watch or provide a transaction hash instead of a local file")
 			}
 			if compareNetworkFlag != "" {
 				return errors.WrapValidationError(
-					"--compare-network cannot be used with local envelope input; " +
-						"remove --compare-network or use a transaction hash")
+					"--compare-network cannot be used with local envelope input\n" +
+						"  Fix: remove --compare-network or use a transaction hash")
 			}
 			// Validate the local file exists before proceeding.
 			if xdrFileFlag != "" {
@@ -313,8 +317,9 @@ Local WASM Replay Mode:
 		if len(args) == 0 {
 			return errors.WrapValidationError(
 				"transaction hash is required when not using --wasm, --demo, --xdr-file, or --json-file\n" +
-					"Usage: glassbox debug <transaction-hash>\n" +
-					"Run 'glassbox debug --help' for all available options")
+					"  Usage: glassbox debug <transaction-hash>\n" +
+					"  Example: glassbox debug abc123...def\n" +
+					"  Run 'glassbox debug --help' for all available options")
 		}
 
 		if err := rpc.ValidateTransactionHash(args[0]); err != nil {
@@ -333,7 +338,7 @@ Local WASM Replay Mode:
 			defer probeCancel()
 			if resolved, err := rpc.ResolveNetwork(probeCtx, args[0], token); err == nil {
 				networkFlag = string(resolved)
-				fmt.Printf("Auto-detected network: %s\n", networkFlag)
+				fmt.Fprintf(cmd.OutOrStdout(), "Auto-detected network: %s\n", networkFlag)
 			}
 		}
 
@@ -532,6 +537,41 @@ Local WASM Replay Mode:
 			}
 		}
 
+		// Validate --build-manifest points to a readable, valid manifest file.
+		// Artifact hash verification against --wasm is deferred to the resolver
+		// so it happens with the actual WASM bytes in hand.
+		if buildManifestFlag != "" {
+			trimmed := strings.TrimSpace(buildManifestFlag)
+			if trimmed == "" {
+				return errors.WrapValidationError(
+					"--build-manifest: value must not be empty or whitespace\n" +
+						"  Provide the path to a glassbox-build-manifest.json file.",
+				)
+			}
+			if strings.ContainsRune(trimmed, 0) {
+				return errors.WrapValidationError(
+					"--build-manifest: path contains null bytes and cannot be used\n" +
+						"  Fix: remove any null bytes from the path.",
+				)
+			}
+			if _, statErr := os.Stat(trimmed); statErr != nil {
+				if os.IsNotExist(statErr) {
+					return errors.WrapValidationError(fmt.Sprintf(
+						"--build-manifest: file not found: %q\n"+
+							"  Generate a manifest with 'glassbox generate-manifest' or provide\n"+
+							"  a valid path to an existing glassbox-build-manifest.json file.",
+						trimmed,
+					))
+				}
+				return errors.WrapValidationError(fmt.Sprintf(
+					"--build-manifest: cannot access %q: %v", trimmed, statErr,
+				))
+			}
+			if _, manifestErr := sourcemap.LoadManifest(trimmed); manifestErr != nil {
+				return errors.WrapValidationError(fmt.Sprintf("%v", manifestErr))
+			}
+		}
+
 		// Validate --mock-ledger-manifest file existence (full content validation
 		// happens in loadMockLedgerOverrides during RunE).
 		if mockLedgerManifest != "" {
@@ -582,14 +622,14 @@ Local WASM Replay Mode:
 					continue
 				}
 				if trimmedTarget == "" {
-					fmt.Fprintf(os.Stderr,
+					fmt.Fprintf(cmd.ErrOrStderr(),
 						"Warning: --source-alias: target for %q is empty; source mapping for this alias will be skipped\n",
 						trimmedAlias,
 					)
 					continue
 				}
 				if _, targetErr := os.Stat(trimmedTarget); targetErr != nil {
-					fmt.Fprintf(os.Stderr,
+					fmt.Fprintf(cmd.ErrOrStderr(),
 						"Warning: --source-alias: target for %q does not exist: %q — source mapping for this alias will be skipped\n",
 						trimmedAlias, trimmedTarget,
 					)
@@ -677,7 +717,8 @@ Local WASM Replay Mode:
 			logger.SetLevel(slog.LevelWarn)
 		}
 
-		// Dry-run: validate inputs and environment without executing replay
+		// Dry-run: validate inputs and environment without executing replay.
+		// This now uses the shared plan model for consistency with --plan.
 		if debugDryRunFlag {
 			if demoMode || wasmPath != "" || loadSnapshotsFlag != "" || xdrFileFlag != "" || jsonFileFlag != "" {
 				progEm.Error(progress.PhaseInit, "--dry-run combined with incompatible flag", "invalid_dry_run_flags")
@@ -698,7 +739,8 @@ Local WASM Replay Mode:
 					"transaction hash is required for --dry-run\n" +
 						"Usage: glassbox debug --dry-run --network testnet <transaction-hash>")
 			}
-			return runDebugDryRun(cmd, cmdArgs[0])
+			// Build and render the execution plan for dry-run validation
+			return runDebugDryRunPlan(cmd, cmdArgs[0])
 		}
 
 		// Plan: show what the command will do without performing any side effects.
@@ -791,7 +833,6 @@ Local WASM Replay Mode:
 		}
 
 		localEnvelopeMode := xdrFileFlag != "" || jsonFileFlag != ""
-		ctx := cmd.Context()
 		txHash := ""
 		if !localEnvelopeMode {
 			txHash = cmdArgs[0]
@@ -803,7 +844,7 @@ Local WASM Replay Mode:
 			uiStore = s
 			defer uiStore.Close()
 			if prev, err := uiStore.LoadSectionState(ctx, txHash); err == nil && len(prev) > 0 {
-				fmt.Printf("Restoring viewer state: last session showed [%s] for this transaction.\n", strings.Join(prev, ", "))
+				fmt.Fprintf(cmd.OutOrStdout(), "Restoring viewer state: last session showed [%s] for this transaction.\n", strings.Join(prev, ", "))
 			}
 		}
 
@@ -903,7 +944,7 @@ Local WASM Replay Mode:
 			}
 			// Lock the provider pool to the pinned endpoint so replay is deterministic.
 			opts = append(opts, rpc.WithReplayPinProvider(pinEndpointFlag))
-			fmt.Printf("Pinned RPC endpoint: %s\n", pinEndpointFlag)
+			fmt.Fprintf(cmd.OutOrStdout(), "Pinned RPC endpoint: %s\n", pinEndpointFlag)
 		}
 
 		client, err := rpc.NewClient(opts...)
@@ -918,7 +959,7 @@ Local WASM Replay Mode:
 
 		if noCacheFlag {
 			client.CacheEnabled = false
-			fmt.Println("🚫 Cache disabled by --no-cache flag")
+			fmt.Fprintln(cmd.OutOrStdout(), "🚫 Cache disabled by --no-cache flag")
 		}
 
 		if !localEnvelopeMode {
@@ -926,13 +967,13 @@ Local WASM Replay Mode:
 		}
 
 		if localEnvelopeMode {
-			fmt.Println("Debugging local transaction envelope")
+			fmt.Fprintln(cmd.OutOrStdout(), "Debugging local transaction envelope")
 		} else {
-			fmt.Printf("Debugging transaction: %s\n", txHash)
+			fmt.Fprintf(cmd.OutOrStdout(), "Debugging transaction: %s\n", txHash)
 		}
-		fmt.Printf("Primary Network: %s\n", networkFlag)
+		fmt.Fprintf(cmd.OutOrStdout(), "Primary Network: %s\n", networkFlag)
 		if compareNetworkFlag != "" {
-			fmt.Printf("Comparing against Network: %s\n", compareNetworkFlag)
+			fmt.Fprintf(cmd.OutOrStdout(), "Comparing against Network: %s\n", compareNetworkFlag)
 		}
 
 		var watchEvents <-chan struct{}
@@ -947,13 +988,14 @@ Local WASM Replay Mode:
 				DebounceWindow: 500 * time.Millisecond,
 			}
 			events, errs := watch.StartFileWatcher(ctx, cfg)
-			watchEvents = events
-			go func() {
-				for err := range errs {
-					fmt.Fprintf(os.Stderr, "Watch error: %v\n", err)
-				}
-			}()
-			fmt.Println("Watching for file changes to rerun debug session...")
+		watchEvents = events
+		errWriter := cmd.ErrOrStderr()
+		go func() {
+			for err := range errs {
+				fmt.Fprintf(errWriter, "Watch error: %v\n", err)
+			}
+		}()
+			fmt.Fprintln(cmd.OutOrStdout(), "Watching for file changes to rerun debug session...")
 		}
 
 	watchLoop:
@@ -1006,15 +1048,15 @@ Local WASM Replay Mode:
 					if localInputNetwork != "" && !cmd.Flags().Changed("network") {
 						networkFlag = localInputNetwork
 					}
-					fmt.Printf("Loaded local transaction envelope from %s\n", func() string {
+					fmt.Fprintf(cmd.OutOrStdout(), "Loaded local transaction envelope from %s\n", func() string {
 						if xdrFileFlag != "" {
 							return xdrFileFlag
 						}
 						return jsonFileFlag
 					}())
-					fmt.Printf("Envelope size: %d bytes\n", len(resp.EnvelopeXdr))
+					fmt.Fprintf(cmd.OutOrStdout(), "Envelope size: %d bytes\n", len(resp.EnvelopeXdr))
 				} else {
-					fmt.Printf("Fetching transaction: %s\n", txHash)
+					fmt.Fprintf(cmd.OutOrStdout(), "Fetching transaction: %s\n", txHash)
 					_t0 := time.Now()
 					doneRPC := diagCollector.Start(diagnostics.PhaseRPCFetch)
 					resp, err = client.GetTransaction(ctx, txHash)
@@ -1023,13 +1065,39 @@ Local WASM Replay Mode:
 					}
 					doneRPC(err)
 					if err != nil {
+						// Surface structured failover diagnostics before returning.
+						poolDiag := client.PoolDiagnostics()
+						if len(poolDiag.Attempts) > 0 {
+							allFailed := poolDiag.SucceededURL == ""
+							summary := rpc.BuildRPCFailureSummary(poolDiag)
+							if allFailed {
+								states := client.GetHealthReport()
+								diag := rpc.AllNodesFailedDiagnostic{
+									Summary:        summary,
+									Network:        networkFlag,
+									Timestamp:      time.Now(),
+								}
+								if states != nil {
+									diag.ProviderStates = make([]rpc.ProviderState, 0)
+									// Attach circuit-breaker-aware state from the pool when available.
+									if pool := client.ProviderPool(); pool != nil {
+										diag.ProviderStates = pool.ProviderStates()
+									}
+								}
+								fmt.Fprint(cmd.ErrOrStderr(), rpc.FormatAllNodesFailedText(diag))
+							} else if len(poolDiag.Attempts) > 1 {
+								// Partial failover succeeded — report it informatively.
+								fmt.Fprintf(cmd.ErrOrStderr(), "Note: RPC failover occurred (%d attempt(s)) — succeeded via %s\n",
+									len(poolDiag.Attempts), poolDiag.SucceededURL)
+							}
+						}
 						return errors.WrapRPCConnectionFailed(err)
 					}
 
-					fmt.Printf("Transaction fetched successfully. Envelope size: %d bytes\n", len(resp.EnvelopeXdr))
+	fmt.Fprintf(cmd.OutOrStdout(), "Transaction fetched successfully. Envelope size: %d bytes\n", len(resp.EnvelopeXdr))
 					// Show which provider succeeded when the pool attempted failover.
 					if diag := client.PoolDiagnostics(); len(diag.Attempts) > 1 {
-						fmt.Printf("Provider failover occurred — succeeded via: %s\n", diag.SucceededURL)
+						fmt.Fprintf(cmd.OutOrStdout(), "Provider failover occurred — succeeded via: %s\n", diag.SucceededURL)
 					}
 				}
 				keys, err := extractLedgerKeys(resp.ResultMetaXdr)
@@ -1084,7 +1152,7 @@ Local WASM Replay Mode:
 
 				for _, ts := range timestamps {
 					if len(timestamps) > 1 {
-						fmt.Printf("\n--- Simulating at Timestamp: %d ---\n", ts)
+						fmt.Fprintf(cmd.OutOrStdout(), "\n--- Simulating at Timestamp: %d ---\n", ts)
 					}
 
 					var simResp *simulator.SimulationResponse
@@ -1101,7 +1169,7 @@ Local WASM Replay Mode:
 							// aware that the ledger state may not match what was originally
 							// captured.
 							if driftWarn != nil {
-								fmt.Fprintf(os.Stderr, "\nWarning: %s\n\n", driftWarn.Error())
+								fmt.Fprintf(cmd.ErrOrStderr(), "\nWarning: %s\n\n", driftWarn.Error())
 							}
 							// Validate the snapshot identity and freshness before replay.
 							currentParams := map[string]string{
@@ -2813,6 +2881,45 @@ func validateSourceDiscoveryFlags() error {
 		}
 	}
 
+	// --build-manifest must be a readable, valid glassbox-build-manifest.json.
+	// Full schema validation (including artifact hash check against --wasm) is
+	// deferred to resolver construction; here we only verify the file is
+	// readable and parses as valid JSON with the required fields present so the
+	// user gets an immediate, actionable error before any simulation work runs.
+	if buildManifestFlag != "" {
+		trimmed := strings.TrimSpace(buildManifestFlag)
+		if trimmed == "" {
+			return errors.WrapValidationError(
+				"--build-manifest: value must not be empty or whitespace\n" +
+					"  Provide the path to a glassbox-build-manifest.json file.",
+			)
+		}
+		if strings.ContainsRune(trimmed, 0) {
+			return errors.WrapValidationError(
+				"--build-manifest: path contains null bytes and cannot be used\n" +
+					"  Fix: remove any null bytes from the path.",
+			)
+		}
+		if _, statErr := os.Stat(trimmed); statErr != nil {
+			if os.IsNotExist(statErr) {
+				return errors.WrapValidationError(fmt.Sprintf(
+					"--build-manifest: file not found: %q\n"+
+						"  Generate a manifest with 'glassbox generate-manifest' or provide\n"+
+						"  a valid path to an existing glassbox-build-manifest.json file.",
+					trimmed,
+				))
+			}
+			return errors.WrapValidationError(fmt.Sprintf(
+				"--build-manifest: cannot access %q: %v", trimmed, statErr,
+			))
+		}
+		// Perform a full schema parse so required-field errors are surfaced here.
+		// Artifact hash verification against --wasm happens later in the resolver.
+		if _, manifestErr := sourcemap.LoadManifest(trimmed); manifestErr != nil {
+			return errors.WrapValidationError(fmt.Sprintf("%v", manifestErr))
+		}
+	}
+
 	return nil
 }
 
@@ -2823,6 +2930,18 @@ func applyDebugSimulationOptions(req *simulator.SimulationRequest) {
 	req.SkipSourceMapping = skipSourceMappingFlag
 	if contractSourceFlag != "" {
 		req.ContractSourcePath = &contractSourceFlag
+	}
+	// Resolve effective build manifest path: CLI flag > GLASSBOX_BUILD_MANIFEST
+	// env var (already parsed into cfg.BuildManifestPath) > no manifest.
+	effectiveManifest := buildManifestFlag
+	if effectiveManifest == "" {
+		if cfg, err := config.Load(); err == nil && cfg.BuildManifestPath != "" {
+			effectiveManifest = cfg.BuildManifestPath
+		}
+	}
+	if effectiveManifest != "" {
+		v := effectiveManifest
+		req.BuildManifestPath = &v
 	}
 }
 
@@ -2989,6 +3108,9 @@ func init() {
 
 	// Source alias mapping flag
 	debugCmd.Flags().StringVar(&sourceAliasFlag, "source-alias", "", "Path to a JSON file mapping embedded source paths to local directory paths")
+
+	// Reproducible build manifest flag (Issue #45)
+	debugCmd.Flags().StringVar(&buildManifestFlag, "build-manifest", "", "Path to a glassbox-build-manifest.json for cross-machine source path remapping")
 
 	// Enum-flag completion registrations (never performs network I/O)
 	_ = debugCmd.RegisterFlagCompletionFunc("network", completeNetworkFlag)

@@ -27,16 +27,25 @@ field definitions and which `context` keys are safe for log aggregation, and
 
 ## Commands
 
-| Command | Flags |
-|---------|--------|
-| `debug` | `--json`, `--format json` |
-| `export` | `--format json` |
-| `audit:sign` | `--json` (schema envelope; legacy output without the flag) |
-| `protocol:diagnose` | `--json` |
-| `generate-bindings` | `--json`, `--format json` |
-| `check-bindings` | `--json` |
-| `config show` | `--json` |
-| `bench` | `--json` |
+| Command | Flags | Envelope |
+|---------|--------|----------|
+| `debug` | `--json`, `--format json` | Yes |
+| `trace` | `--output-json <file>`, `--format json` | Yes (writes to file) |
+| `export` | `--format json` | Yes |
+| `audit:sign` | `--json` | Yes (legacy output without the flag) |
+| `audit:verify` | `--json` | Yes |
+| `protocol:diagnose` | `--json`, `--format json` | Yes |
+| `generate-bindings` | `--json`, `--format json` | Yes |
+| `check-bindings` | `--json` | No (direct JSON) |
+| `config show` | `--json` | No (direct JSON) |
+| `bench` | `--json` | No (direct JSON) |
+| `version` | `--json` | No (flat JSON only) |
+
+**Envelope usage:** Most commands wrap their output in the schema envelope shown above. The following commands emit JSON directly without the envelope:
+- `version --json` — flat JSON object with version metadata
+- `config show --json` — direct JSON with configuration values
+- `check-bindings --json` — direct JSON validation report
+- `bench --json` — direct JSON benchmark results
 
 **Format validation:** `--format` is validated at startup for all commands that accept it. Unsupported values (e.g. `--format yaml`) are rejected immediately with an explicit error listing the accepted values.
 
@@ -44,8 +53,14 @@ field definitions and which `context` keys are safe for log aggregation, and
 
 ```bash
 # debug with JSON output
-glassbox debug --wasm ./contract.wasm --json
+glassbox debug --json <txhash>
 
 # export snapshot as JSON envelope
 glassbox export --snapshot ./state.snap.json --format json
+
+# trace export as JSON (writes to file)
+glassbox trace --export trace.json --format json execution.json
+
+# config show as direct JSON (no envelope)
+glassbox config show --json
 ```
