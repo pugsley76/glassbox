@@ -23,7 +23,7 @@ else
 fi
 
 # Use a valid-length hash (64 hex chars) - will fail to fetch but we get initial output
-HASH="0"$(printf '0%.0s' {1..62})
+HASH=$(printf '0%.0s' {1..64})
 
 echo "Testing: $BIN debug $HASH 2>&1 | cat"
 OUTPUT=$($BIN debug "$HASH" 2>&1 | cat)

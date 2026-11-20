@@ -19,6 +19,21 @@ glassbox generate-bindings contract.wasm \
   --wasm-source ./contract.wasm
 ```
 
+## Environment Matrix Targets
+
+Generate bindings specifically tailored for your execution runtime:
+
+```bash
+# 1. Node.js target (default): local subprocess simulation via child_process
+glassbox generate-bindings contract.wasm --runtime node --output ./generated
+
+# 2. Browser target: zero Node.js imports, fetch-based simulation, safe for Vite/Webpack
+glassbox generate-bindings contract.wasm --runtime browser --output ./generated
+
+# 3. Universal target: isomorphic environment detection for Node, Browser, and Electron
+glassbox generate-bindings contract.wasm --runtime universal --output ./generated
+```
+
 ## Generated Files
 
 | File | Description |

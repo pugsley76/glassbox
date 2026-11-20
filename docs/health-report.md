@@ -33,15 +33,35 @@ HEALTH_REPORT_OUTPUT_FORMAT=json scripts/health-report.sh
 | `generated_drift` | `*_gen.go` files whose source is newer (possible stale generation) |
 | `compat_shim` | Code annotated with `deprecated`, `legacy`, `backcompat`, or removal hints |
 
-Generated files (`*_gen.go`, `*.pb.go`), vendor directories, and `testdata/`
-directories are excluded from all scans.
+### Code-Marker Exceptions & Exclusions
+
+Not every code comment or marker represents an immediate problem. The health report supports two tiers of exceptions:
+
+1. **Automatic Path Exclusions (Built-in)**
+   - Generated files (`*_gen.go`, `*.pb.go`)
+   - Vendor directories (`*/vendor/*`)
+   - Test data directories (`*/testdata/*`)
+
+2. **Explicit Suppressions (`.glassbox-health-suppress.json`)**
+   - **Pattern matching**: Substrings matching against the line text (e.g. `"TODO: remove after protocol v22 ships"`).
+   - **File & Line pinning**: Exact matching against `file:line` (e.g. `"internal/sourcemap/resolver.go:42"`).
+
+### Environment Requirements & Assumptions
+
+- **Bash 4.0 or newer**: The script utilizes associative arrays (`declare -A`). macOS ships by default with Bash 3.2; on macOS run via Homebrew Bash (`/opt/homebrew/bin/bash scripts/health-report.sh`) or run inside a Docker container or CI runner.
+- **`jq`**: Required for parsing `.glassbox-health-suppress.json` and generating `--json` formatted outputs. If `jq` is absent, suppressions are bypassed and text output is used.
 
 ## Exit codes
 
 | Exit code | Meaning |
 |-----------|---------|
 | `0` | Report ran successfully; no stale suppressions found |
-| `1` | One or more suppressions have passed their expiry date |
+| `1` | One or more suppressions have passed their expiry date (`STALE_SUPPRESS`) |
+| `2` | Environment error (e.g. Bash version < 4.0) |
+
+Regular findings (TODOs, placeholders, etc.) do **not** cause a non-zero exit.
+Only stale suppressions do, because they represent commitments that were made
+but not honoured.
 
 Regular findings (TODOs, placeholders, etc.) do **not** cause a non-zero exit.
 Only stale suppressions do, because they represent commitments that were made
@@ -76,12 +96,33 @@ at the repository root (see `.glassbox-health-suppress.example.json`):
 
 When a suppression's `expires` date has passed the script:
 
-1. Prints a `STALE_SUPPRESS` warning to stderr.
-2. Continues scanning (the suppressed finding is still reported).
+1. Prints a `STALE_SUPPRESS` warning to stderr:
+   ```
+   STALE_SUPPRESS: pattern='TODO: remove after protocol v22 ships' expired=2026-01-01
+   ```
+2. Continues scanning (the suppressed finding is still reported in output).
 3. Exits with code `1` so CI can alert the owner.
 
 This prevents suppressions from accumulating silently over time without a
 linked removal plan.
+
+#### Success vs Failure Path Examples
+
+**1. Successful suppression run (exit code 0):**
+```bash
+scripts/health-report.sh --suppress .glassbox-health-suppress.example.json
+# All matched patterns with future expiration dates are suppressed
+# Exit code: 0
+```
+
+**2. Stale suppression failure run (exit code 1):**
+```bash
+# If .glassbox-health-suppress.json contains an entry with an expired date:
+scripts/health-report.sh
+# Output on stderr:
+# STALE_SUPPRESS: pattern='TODO: temporary shim' expired=2025-12-31
+# Exit code: 1
+```
 
 ## Linking findings to issues
 

@@ -37,7 +37,7 @@ func init() {
 Naming rules:
 - Lowercase, hyphen-separated for multi-word commands (`simulate-upgrade`).
 - Hierarchical subcommands use a colon as the separator in `Use` (`audit:sign`), not a nested cobra subcommand, unless the group is large enough to warrant a parent group command.
-- Keep `Short` under 60 characters. `Long` is the place for full context, accepted values, environment variable names, and gotchas.
+- Keep `Short` under 60 characters (enforced by `TestAllCommandsHaveShortDescription`). `Long` is the place for full context, accepted values, environment variable names, and gotchas.
 - Always set `GroupID` — it controls where the command appears in `--help`.
 
 ### Root persistent flags
@@ -360,7 +360,76 @@ Color output follows the same pattern. Call `visualizer.SetNoColor(true)` only i
 
 ---
 
-## 8. Security considerations
+## 8. Accessibility and screen-reader compatibility
+
+Glassbox help text and status output must be legible to users who rely on
+screen readers or plain-text log capture. The rules below are enforced by
+`TestAllCommandsHaveShortDescription`, `TestCriticalCommandsHaveLongAndExample`,
+and `TestANSIRenderer_Symbols` in `internal/terminal/ansi_test.go`.
+
+### Help text structure
+
+- `Short` is a single sentence of ≤60 characters with no terminal punctuation.
+  It is the string a screen reader announces when tabbing through the command
+  list in `--help` output. Length is enforced by `TestAllCommandsHaveShortDescription`.
+- `Long` must be plain prose: no ANSI sequences, no raw Unicode emoji, and no
+  raw bullet glyphs. Use ASCII hyphens (`-`) for bullet lists so that every
+  terminal and screen reader renders them identically.
+- `Example` must use the literal command name as it appears in `Use`, not an
+  alias or a placeholder, so the announced text is actionable.
+
+### Status symbols and plain-text fallbacks
+
+`internal/terminal.Renderer.Symbol()` maps logical names to safe ASCII
+representations. When `IsTTY()` is false (non-interactive mode, CI, pipes,
+`NO_COLOR`, or `TERM=dumb`) every `Symbol()` call returns a plain ASCII
+string with no Unicode code points above U+007E. This is the string a screen
+reader or plain-text log consumer receives.
+
+The documented symbol-name → plain-text mapping is:
+
+| Symbol name | TTY output | Plain-text (non-TTY) |
+|-------------|-----------|----------------------|
+| `check`     | `[OK]`    | `[OK]`               |
+| `cross`     | `[FAIL]`  | `[X]`                |
+| `warn`      | `[!]`     | `[!]`                |
+| `arrow_r`   | `->`      | `->`                 |
+| `arrow_l`   | `<-`      | `<-`                 |
+| `target`    | `[TARGET]`| `>>`                 |
+| `pin`       | `*`       | `*`                  |
+| `wrench`    | `[TOOL]`  | `[*]`                |
+| `chart`     | `[STATS]` | `[#]`                |
+| `list`      | `[LIST]`  | `[.]`                |
+| `play`      | `[PLAY]`  | `>`                  |
+| `book`      | `[DOC]`   | `[?]`                |
+| `wave`      | `[HELLO]` | _(empty string — intentionally silent in non-TTY)_ |
+| `magnify`   | `[SEARCH]`| `[?]`                |
+| `logs`      | `[LOGS]`  | `[Logs]`             |
+| `events`    | `[NET]`   | `[Events]`           |
+
+The `wave` symbol is intentionally empty in non-TTY mode because it is used
+only for decorative greetings; callers that must produce output must use a
+different symbol. `TestSymbol_AllKnownNames` in `platform_tty_test.go`
+explicitly skips `wave` for this reason.
+
+The sentinel methods `Success()`, `Warning()`, and `Error()` always return a
+non-empty string regardless of TTY state — they are guaranteed non-empty by
+`TestSuccessWarningError_NeverEmptyOnAnyPlatform`.
+
+### Rules for new commands
+
+- Never call `fmt.Print*` with raw Unicode symbols or emoji. Use
+  `renderer.Symbol(name)` or the `Success()` / `Warning()` / `Error()` helpers
+  so that the plain-text fallback is applied automatically.
+- Never construct colored status prefixes inline with ANSI codes. The
+  `visualizer.Colorize` helper already gates on `ColorEnabled()`.
+- Do not place Unicode characters above U+007E in `Short`, `Long`, or `Example`
+  fields. The emojis.py script enforces this for the repository at large; the
+  same rule applies to command help strings.
+
+---
+
+## 9. Security considerations
 
 Before writing a new command, check:
 
@@ -375,7 +444,7 @@ The `--audit-log` path is for audit trail output, not for debug logs. Do not add
 
 ---
 
-## 9. Tests
+## 10. Tests
 
 Three layers of tests are required for every new command.
 
@@ -405,7 +474,7 @@ func TestMyCommand_ValidationError(t *testing.T) {
 
 ### Integration tests (`integration/`)
 
-Add a case to `TestErstBinaryFullCLISurface` for `mycommand --help`. Add a dedicated function for behavioral contracts:
+Add a `TestHelpSnapshot_Mycommand` case to `internal/cmd/help_snapshot_test.go` following the pattern of the existing snapshot tests (e.g. `TestHelpSnapshot_Debug`). Add a dedicated function for behavioral contracts:
 
 ```go
 func TestMyCommand_ExitCodeOnValidationFailure(t *testing.T) {
@@ -425,7 +494,7 @@ Follow `docs/regression-test-guide.md`. Create a fixture in `test/regression/fix
 
 ---
 
-## 10. Documentation
+## 11. Documentation
 
 A new command requires a documentation file at `docs/mycommand.md` before the PR merges. Minimum sections:
 
@@ -444,7 +513,7 @@ Add the command to the surface test in `integration/cli_surface_integration_test
 
 ---
 
-## 11. Release checklist
+## 12. Release checklist
 
 Before marking the PR ready for review, confirm:
 
@@ -458,10 +527,10 @@ Before marking the PR ready for review, confirm:
 - [ ] Non-interactive mode is handled (no spinners or prompts without a TTY check).
 - [ ] `--no-color` / `NO_COLOR` is respected via the global visualizer flag (no manual ANSI in new code).
 - [ ] Unit tests cover validation, success output, and error code.
-- [ ] Integration test covers `--help` and at least one error exit code.
+- [ ] Integration test covers `--help` (a `TestHelpSnapshot_Mycommand` case in `internal/cmd/help_snapshot_test.go`) and at least one error exit code.
 - [ ] `docs/mycommand.md` is present with all required sections.
 - [ ] New `ErstErrorCode`s are documented in `docs/stable-error-codes.md`.
-- [ ] `TestErstBinaryFullCLISurface` includes a `--help` case.
+- [ ] `TestHelpSnapshot_*` includes a `--help` case in `internal/cmd/help_snapshot_test.go`.
 - [ ] `docs/compatibility-matrix.md` updated for every new or changed CLI flag, JSON field, or Go export.
 - [ ] A changelog fragment added to `changelog/fragments/` (`make changelog-check` passes).
 - [ ] If any surface is deprecated or removed: migration note in `MIGRATION_GUIDE.md` and `breaking = true` in the fragment.

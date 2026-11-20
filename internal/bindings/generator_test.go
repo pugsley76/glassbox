@@ -116,28 +116,28 @@ func TestByteStableGeneration(t *testing.T) {
 	spec := &abi.ContractSpec{
 		Functions: []xdr.ScSpecFunctionV0{
 			{
-				Name: xdr.Scsymbol("transfer"),
+				Name: xdr.ScSymbol("transfer"),
 				Inputs: []xdr.ScSpecFunctionInputV0{
-					{Name: xdr.Scsymbol("from"), Type: xdr.ScSpecTypeDef{Type: xdr.ScSpecTypeScSpecTypeAddress}},
-					{Name: xdr.Scsymbol("to"), Type: xdr.ScSpecTypeDef{Type: xdr.ScSpecTypeScSpecTypeAddress}},
-					{Name: xdr.Scsymbol("amount"), Type: xdr.ScSpecTypeDef{Type: xdr.ScSpecTypeScSpecTypeI128}},
+					{Name: "from", Type: xdr.ScSpecTypeDef{Type: xdr.ScSpecTypeScSpecTypeAddress}},
+					{Name: "to", Type: xdr.ScSpecTypeDef{Type: xdr.ScSpecTypeScSpecTypeAddress}},
+					{Name: "amount", Type: xdr.ScSpecTypeDef{Type: xdr.ScSpecTypeScSpecTypeI128}},
 				},
 				Outputs: []xdr.ScSpecTypeDef{{Type: xdr.ScSpecTypeScSpecTypeVoid}},
 			},
 			{
-				Name: xdr.Scsymbol("balance"),
+				Name: xdr.ScSymbol("balance"),
 				Inputs: []xdr.ScSpecFunctionInputV0{
-					{Name: xdr.Scsymbol("account"), Type: xdr.ScSpecTypeDef{Type: xdr.ScSpecTypeScSpecTypeAddress}},
+					{Name: "account", Type: xdr.ScSpecTypeDef{Type: xdr.ScSpecTypeScSpecTypeAddress}},
 				},
 				Outputs: []xdr.ScSpecTypeDef{{Type: xdr.ScSpecTypeScSpecTypeI128}},
 			},
 		},
 		Structs: []xdr.ScSpecUdtStructV0{
 			{
-				Name: xdr.Scsymbol("Account"),
+				Name: "Account",
 				Fields: []xdr.ScSpecUdtStructFieldV0{
-					{Name: xdr.Scsymbol("address"), Type: xdr.ScSpecTypeDef{Type: xdr.ScSpecTypeScSpecTypeAddress}},
-					{Name: xdr.Scsymbol("balance"), Type: xdr.ScSpecTypeDef{Type: xdr.ScSpecTypeScSpecTypeI128}},
+					{Name: "address", Type: xdr.ScSpecTypeDef{Type: xdr.ScSpecTypeScSpecTypeAddress}},
+					{Name: "balance", Type: xdr.ScSpecTypeDef{Type: xdr.ScSpecTypeScSpecTypeI128}},
 				},
 			},
 		},

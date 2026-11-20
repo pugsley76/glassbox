@@ -19,7 +19,7 @@ glassbox report --file <trace.json> [--format <fmt>] [--output <dir>]
 | Flag | Default | Description |
 |---|---|---|
 | `--file` | _(required)_ | Path to a JSON trace file produced by `glassbox debug --json` or `glassbox trace`. |
-| `--format` | `html` | Output format: `text`, `json`, `html`, `pdf`, or `html,pdf`. Any other value is rejected early with the valid options listed. |
+| `--format` | `html` | Output format: `text`, `json`, `html`, `pdf`, `html,pdf`, `pdf,html`, or `sarif`. Any other value is rejected early with the valid options listed. |
 | `--output` | `.` | Output directory for the generated report(s). Must be a directory, not a file. |
 
 ---
@@ -31,7 +31,7 @@ All inputs are validated before any I/O is performed:
 | Condition | Error message |
 |---|---|
 | `--file` not set | `--file is required; provide the path to a JSON trace file` |
-| `--format` is unknown | `invalid --format "…"; must be one of: html, pdf, html,pdf, json, text` |
+| `--format` is unknown | `invalid --format "…"; must be one of: html, pdf, html,pdf, json, text, sarif` |
 | Trace file not found | `trace file not found: "…"` |
 | Trace file is empty | `trace file "…" is empty` |
 | Trace file is not valid JSON | Parse error with a hint to use `glassbox debug --json` |
@@ -98,6 +98,27 @@ glassbox report --file trace.json --format pdf --output reports/
 # Both in a single pass
 glassbox report --file trace.json --format html,pdf --output reports/
 ```
+
+### `sarif`
+
+SARIF output is for static-analysis and code-scanning tools. It writes a
+SARIF report into the selected output directory:
+
+```sh
+glassbox report --file trace.json --format sarif --output reports/
+```
+
+## Choosing a trace output command
+
+`glassbox report --format` and `glassbox trace --format` are separate
+interfaces with different format lists. `report` accepts `html`, `pdf`,
+`html,pdf`, `pdf,html`, `json`, `text`, and `sarif`; `trace` accepts `html`,
+`markdown` (or its `md` alias), `json`, and `text`. For example, use `glassbox trace --export trace.md
+--format markdown trace.json` for a shareable trace export. Do not pass
+`markdown` to `glassbox report` or `sarif` to `glassbox trace`.
+
+`glassbox trace compare` is also separate: it compares two traces and supports
+`table` or `json` output. See [the trace comparison guide](./trace-comparison-guide.md).
 
 ---
 

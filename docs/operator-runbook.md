@@ -99,19 +99,20 @@ a diagnostics bundle** for escalation.
 ## Table of Contents
 
 1. [RPC connection failures](#rpc-connection-failures)
-2. [RPC timeouts](#rpc-timeouts)
-3. [Transaction not found](#transaction-not-found)
-4. [Rate limiting](#rate-limiting)
-5. [Authentication errors](#authentication-errors)
-6. [Simulator binary not found](#simulator-binary-not-found)
-7. [Simulator crashes](#simulator-crashes)
-8. [Simulation logic errors](#simulation-logic-errors)
-9. [Source mapping failures](#source-mapping-failures)
-10. [Protocol version mismatch](#protocol-version-mismatch)
-11. [Snapshot corruption](#snapshot-corruption)
-12. [Session integrity failures](#session-integrity-failures)
-13. [Export failures](#export-failures)
-14. [Diagnostics bundle](#generating-a-diagnostics-bundle)
+2. [RPC failover recovery](#rpc-failover-recovery)
+3. [RPC timeouts](#rpc-timeouts)
+4. [Transaction not found](#transaction-not-found)
+5. [Rate limiting](#rate-limiting)
+6. [Authentication errors](#authentication-errors)
+7. [Simulator binary not found](#simulator-binary-not-found)
+8. [Simulator crashes](#simulator-crashes)
+9. [Simulation logic errors](#simulation-logic-errors)
+10. [Source mapping failures](#source-mapping-failures)
+11. [Protocol version mismatch](#protocol-version-mismatch)
+12. [Snapshot corruption](#snapshot-corruption)
+13. [Session integrity failures](#session-integrity-failures)
+14. [Export failures](#export-failures)
+15. [Diagnostics bundle](#generating-a-diagnostics-bundle)
 
 ---
 
@@ -156,6 +157,88 @@ cannot connect, generate a diagnostics bundle:
 
 ```sh
 glassbox doctor --bundle --bundle-output ./diag-connection.gbdiag
+```
+
+---
+
+## RPC failover recovery
+
+**Stable error code:** `ALL_RPC_FAILED`
+
+**Symptoms:**
+- `glassbox debug` fails with `all RPC endpoints failed` after trying multiple endpoints
+- The error output includes a `Provider failover summary` block listing each attempted endpoint and its failure cause
+- `glassbox rpc health` shows multiple endpoints with `[FAIL]` status
+
+**Evidence to collect:**
+
+```sh
+# Check configured endpoints
+glassbox config show --json | jq '.soroban_rpc_urls // .rpc_urls // .rpc_url'
+
+# Probe each endpoint's health
+glassbox rpc health
+
+# Check failover strategy
+glassbox config show --json | jq '.failover_strategy'
+
+# Check circuit breaker settings
+glassbox config show --json | jq '.failure_threshold, .retry_timeout'
+```
+
+**Safe remediation:**
+
+1. **Verify endpoint configuration** — ensure `soroban_rpc_urls` (or `rpc_urls` /
+   `rpc_url`) contains valid, reachable endpoints. Multiple endpoints enable
+   automatic failover.
+
+   ```toml
+   # glassbox.toml
+   soroban_rpc_urls = [
+     "https://soroban-testnet.stellar.org",
+     "https://rpc.example.com"
+   ]
+   failover_strategy = "weighted"  # or "sticky", "round_robin"
+   failure_threshold = 5           # consecutive failures before circuit opens
+   retry_timeout = 60              # seconds before re-probing a failed endpoint
+   ```
+
+   Or via environment:
+   ```sh
+   export GLASSBOX_SOROBAN_RPC_URLS="https://endpoint1.example.com,https://endpoint2.example.com"
+   export GLASSBOX_FAILOVER_STRATEGY="weighted"
+   ```
+
+2. **Check individual endpoint health** — use `glassbox rpc health` to probe each
+   configured endpoint and see latency/status:
+
+   ```sh
+   glassbox rpc health
+   # or with explicit URLs:
+   glassbox rpc health --rpc "https://endpoint1.example.com,https://endpoint2.example.com"
+   ```
+
+3. **Adjust failover strategy** — if traffic should prefer the fastest endpoint,
+   use `sticky`; for even distribution, use `round_robin`; for health-weighted
+   selection, use `weighted` (default).
+
+4. **Tune circuit breaker** — if endpoints recover slowly, increase
+   `retry_timeout`; if you want faster failover, decrease `failure_threshold`.
+
+5. **Pin a specific endpoint** — for reproducible debugging, use `--pin-endpoint`
+   to lock to a single RPC endpoint (disables silent failover):
+
+   ```sh
+   glassbox debug --pin-endpoint https://soroban-testnet.stellar.org --network testnet <tx-hash>
+   ```
+
+   Note: `--pin-endpoint` must match `--rpc-url` when both are provided.
+
+**When to escalate:** If all configured endpoints are healthy per `rpc health`
+but `debug` still fails, generate a diagnostics bundle:
+
+```sh
+glassbox doctor --bundle --bundle-output ./diag-failover.gbdiag
 ```
 
 ---
@@ -729,10 +812,11 @@ For reproducible offline debugging:
 | `SIMULATOR_CRASH` | Binary or memory issue | Rebuild simulator, reduce trace depth |
 | `SIMULATION_LOGIC_ERROR` | Contract or state issue | Check trace, budget, arguments |
 | `SOURCE_DISCOVERY_FAILED` | Missing source or symbols | Provide `--contract-source` |
-| `ALL_RPC_FAILED` | All endpoints down | Check provider status page |
+| `ALL_RPC_FAILED` | All endpoints down | Check `glassbox rpc health`, verify `soroban_rpc_urls` config |
 
 ## See also
 
+- [Troubleshooting index — Doctor symptom-to-check mapping](./troubleshooting-index.md#doctor-symptom-to-check-mapping) — complete mapping of symptoms to `glassbox doctor` checks
 - [Debug command](./debug-command.md) — full command reference
 - [Source mapping troubleshooting](./source-mapping-troubleshooting.md) — source mapping wizard
 - [Diagnostics bundle](./diagnostics-bundle.md) — portable diagnostics

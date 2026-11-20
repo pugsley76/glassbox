@@ -1,0 +1,17 @@
+[
+  {
+    "pattern": "TODO: remove after protocol v22 ships",
+    "owner": "@alice",
+    "expires": "2027-12-31",
+    "reason": "Waiting for protocol v22 deployment on mainnet before removing the backward-compatibility shim.",
+    "issue": "https://github.com/pugsley76/glassbox/issues/500"
+  },
+  {
+    "pattern": "internal/sourcemap/resolver.go:42",
+    "owner": "@bob",
+    "expires": "2027-06-30",
+    "reason": "Tracking registry retry backoff logic in separate sprint.",
+    "issue": "https://github.com/pugsley76/glassbox/issues/501"
+  }
+]
+

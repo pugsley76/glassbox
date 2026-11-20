@@ -259,3 +259,110 @@ changing struct field order will all produce a different hash.
 Ensure the same WASM binary (or spec file) is used for both generation and
 validation.  If the WASM is rebuilt between steps, the ABI hash will differ
 even if the interface is logically identical.
+
+---
+
+## Generated Command-Schema Binding Drift Review
+
+While contract bindings connect to smart contracts, Glassbox also maintains versioned
+TypeScript command-schema bindings under `src/bindings/` (`command-schema.ts`,
+`command-types.ts`, `command-validators.ts`, `index.ts`). These artifacts are generated
+from the canonical Go CLI definitions (`internal/bindings/schema.go` and `internal/cmd`).
+
+To prevent drift between the Go CLI definition and TypeScript consumers, CI and pull
+request reviews require all committed schema bindings to be byte-identical to freshly
+generated output.
+
+### Drift Detection Workflow
+
+```
+┌─────────────────────────┐
+│ Go Command Definitions  │
+│ (internal/cmd, schema)  │
+└────────────┬────────────┘
+             │
+             ▼
+┌─────────────────────────┐
+│ Generator Execution     │
+│ (generate_schema_main)  │
+└────────────┬────────────┘
+             │ (emits to temp directory)
+             ▼
+┌─────────────────────────┐
+│ Byte-level Diff Check   │ ◄─── Compare against committed src/bindings/
+│ (check-bindings-drift)  │
+└────────────┬────────────┘
+             │
+     ┌───────┴───────┐
+     ▼               ▼
+  [OK] (0)       [DRIFT] (1)
+  In sync        Diff printed; run make generate-schema
+```
+
+### Reviewer Checklist for Pull Requests
+
+When reviewing pull requests that touch CLI commands, flags, or bindings:
+
+1. **Verify Canonical Origin**: Ensure changes were made in Go (`internal/cmd/` or `internal/bindings/schema.go`), never by editing `src/bindings/command-*.ts` directly.
+2. **Run Drift Detection**:
+   ```bash
+   make check-bindings-drift
+   # or directly:
+   bash scripts/check-bindings-drift.sh
+   ```
+3. **Inspect the Diff**: Ensure the generated TypeScript diff in `src/bindings/` matches only the intended CLI flags and option types.
+4. **Confirm Clean Git Tree**: After regenerating (`make generate-schema`), ensure all modified files under `src/bindings/` are staged and committed.
+
+### Commands & Expected Results
+
+#### Successful Validation (Pass)
+
+When committed TypeScript files match canonical Go definitions:
+
+```bash
+$ make check-bindings-drift
+Checking TypeScript schema bindings drift in: src/bindings
+
+wrote /tmp/.../command-schema.ts
+wrote /tmp/.../command-types.ts
+wrote /tmp/.../command-validators.ts
+wrote /tmp/.../index.ts
+schema version: 1.0.0 (glassbox 0.0.0-dev)
+  OK command-schema.ts
+  OK command-types.ts
+  OK command-validators.ts
+  OK index.ts
+
+[OK] All TypeScript schema bindings are up-to-date and byte-stable.
+# Exit code: 0
+```
+
+#### Drift Detected (Failure)
+
+When a Go command flag is changed without regenerating TypeScript artifacts:
+
+```bash
+$ make check-bindings-drift
+Checking TypeScript schema bindings drift in: src/bindings
+
+  DRIFT command-types.ts
+--- src/bindings/command-types.ts
++++ /tmp/.../command-types.ts
+@@ -45,2 +45,3 @@
+   network?: string;
++  timeout?: number;
+
+[DRIFT] Bindings are out of date.
+Fix: make generate-schema (or: go run internal/bindings/cmd/generate_schema_main.go --output src/bindings) && git add src/bindings && git commit
+# Exit code: 1
+```
+
+#### Remediation
+
+To resolve drift, regenerate the schema artifacts and commit the result:
+
+```bash
+make generate-schema
+git add src/bindings
+git commit -m "chore: regenerate TypeScript schema bindings"
+```

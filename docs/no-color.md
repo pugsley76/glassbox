@@ -45,6 +45,13 @@ FORCE_COLOR=1 glassbox debug <tx-hash>
 color output independently of `NO_COLOR`. See `docs/command-development-guide.md`
 for details on non-interactive mode.
 
+**Note:** `GLASSBOX_NO_COLOR` is resolved in `PersistentPreRunE` in
+`internal/cmd/root.go`, which sets `NO_COLOR=1` and calls
+`visualizer.SetNoColor(true)`. The `internal/terminal.ANSIRenderer` reads
+only `NO_COLOR` directly (not `GLASSBOX_NO_COLOR`), so the two-step path
+through the CLI layer is required for `GLASSBOX_NO_COLOR` to take effect.
+When using `ANSIRenderer` directly (e.g. in tests), set `NO_COLOR` instead.
+
 ## Precedence
 
 Color detection is performed by `internal/terminal.ANSIRenderer.IsTTY()`.
@@ -126,9 +133,8 @@ Key test files for no-color behavior:
 Run the no-color specific tests:
 
 ```bash
-go test ./internal/terminal/... -run TestANSI
-go test ./internal/terminal/... -run TestTTY
-go test ./internal/terminal/... -run TestColorize
-go test ./internal/terminal/... -run TestSymbol
-go test ./internal/termctx/... -run NonInteractive
+go test ./internal/cmd/... -run NoColor
+go test ./internal/terminal/... -run ANSI
+go test ./internal/terminal/... -run TTY
+go test ./internal/terminal/... -run Colorize
 ```

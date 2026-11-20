@@ -44,8 +44,8 @@ func TestAllCommandsHaveShortDescription(t *testing.T) {
 			if cmd.Short == "" {
 				t.Errorf("command %q has empty Short description", cmd.Use)
 			}
-			if len(cmd.Short) > 100 {
-				t.Errorf("command %q Short description too long: %d chars (max 100): %q",
+			if len(cmd.Short) > 60 {
+				t.Errorf("command %q Short description too long: %d chars (max 60): %q",
 					cmd.Use, len(cmd.Short), cmd.Short)
 			}
 			walk(cmd.Commands())

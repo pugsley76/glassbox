@@ -49,6 +49,7 @@ func init() {
 		&generateSchemaJSONFlag, "json", false,
 		"Emit machine-readable JSON output",
 	)
+	rootCmd.AddCommand(generateSchemaCmd)
 }
 
 type generateSchemaOutput struct {

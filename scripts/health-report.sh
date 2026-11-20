@@ -13,6 +13,13 @@
 
 set -euo pipefail
 
+# Bash 4.0+ is required for associative arrays (`declare -A`).
+if [[ "${BASH_VERSINFO[0]:-0}" -lt 4 ]]; then
+  echo "[ERROR] scripts/health-report.sh requires Bash 4.0 or newer (found ${BASH_VERSION:-unknown})." >&2
+  echo "On macOS, install modern bash via 'brew install bash' or run in Docker/CI." >&2
+  exit 2
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 

@@ -42,6 +42,27 @@ output-directory/
 └── README.md             # Documentation
 ```
 
+## Runtime Targets & Environment Matrix
+
+The generator supports three runtime targets configured via `GeneratorConfig.RuntimeTarget` or the CLI flag `--runtime`:
+
+| Runtime Target | Flag | Simulation Transport | Node APIs (`child_process`/`fs`) | Bundler Safety |
+| :--- | :--- | :--- | :--- | :--- |
+| `RuntimeNode` | `--runtime node` (default) | Subprocess execution via `child_process.spawn` | Statically imported | Node.js runtime only |
+| `RuntimeBrowser` | `--runtime browser` | HTTP requests via `globalThis.fetch` to daemon/RPC | Excluded / stubbed via `"browser"` map | Safe for Vite, Webpack, esbuild |
+| `RuntimeUniversal` | `--runtime universal` | Hybrid (subprocess if `_isNode()`, else HTTP) | Lazily loaded via dynamic `require` | Safe for universal/isomorphic builds |
+
+```bash
+# Node.js default target
+glassbox generate-bindings contract.wasm --runtime node --output ./src/bindings
+
+# Browser target (no Node.js globals)
+glassbox generate-bindings contract.wasm --runtime browser --output ./src/bindings
+
+# Universal target (cross-environment detection)
+glassbox generate-bindings contract.wasm --runtime universal --output ./src/bindings
+```
+
 ## Type Mapping
 
 | Soroban Type | TypeScript Type | Notes |
@@ -302,7 +323,7 @@ try {
 Commit generated bindings to ensure consistency:
 
 ```bash
-Glassbox generate-bindings contract.wasm --output ./src/bindings
+glassbox generate-bindings contract.wasm --output ./src/bindings
 git add src/bindings
 git commit -m "Update contract bindings"
 ```
@@ -314,7 +335,7 @@ Always regenerate when contract changes:
 ```bash
 # After contract update
 soroban contract build
-Glassbox generate-bindings target/wasm32-unknown-unknown/release/contract.wasm
+glassbox generate-bindings target/wasm32-unknown-unknown/release/contract.wasm
 ```
 
 ### 3. Testing

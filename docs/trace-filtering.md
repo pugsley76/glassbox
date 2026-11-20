@@ -53,6 +53,14 @@ glassbox trace filter tx.json --event-type host_function --exclude
 `--exclude` requires at least one other filter flag — `--exclude` alone
 would exclude every step, which is almost certainly a mistake.
 
+### Severity behavior
+
+`error` selects steps whose `Error` field is non-empty, while `info` selects
+steps whose `Error` field is empty. `all` applies no severity restriction.
+Although `warning` is accepted as a value, trace steps currently have no
+warning classification, so it does not narrow the results. Use `error` or
+`info` when you need a severity-based subset.
+
 ## Filter composition
 
 ### How multiple filters combine
@@ -208,6 +216,29 @@ glassbox trace filter tx.json --contract CNOISE --exclude
 # Save filtered result to a file
 glassbox trace filter tx.json --contract CAAAA --output ca_steps.json --format json
 ```
+
+### Repeating a filter and checking its result
+
+From the repository root, build `glassbox` using the project build instructions,
+then run the same command against a saved trace:
+
+```sh
+glassbox trace filter tx.json --contract 'C[A-Z]+' --event-type contract_call --format json
+```
+
+The command prints JSON with `filter_summary` and `matched_steps`; the count in
+`matched_count` is the number of original steps satisfying both criteria.
+If no steps match, it still exits successfully and reports
+`"matched_count": 0`. Invalid regular expressions and reversed step or line
+ranges return a validation error before rendering output. For example:
+
+```sh
+glassbox trace filter tx.json --contract '['
+```
+
+This reports an invalid contract regular expression. See
+[`internal/cmd/trace_filter.go`](../internal/cmd/trace_filter.go) for the CLI
+validation rules and `internal/trace/filter_test.go` for the focused fixtures.
 
 ## JSON output format
 

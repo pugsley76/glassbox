@@ -10,7 +10,7 @@
         mutation-test-subsystems mutation-test-ci-subsystems mutation-test-subsystem-report
 .PHONY: changelog-check changelog-generate changelog-dry-run
 .PHONY: validate-docs validate-docs-determinism validate-docs-links validate-docs-flags
-.PHONY: check-bindings-byte-stable
+.PHONY: check-bindings-byte-stable check-bindings-drift generate-schema
 
 # Build variables
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -637,31 +637,31 @@ mutation-test-ci-subsystems: mutation-test-install
 # Print a per-subsystem summary table after running mutation-test-subsystems.
 mutation-test-subsystem-report:
 	@python3 - "$(MUTATION_REPORT_DIR)" "$(MUTATION_SUBSYSTEMS)" <<'PYEOF'
-import json, sys, os, collections
+	import json, sys, os, collections
 
-report_base  = sys.argv[1]
-subsystems   = sys.argv[2].split()
+	report_base  = sys.argv[1]
+	subsystems   = sys.argv[2].split()
 
-rows = []
-for sub in subsystems:
-    report_path = os.path.join(report_base, sub, "gremlins-report.json")
-    if not os.path.exists(report_path):
-        rows.append((sub, "-", "-", "-", "-", "NO REPORT"))
-        continue
-    with open(report_path) as f:
-        data = json.load(f)
-    total    = data.get("total_mutants", 0)
-    killed   = data.get("killed", 0)
-    survived = data.get("survived", 0)
-    score    = round(killed / total * 100, 1) if total else 0.0
-    status   = "PASS" if score >= 70 else "FAIL"
-    rows.append((sub, total, killed, survived, f"{score}%", status))
+	rows = []
+	for sub in subsystems:
+	    report_path = os.path.join(report_base, sub, "gremlins-report.json")
+	    if not os.path.exists(report_path):
+	        rows.append((sub, "-", "-", "-", "-", "NO REPORT"))
+	        continue
+	    with open(report_path) as f:
+	        data = json.load(f)
+	    total    = data.get("total_mutants", 0)
+	    killed   = data.get("killed", 0)
+	    survived = data.get("survived", 0)
+	    score    = round(killed / total * 100, 1) if total else 0.0
+	    status   = "PASS" if score >= 70 else "FAIL"
+	    rows.append((sub, total, killed, survived, f"{score}%", status))
 
-print(f"{'Subsystem':<16} {'Total':>6} {'Killed':>7} {'Survived':>9} {'Score':>7}  Status")
-print("-" * 60)
-for row in rows:
-    print(f"{row[0]:<16} {str(row[1]):>6} {str(row[2]):>7} {str(row[3]):>9} {str(row[4]):>7}  {row[5]}")
-PYEOF
+	print(f"{'Subsystem':<16} {'Total':>6} {'Killed':>7} {'Survived':>9} {'Score':>7}  Status")
+	print("-" * 60)
+	for row in rows:
+	    print(f"{row[0]:<16} {str(row[1]):>6} {str(row[2]):>7} {str(row[3]):>9} {str(row[4]):>7}  {row[5]}")
+	PYEOF
 
 # ──────────────────────────────────────────────
 # Dependency Compatibility testing
@@ -754,3 +754,16 @@ check-bindings-byte-stable: build
 		exit 1; \
 	fi
 	@echo "✓ Byte-stable bindings verification passed"
+
+# ──────────────────────────────────────────────
+# TypeScript schema bindings drift check & generation
+#
+# check-bindings-drift verifies that committed schema bindings under
+# src/bindings/ are byte-identical to freshly generated output from Go.
+# generate-schema regenerates the TypeScript artifacts.
+# ──────────────────────────────────────────────
+check-bindings-drift:
+	@bash scripts/check-bindings-drift.sh
+
+generate-schema:
+	@go run internal/bindings/cmd/generate_schema_main.go --output src/bindings

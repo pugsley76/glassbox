@@ -197,6 +197,11 @@ func (r *ANSIRenderer) Symbol(name string) string { //nolint:gocyclo // Large sw
 	case "book":
 		return "[?]"
 	case "wave":
+		// "wave" is intentionally empty in non-TTY mode: it is decorative only
+		// and must produce no output in plain-text, CI, or screen-reader contexts.
+		// Callers that need visible output must use a different symbol name.
+		// See docs/command-development-guide.md §8 and TestSymbol_AllKnownNames
+		// in platform_tty_test.go.
 		return ""
 	case "magnify":
 		return "[?]"

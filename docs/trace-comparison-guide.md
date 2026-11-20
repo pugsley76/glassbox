@@ -2,7 +2,14 @@
 
 ## Overview
 
-The normalized trace comparison system provides structured, threshold-based analysis of execution trace differences. It focuses on material resource regressions while suppressing nondeterministic fields that create false positives.
+`glassbox trace compare` compares two saved traces using normalized resource and
+execution data. It reports differences in a terminal table by default or as
+JSON with `--format json`. It does not export HTML, Markdown, or PDF reports;
+use [`glassbox trace`](./trace-export-validation.md) or
+[`glassbox report`](./report-command.md) for those outputs.
+
+The comparison focuses on resource regressions while suppressing configured
+nondeterministic fields.
 
 ## Key Features
 
@@ -13,6 +20,18 @@ The normalized trace comparison system provides structured, threshold-based anal
 - **Multiple Output Formats**: Human-readable tables and schema-versioned JSON
 - **CI Integration**: Exit status control for automated testing
 - **Informational Mode**: Non-failing mode for exploratory analysis
+
+### Expected result
+
+With identical traces and default settings, the command exits successfully and
+reports no differences. For a regression, the table or JSON output includes
+the changed category, baseline and current values, delta, severity, and summary.
+The default mode reports threshold violations without failing the command;
+`--fail-on-violation` makes a detected threshold regression return an error.
+
+If either file cannot be read or parsed, comparison stops with a validation
+error naming the baseline or current trace. An unknown output format also
+returns a validation error; only `table` and `json` are supported.
 
 ## Usage
 

@@ -34,7 +34,7 @@ Every event is a single JSON object on its own line:
   "status": "start",                  // see Status Values below
   "timestamp": "2026-07-24T12:00:00.123Z",
   "message": "fetching transaction abc from testnet",  // human-readable, never secret
-  "error_code": "",        // non-empty only on status=error; stable snake_case identifier
+  // "error_code" is omitted when status != "error"; present and non-empty only on error events
   "meta": {                // optional safe metadata for the phase
     "tx_hash": "abc123...",
     "network": "testnet",
@@ -71,6 +71,7 @@ Every event is a single JSON object on its own line:
 | `rpc_fetch_failed` | `fetch` | Network fetch of transaction failed |
 | `simulation_failed` | `simulate` | Simulator returned an error |
 | `export_failed` | `export` | Writing trace output file failed |
+| `operation_cancelled` | any | SIGINT or context cancellation during the phase (emitted by `Emitter.Cancel`) |
 
 ## Guarantees
 
@@ -110,3 +111,24 @@ Every event is a single JSON object on its own line:
 ```ndjson
 {"operation_id":"c3d4e5f6a1b2c3d4","phase":"fetch","status":"error","message":"transaction fetch failed: dial tcp: connection refused","error_code":"rpc_fetch_failed"}
 ```
+
+### Cancellation example
+
+When a command is interrupted (SIGINT or context cancellation), `Emitter.Cancel` emits a terminal `status=error` event with `error_code=operation_cancelled` before the process exits. This ensures consumers always receive an unambiguous terminal event for the interrupted phase.
+
+```ndjson
+{"operation_id":"d4e5f6a1b2c3d4e5","phase":"simulate","status":"start","timestamp":"2026-07-24T12:00:01Z","message":"running simulation on testnet"}
+{"operation_id":"d4e5f6a1b2c3d4e5","phase":"simulate","status":"error","timestamp":"2026-07-24T12:00:01.5Z","message":"operation cancelled","error_code":"operation_cancelled"}
+```
+
+## TextSink and plain-text accessibility
+
+`progress.NewTextSink` writes human-readable progress lines instead of NDJSON.
+It is used when visible progress is wanted but machine-readable output is not
+required. Its output uses Unicode characters (`→`, `✓`, `✗`, `–`) that some
+terminals and log-capture systems may not render correctly.
+
+For CI pipelines and screen-reader contexts, prefer `NewJSONSink` (parse
+`message` for display) or `NewNopSink` (no progress output). Do not use
+`TextSink` when `termctx.GlobalNonInteractive()` is true; the structured JSON
+sink is the accessible path for automated consumers.

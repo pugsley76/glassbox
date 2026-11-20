@@ -11,7 +11,7 @@
 #
 # Exit codes:
 #   0  Committed TypeScript files match freshly generated output
-#   1  Drift detected — run `glassbox generate-schema --output src/bindings` to fix
+#   1  Drift detected — run `make generate-schema` (or `glassbox generate-schema --output src/bindings`) to fix
 #   2  Build or generation error
 set -euo pipefail
 
@@ -34,7 +34,7 @@ for f in command-schema.ts command-types.ts command-validators.ts index.ts; do
   committed="$OUTPUT_DIR/$f"
   fresh="$TMPDIR_WORK/$f"
   if [ ! -f "$committed" ]; then
-    echo "  MISSING  $f  (run: glassbox generate-schema --output $OUTPUT_DIR)"
+    echo "  MISSING  $f  (run: make generate-schema or glassbox generate-schema --output $OUTPUT_DIR)"
     DRIFT=1
     continue
   fi
@@ -59,6 +59,6 @@ if [ "$DRIFT" -eq 0 ]; then
   exit 0
 else
   echo "[DRIFT] Bindings are out of date."
-  echo "Fix: go run internal/bindings/cmd/generate_schema_main.go && git add $OUTPUT_DIR && git commit"
+  echo "Fix: make generate-schema (or: go run internal/bindings/cmd/generate_schema_main.go --output $OUTPUT_DIR) && git add $OUTPUT_DIR && git commit"
   exit 1
 fi

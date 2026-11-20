@@ -9,6 +9,25 @@ model JSON file:
 glassbox trace execution.json --gas-model ./gas-model.json --export trace.md --export-format markdown
 ```
 
+Run the command from the repository root after building the `glassbox` binary.
+It loads the trace, applies the gas model to contract-call states, and writes a
+Markdown export. A successful export contains the cost summary and, when the
+annotation has components, a component breakdown. To inspect the observed-cost
+fixture already in this repository without supplying a gas model:
+
+```sh
+glassbox trace internal/trace/testdata/printer_golden/gas_json.golden \
+  --export /tmp/glassbox-gas.md --format markdown
+```
+
+The output should include the fixture's `source=observed` cost annotation. If
+the gas-model path is missing or invalid JSON, the command reports an error
+before writing the export; check the path and JSON before retrying. The accepted
+gas-model JSON fields are `version`, `network_id`, and the optional cost arrays
+`cpu_costs`, `host_costs`, and `ledger_costs`, each containing `name`, `linear`,
+and `const` values. See [`trace-export-validation.md`](./trace-export-validation.md#--gas-model)
+for the path-validation error example.
+
 Each annotated trace node includes:
 
 - `source`: `observed`, `gas_model_estimate`, or `node_delta`

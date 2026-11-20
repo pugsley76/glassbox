@@ -22,6 +22,9 @@ anything that mutates persisted state.
 | Session schema too old to load | — | `glassbox debug <tx-hash> --network <net>` | Creates new session |
 | Session schema too new (binary too old) | — | Upgrade Glassbox, then `glassbox session resume <id>` | No |
 | Want to view session without migrating | `glassbox session resume <id> --read-only` | — | No |
+| Check migration status for one session | `glassbox session migration <id>` | — | No |
+| Export provenance report | `glassbox session provenance-report <id>` | — | No |
+| Clean up expired sessions | `glassbox session gc --dry-run` | `glassbox session gc` | Yes (removes expired sessions) |
 
 ---
 
@@ -38,6 +41,8 @@ anything that mutates persisted state.
 | `glassbox session migrate --dry-run` | Migration plan | Database untouched |
 | `glassbox session import --preview` | Archive + local store | Nothing written |
 | `glassbox session provenance <id>` | Provenance timeline | Nothing |
+| `glassbox session provenance-report <id>` | Provenance chain + report | Nothing |
+| `glassbox session migration <id>` | Schema version + migration status | Nothing |
 
 ### Commands that repair state
 
@@ -50,7 +55,6 @@ but they do write to disk:
 | `glassbox session resume <id>` | Updates session status and `last_access_at` | Yes — just a metadata update |
 | `glassbox session save` | Writes session data to the store | Overwritten on next save |
 | `glassbox session import` | Adds or merges session in the store | Depends on `--on-conflict` policy |
-| `glassbox session migrate` | Upgrades session schema version | Not automatically reversible |
 
 ### Commands that delete state — destructive, confirm before running
 

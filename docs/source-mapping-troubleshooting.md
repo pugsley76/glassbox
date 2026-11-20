@@ -21,13 +21,14 @@ and `--source-alias` before any simulation runs.
 | Result quality `heuristic` | **No DWARF:** paths are inferred from symbols or `Cargo.toml` | `fallback.go` stages 3–4 | Keep DWARF, then treat the reported paths as approximate |
 | Result quality `unknown`; WAT shown instead of source | **No mapping possible** | `fallback.go` stage 5 | Same as above |
 | `WASM data is nil or too small (N bytes)` | **Truncated or empty bytecode** | `fallback.go` input guard | Make sure the full binary was uploaded or fetched |
-| `Location: <path>:L:C` printed with no source excerpt | **Unresolved path:** the embedded path does not exist on this machine | `debug.go` `displaySourceLocation` | Remap the path with `--source-alias` or point `--contract-source` at the checkout. See [path remapping](source-mapping.md#path-remapping-example) |
+| `Location: <path>:<line>:<column>` printed with no source excerpt | **Unresolved path:** the embedded path does not exist on this machine | `debug.go` `displaySourceLocation` | Remap the path with `--source-alias` or point `--contract-source` at the checkout. See [path remapping](source-mapping.md#path-remapping-example) |
 | `--contract-source: directory not found` / `is a file, not a directory` / `value must not be empty` | **Bad override path** | `debug.go` flag validation | Pass an existing directory |
 | `--source-alias: file not found` / `failed to parse … as JSON` | **Bad alias file** | `debug.go` flag validation | Fix the path, or make the file a flat JSON object |
 | `alias: target for "<name>" must point to an existing directory` | **Stale alias target** | `alias.go` `LoadAliasConfig` | Update or remove that entry. A relative target is resolved against the directory that holds the alias file |
 | `path contains null bytes and cannot be used` | **Unsafe path** | `debug.go`, `discovery.go`, `preflight.go` | Remove the null bytes |
 | preflight `skip_source_mapping_env` | **Mapping disabled** | `preflight.go` | Unset `GLASSBOX_SKIP_SOURCE_MAPPING` |
 | preflight `source_map_cache_dir` error | **Bad cache directory** | `preflight.go` | Unset `GLASSBOX_SOURCE_MAP_CACHE` or point it at a writable directory |
+| preflight `wasm_structural` / `wasm_policy` | **Corrupt or oversized WASM** | `preflight.go` + `wasmvalidate` | Rebuild the contract; check module size limits |
 
 ## Notes
 
@@ -270,8 +271,8 @@ and disable the interactive prompt.
 **Remediation:**
 
 ```sh
-# Validate alias file
-glassbox debug --dry-run --source-alias ./aliases.json
+# Validate alias file (requires a transaction hash for dry-run)
+glassbox debug --dry-run --network testnet --source-alias ./aliases.json <tx-hash>
 
 # Check which aliases have stale targets (warnings, not errors)
 # Then update the alias file to match current paths

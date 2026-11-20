@@ -195,8 +195,8 @@ Failover applies to live transaction fetching and RPC submission only. It does
 not affect offline-capable operations.
 
 **Degradation is never silent.** If all RPC endpoints are unreachable, the CLI
-exits with an explicit error. The operator is not left with a partial result
-that silently omits network-fetched data.
+exits with an explicit error (`ALL_RPC_FAILED`). The operator is not left with
+a partial result that silently omits network-fetched data.
 
 ### 7. KMS provider and offline signing
 

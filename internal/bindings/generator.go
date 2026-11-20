@@ -4,7 +4,6 @@
 package bindings
 
 import (
-	"bytes"
 	"fmt"
 	"sort"
 	"strings"
@@ -740,7 +739,7 @@ func (g *Generator) generateErstIntegration() string {
 	// Only import child_process when targeting Node or universal.
 	switch target {
 	case RuntimeBrowser:
-		b.WriteString("// Browser target: child_process is not available.\n")
+		b.WriteString("// Browser target: subprocess spawning is not available.\n")
 		b.WriteString("// Use the HTTP-based simulate/debug endpoints instead.\n\n")
 	case RuntimeUniversal:
 		b.WriteString("// Universal target: child_process is loaded lazily so the module can be\n")
