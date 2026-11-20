@@ -98,6 +98,45 @@ openssl genpkey -algorithm ed25519 -out ed25519-private-key.pem
 openssl pkey -in ed25519-private-key.pem -pubout -out ed25519-public-key.pem
 ```
 
+### Accepted key formats
+
+Glassbox accepts an Ed25519 key as PKCS#8 PEM (preferred) or as a hex-encoded
+seed/full key. When more than one source is set, the resolution order is
+`--software-private-key`, `GLASSBOX_AUDIT_PRIVATE_KEY_PEM`, then
+`GLASSBOX_SOFTWARE_PRIVATE_KEY_HEX`; PEM text or a readable PEM file path wins
+over hex.
+
+| Source | Accepted value |
+|--------|----------------|
+| `--software-private-key` | PKCS#8 PEM text beginning `-----BEGIN PRIVATE KEY-----`, or a readable path to such a file |
+| `GLASSBOX_AUDIT_PRIVATE_KEY_PEM` | Same as above |
+| `GLASSBOX_SOFTWARE_PRIVATE_KEY_HEX` | 64 hex characters (32-byte seed) or 128 hex characters (64-byte full key) |
+
+Check the generated PEM envelope before signing, then use the file path form:
+
+```bash
+head -n 1 ./ed25519-private-key.pem
+# -----BEGIN PRIVATE KEY-----
+
+glassbox audit:sign --signing-provider software --payload-file payload.json \
+  --software-private-key ./ed25519-private-key.pem
+# Expected: signed audit log JSON printed to stdout, exit 0
+```
+
+A hex seed works without a PEM file and is generated with OpenSSL:
+
+```bash
+export GLASSBOX_SOFTWARE_PRIVATE_KEY_HEX="$(openssl rand -hex 32)"
+glassbox audit:sign --signing-provider software --payload-file payload.json
+# Expected: signed audit log JSON printed to stdout, exit 0
+```
+
+`openssl rand -hex 32` produces the required 64 hex characters (32 bytes).
+The 128-character form is an existing 64-byte Ed25519 private key exported as
+hex (seed followed by its public key), not an independently generated value.
+A key with a different PEM header (`OPENSSH PRIVATE KEY`, `EC PRIVATE KEY`, or
+`RSA PRIVATE KEY`) is rejected; see the validation messages below.
+
 ### Software provider input validation
 
 The key is validated at configuration time (before signing begins) so format
@@ -613,6 +652,40 @@ key, which proves integrity but not that the signer was trusted.
 ---
 
 ## Troubleshooting
+
+### Slot and token matrix
+
+Use `--validate-only` to see exactly which slot/token check failed. Slot
+selection is controlled by `GLASSBOX_PKCS11_TOKEN_LABEL` (matched first,
+case-sensitive) and `GLASSBOX_PKCS11_SLOT` (used only when no token label is
+set; default `0`).
+
+| Preflight output | Meaning | Fix |
+|------------------|---------|-----|
+| `[FAIL] slot_enum  failed to enumerate slots: ...` | The module loaded but the slot list could not be read | Check the reader/daemon (`systemctl status pcscd`) and run `pkcs11-tool --module $GLASSBOX_PKCS11_MODULE --list-slots` |
+| `[FAIL] slot_enum  no slots with tokens found` | No token is present in any slot | Insert the token, or for SoftHSM2 run `softhsm2-util --init-token --slot 0 --label MyToken --pin 1234 --so-pin 0000` |
+| `[FAIL] slot_enum  no token with label "MyToken" found (checked N slot(s))` | `GLASSBOX_PKCS11_TOKEN_LABEL` matches no token label | List labels with `pkcs11-tool --list-slots`; labels are case-sensitive |
+| `[FAIL] slot_enum  slot index N is out of range (found M slot(s))` | `GLASSBOX_PKCS11_SLOT` is greater than or equal to the number of slots | Set `GLASSBOX_PKCS11_SLOT` to a value from `0` to `M-1`, or unset it to use slot `0` |
+| `GLASSBOX_PKCS11_SLOT must be a non-negative integer, got "not-a-number"` | Slot value is non-numeric or negative | Set a numeric index such as `0` or `1`, or unset the variable |
+| `[PASS] token_info  token info unavailable for slot N (non-fatal)` | Token metadata could not be read; signing can still proceed | Informational only — investigate if you expected a token label here |
+| `[FAIL] session_open  failed to open session on slot N: ...` | Another process holds an exclusive session, or the token is write-protected | Close other sessions and verify the token is not write-protected |
+
+A successful slot/token portion of the report looks like:
+
+```
+  [PASS] slot_enum      using slot index 0 (slot ID 0, 1 slot(s) total)
+  [PASS] token_info     token label: "glassbox-test" (slot 0)
+  [PASS] session_open   session opened on slot 0 (handle 1)
+```
+
+Repeatable check:
+
+```bash
+export GLASSBOX_PKCS11_MODULE=/usr/lib/softhsm/libsofthsm2.so
+export GLASSBOX_PKCS11_PIN=1234
+export GLASSBOX_PKCS11_KEY_LABEL=glassbox-audit-key
+glassbox audit:sign --signing-provider pkcs11 --validate-only
+```
 
 ### Module file not found
 

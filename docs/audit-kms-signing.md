@@ -6,6 +6,8 @@ Glassbox supports AWS Key Management Service (KMS) as an optional signing provid
 
 AWS KMS provides hardware-level security for audit log signatures. Private keys never leave AWS KMS, and signing operations are performed within the AWS cloud.
 
+Unlike [software signing](audit-signing.md), no PEM or hex private key is supplied to Glassbox for the KMS provider: you configure only the key identifier and region. The accepted software key formats (PKCS#8 PEM text or file path, 32-byte seed, 64-byte full key) apply to `--software-private-key`, `GLASSBOX_AUDIT_PRIVATE_KEY_PEM`, and `GLASSBOX_SOFTWARE_PRIVATE_KEY_HEX`; they are not used when `signing_provider = "aws-kms"`.
+
 ## Requirements
 
 - AWS KMS key with Ed25519 key spec

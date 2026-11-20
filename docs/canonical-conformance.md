@@ -50,6 +50,31 @@ The corpus is language-neutral JSON. Every test case has:
 | `mixed-types-in-array` | Arrays may contain different JSON types |
 | `string-escaping-basics` | Backslash, quote, newline, tab per JSON spec |
 
+### Worked example
+
+The `basic-key-ordering` corpus case shows the full round trip. Given this
+input in any key order:
+
+```json
+{"z": 1, "a": 2, "m": 3}
+```
+
+both runtimes produce the same byte-exact canonical string:
+
+```json
+{"a":2,"m":3,"z":1}
+```
+
+Hashing the UTF-8 bytes of that string with SHA-256 yields:
+
+```
+ebba85cfdc0a724b6cc327ecc545faeb38b9fe02eca603b430eb872f5cf75370
+```
+
+The corpus records all three values under the `id` `basic-key-ordering`; the
+Go and Jest conformance suites compare the computed digest against the stored
+`sha256` without printing the payload itself.
+
 ### Invalid cases
 
 Cases in the `invalid` array must be **rejected** by both runtimes before
