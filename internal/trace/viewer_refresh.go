@@ -38,7 +38,10 @@ func (h *ViewerRefreshHandler) InitializeWithSnapshot(baseSnapshot *snapshot.Sna
 	h.detector = NewStateChangeDetector(baseSnapshot)
 	h.refresher.SetDetector(h.detector)
 	
-	// Record initial state dependencies from the trace
+	// Record initial state fingerprints from the trace. Ledger-key dependencies
+	// must be recorded when the trace is built
+	// (BuildExecutionTraceFromSimResponseWithDetector), or RefreshTrace will have
+	// no affected steps.
 	for i, state := range h.viewer.trace.States {
 		h.detector.RecordStateFingerprint(i, &state)
 	}

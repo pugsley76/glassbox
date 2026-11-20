@@ -134,9 +134,11 @@ Omitted `severity` and `resolution` default to `info` and `open`.
 
 ### Round trips
 
-Importing a file and exporting it again returns exactly the comments that went
-in, byte for byte. Comments are written in a deterministic order — by step
-position, then severity, then creation time, then ID — so an annotation file
+Importing a file and exporting it again preserves every comment, with omitted
+severity/resolution filled to `info`/`open`, whitespace trimmed, timestamps
+normalized to UTC, and comments written in a deterministic order (step
+position, then severity, then creation time, then ID). A hand-written file is
+therefore normalized rather than returned byte for byte, but a normalized file
 checked into version control does not churn between exports.
 
 Every comment survives the round trip, **including ones whose target no longer
@@ -170,13 +172,39 @@ resolve source-anchored comments
 Imported 4 annotation(s) from review.json (3 resolved, 1 dangling)
 ```
 
-Exports render these in a dedicated section that states the unresolved target
-and the reason, so a reader can see what was reviewed even when the anchor is
-gone.
+HTML, Markdown, and plain-text exports render these in a dedicated section that
+states the unresolved target and the reason, so a reader can see what was
+reviewed even when the anchor is gone. JSON keeps them in
+`annotations.reviewer_comments` with their `target` object.
 
 Pass `--annotations-strict` to turn dangling references into a hard failure —
 useful in CI, where a review file drifting away from its trace should break the
 build rather than produce a quietly incomplete report.
+
+### Golden annotation fixtures
+
+Two checked-in examples show the normalized export for both outcomes:
+
+- [review_success.json](../internal/trace/testdata/annotations/review_success.json) → [review_success.exported.golden.json](../internal/trace/testdata/annotations/review_success.exported.golden.json)
+- [review_dangling.json](../internal/trace/testdata/annotations/review_dangling.json) → [review_dangling.exported.golden.json](../internal/trace/testdata/annotations/review_dangling.exported.golden.json)
+
+The success file has a step target and a trace target; both resolve, and the
+export fills `severity: info` / `resolution: open` for the comment that omitted
+them. The dangling file targets `src/lib.rs:999`, which is not in the trace:
+the import warns (`annotation "c3" by bob targets src/lib.rs:999 ...`) and keeps
+the comment, and the export orders the resolving comment first. With
+`--annotations-strict` the same file fails the run.
+
+To compare a locally generated export against a golden example:
+
+```bash
+glassbox trace --annotations review_success.json \
+  --export-annotations exported.json execution.json
+diff -u internal/trace/testdata/annotations/review_success.exported.golden.json exported.json
+```
+
+These are reference examples for reviewers; they are not part of
+`TestPrinterGolden`, which covers only the canonical printer fixtures.
 
 ---
 
@@ -217,8 +245,9 @@ untouched so a rejected import cannot partially apply.
 
 ## Validation
 
-All annotation flags are validated in `PreRunE` before the trace file is loaded,
-so every error is surfaced in a single pass.
+Annotation flag syntax and path existence are checked in `PreRunE` before the
+trace file is loaded. The annotation file's contents are parsed, validated, and
+attached in `RunE`.
 
 ### `--comment`
 
@@ -233,7 +262,7 @@ so every error is surfaced in a single pass.
 
 **Limits (enforced at export time):**
 - Maximum 100 comments per trace export
-- Maximum 10,000 characters per individual comment
+- Maximum 10,000 bytes per individual comment body
 
 ### `--meta key=value`
 

@@ -56,27 +56,29 @@ wins):
 
 1. An explicit command-line value, when that command accepts a flag for the setting
 2. Environment variables
-3. Config files
+3. Config files (loaded in the order documented in [Config File Locations](#config-file-locations))
 4. Built-in defaults
 
-The tests also verify that project-local values override home-directory values,
-and that the XDG-style file overrides the legacy filename in the same
-directory. Files are merged by key; finding a project file does not discard
-settings from a lower-priority file. Environment variables override file
-values. The CLI flag-over-environment case is tested for RPC tokens.
+The precedence tests verify that:
+- Project-local values override home-directory values
+- XDG-style filenames override legacy filenames in the same directory
+- Environment variables override file values
+- CLI flags override environment variables (tested for RPC tokens)
+
+Files are merged by key; finding a higher-priority file does not discard
+settings from lower-priority files. Only keys present in the higher-priority
+file override those same keys in lower-priority files.
 
 ## Config File Locations
 
-The loader reads these user and project files, merging later/higher-priority
-values over earlier ones:
+The loader reads config files in ascending priority order (later files override
+earlier ones). The complete precedence order from lowest to highest priority is:
 
-- `~/.Glassbox.toml` (home directory, legacy)
-- `~/.glassbox/config.toml` (home directory, XDG-style)
-- `.Glassbox.toml` (current directory, legacy)
-- `.glassbox.toml` (current directory, XDG-style)
-
-The loader also reads `/etc/Glassbox/config.toml`; current precedence tests do
-not establish that file's position relative to the user and project files.
+1. `/etc/Glassbox/config.toml` — system-wide defaults (lowest priority)
+2. `~/.Glassbox.toml` — home directory, legacy filename
+3. `~/.glassbox/config.toml` — home directory, XDG-style
+4. `.Glassbox.toml` — current directory, legacy filename
+5. `.glassbox.toml` — current directory, XDG-style (highest file priority)
 
 ## Source Annotations
 
@@ -98,4 +100,4 @@ glassbox config show --explain --json \
 ```
 
 The environment bindings and their supported variable names are documented in
-[Bindings and environment variables](bindings-environments.md).
+[Environment Variables](environment-variables.md).

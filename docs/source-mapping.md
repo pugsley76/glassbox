@@ -71,18 +71,25 @@ The explain output never contains raw WASM binary data or full source file conte
 ## Automatic Discovery
 
 When a contract fails, Glassbox attempts to resolve the source location through
-the following pipeline:
+the following pipeline (`explain.go`, `StageBuildManifest` → `StageNone`):
 
-1. **Local cache** — previously resolved source is returned immediately.
-2. **Registry** — queries [stellar.expert](https://stellar.expert) for a
+1. **Build manifest** — a `glassbox-build-manifest.json` file (provided via
+   `--build-manifest`, `GLASSBOX_BUILD_MANIFEST`, `build_manifest_path` in
+   `.glassbox.toml`, or auto-discovered in conventional locations) supplies the
+   source root directly. This is the highest-priority stage and skips all
+   subsequent stages when it succeeds.
+2. **Local cache** — a previously resolved source root is returned immediately
+   without any network call.
+3. **Registry** — queries [stellar.expert](https://stellar.expert) for a
    verified source link.
-3. **GitHub fallback** — downloads source from the linked repository when a
+4. **GitHub fallback** — downloads source from the linked repository when a
    `GitHubRetriever` is configured.
-4. **`--contract-source` override** — uses the explicitly provided local path
-   (see below).
-5. **Interactive prompt** — asks the user for a WASM path when all automatic
-   methods fail. In non-interactive environments (CI pipelines) this stage is
-   skipped and an explicit error is returned instead of hanging on stdin.
+5. **`--contract-source` override** — uses the explicitly provided local path
+   (see below). This is the last automatic stage.
+
+In non-interactive environments (CI pipelines) all automatic stages are tried
+in order. When all fail, an explicit error is returned. There is no interactive
+prompt in CI mode.
 
 ### Non-interactive / CI mode
 
@@ -92,8 +99,8 @@ explicit error:
 
 ```
 contract source not found: all discovery stages exhausted for contract "C..."
-  Stages tried: cache, registry (stellar.expert), GitHub retriever, --contract-source override
-  To resolve: provide --contract-source <path> pointing to the contract source directory,
+  Stages tried: build manifest, cache, registry (stellar.expert), GitHub retriever, --contract-source override
+  To resolve: provide --build-manifest <path> or --contract-source <path>,
   or verify the contract on stellar.expert to enable registry lookup.
   Use --skip-source-mapping to proceed without source mapping.
 ```
@@ -179,7 +186,7 @@ Then build:
 cargo build --target wasm32-unknown-unknown --release
 ```
 
-See [docs/debug-symbols-guide.md](debug-symbols-guide.md) for more details.
+See [docs/source-mapping-troubleshooting.md](source-mapping-troubleshooting.md) for more details.
 
 For Cargo manifests specifically, run `glassbox validate-cargo` to surface unsupported `lto` or `debug` values and receive actionable fixes before you build or replay a contract.
 
@@ -338,9 +345,7 @@ non-empty target path:
   Example: {"my_crate": "/path/to/my_crate/src"}
 ```
 
-Every alias target must be an existing directory. A missing target is
-rejected with `alias: target for "<name>" must point to an existing directory`.
-A relative target is resolved against the directory that holds the alias file.
+Every alias target must be an existing directory. A missing target produces a **warning** (not an error) during the `debug` command's preflight check — source mapping for that alias is skipped but the command continues. `LoadAliasConfig` (called standalone) returns an error on a missing target. A relative target is resolved against the directory that holds the alias file.
 
 ### Path remapping example
 

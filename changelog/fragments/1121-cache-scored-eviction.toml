@@ -1,7 +1,7 @@
 # 1121: intelligent RPC cache eviction
 
 category = "cli"
-pr = 0
+pr = 1121
 summary = "Add a scored cache eviction strategy combining entry type, access frequency, size, network and idle time"
 details = """
 Plain LRU treats every cache entry as equally valuable, which is wrong in both

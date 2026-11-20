@@ -551,4 +551,4 @@ For questions or issues with the schemas:
 
 - Open an issue in the [GitHub repository](https://github.com/stellar/stellar-simulator/issues)
 - Join the [Stellar Developer Discord](https://discord.gg/stellar)
-- Check the [CHANGELOG.md](./CHANGELOG.md) for recent updates
+- Check the [changelog fragments](../../changelog/fragments/README.md) for recent updates

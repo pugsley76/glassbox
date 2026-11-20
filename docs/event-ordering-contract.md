@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document defines the ordering contract for trace events, ensuring deterministic behavior across collection, serialization, filtering, and merging operations. The contract guarantees that the same replay produces identical event order across runs and platforms.
+This document defines the ordering contract for trace events, ensuring deterministic behavior across collection, serialization, filtering, and merging operations. See the [Verification Guide](event-ordering-verification.md) for executable checks. The contract guarantees that the same replay produces identical event order across runs and platforms.
 
 ## Sequence IDs
 
@@ -61,7 +61,7 @@ When sequence IDs are equal (should not happen in normal operation), tie-breakin
 
 ### For ContractEvent
 1. Primary: Sequence ID
-2. Secondary: Deterministic string key (contract ID + type + topics + data)
+2. Secondary: Deterministic string key (contract ID + type + data + topics)
 
 ## Collection Boundaries
 
@@ -152,14 +152,14 @@ Sequence ID fields are optional (`omitempty`), so old consumers can ignore them.
 
 ### Overhead
 
-- **Sequence ID Assignment**: O(1) per state (atomic increment)
+- **Sequence ID Assignment**: O(1) per state (mutex-protected increment in `EventSequencer`)
 - **Parent Stack**: O(1) push/pop operations
 - **Sorting**: O(n log n) only when explicitly sorting
 - **Validation**: O(n) for sequence order, O(n²) for parent relationships
 
 ### Memory
 
-- **Per Event**: 16 bytes for SequenceID + 16 bytes for ParentSequenceID
+- **Per Event**: 8 bytes for SequenceID + 8 bytes for ParentSequenceID (`uint64`)
 - **Sequencer**: Minimal stack allocation (typically < 1KB)
 
 ## Testing
@@ -170,8 +170,13 @@ Sequence ID fields are optional (`omitempty`), so old consumers can ignore them.
 - `TestEventSequencer_ParentStack`
 - `TestEventSequencer_ConcurrentUse`
 - `TestEventOrdering_SortStatesBySequenceID`
+- `TestEventOrdering_SortDiagnosticEvents`
 - `TestEventOrdering_ValidateSequenceOrder`
 - `TestEventOrdering_ValidateParentRelationships`
+- `TestEventOrdering_ReindexSequenceIDs`
+- `TestEventOrdering_PreserveParentRelationships`
+- `TestExecutionTrace_AddStateAssignsSequenceIDs`
+- `TestExecutionTrace_AddStateWithParentRelationships`
 
 ### Integration Tests
 
@@ -187,7 +192,7 @@ Sequence ID fields are optional (`omitempty`), so old consumers can ignore them.
 ### Fixture Tests
 
 - `TestNestedAndSimultaneousEvents` - Tests nested call relationships
-- Validates parent-child relationships after export and filtering
+- Validates parent-child relationships and sequence order on an in-memory nested/simultaneous-event trace (no export or filtering)
 
 ## Acceptance Criteria
 

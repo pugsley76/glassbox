@@ -12,6 +12,10 @@ const execAsync = promisify(exec);
 
 const SUPPORTED_PLATFORMS = new Set(['win32', 'darwin', 'linux']);
 
+function platformPath(platform: string) {
+    return platform === 'win32' ? path.win32 : path.posix;
+}
+
 export type ProtocolRegistrationStatus = 'ok' | 'not_registered' | 'degraded' | 'unsupported';
 
 export interface ProtocolDiagnostics {
@@ -94,11 +98,14 @@ export class ProtocolRegistrar {
      * binaries, non-executable paths, and missing Linux dependencies.
      */
     async validateRegistrationPrerequisites(): Promise<void> {
+        const platform = os.platform();
+        const paths = platformPath(platform);
+
         if (!this.cliPath) {
             throw new ProtocolRegistrationError('Registration failed: CLI path is not defined.', []);
         }
 
-        if (!path.isAbsolute(this.cliPath)) {
+        if (!paths.isAbsolute(this.cliPath)) {
             throw new ProtocolRegistrationError(`Registration failed: CLI path must be absolute, got '${this.cliPath}'.`, []);
         }
 
@@ -114,8 +121,6 @@ export class ProtocolRegistrar {
             );
         }
 
-        const platform = os.platform();
-
         if (!SUPPORTED_PLATFORMS.has(platform)) {
             throw new ProtocolRegistrationError(
                 `Protocol registration is not supported on ${platform}`,
@@ -127,7 +132,7 @@ export class ProtocolRegistrar {
         }
 
         if (platform === 'win32') {
-            const ext = path.extname(this.cliPath).toLowerCase();
+            const ext = paths.extname(this.cliPath).toLowerCase();
             if (ext !== '' && !['.exe', '.cmd', '.bat', '.com'].includes(ext)) {
                 throw new ProtocolRegistrationError(
                     `Registered binary ${this.cliPath} does not look executable on Windows`,
@@ -158,11 +163,14 @@ export class ProtocolRegistrar {
      * binaries, non-executable paths, and missing Linux dependencies.
      */
     async register(): Promise<void> {
+        const platform = os.platform();
+        const paths = platformPath(platform);
+
         if (!this.cliPath) {
             throw new Error('Registration failed: CLI path is not defined.');
         }
 
-        if (!path.isAbsolute(this.cliPath)) {
+        if (!paths.isAbsolute(this.cliPath)) {
             throw new Error(`Registration failed: CLI path must be absolute, got '${this.cliPath}'.`);
         }
 
@@ -176,8 +184,8 @@ export class ProtocolRegistrar {
         }
 
         try {
-            if (os.platform() === 'win32') {
-                const ext = path.extname(this.cliPath).toLowerCase();
+            if (platform === 'win32') {
+                const ext = paths.extname(this.cliPath).toLowerCase();
                 if (!['.exe', '.cmd', '.bat', '.com'].includes(ext)) {
                     throw new Error(`Registration failed: Invalid executable extension on Windows for '${this.cliPath}'.`);
                 }
@@ -190,8 +198,6 @@ export class ProtocolRegistrar {
             }
             throw new Error(`Registration failed: CLI file is not executable at '${this.cliPath}'.`);
         }
-
-        const platform = os.platform();
 
         if (!SUPPORTED_PLATFORMS.has(platform)) {
             throw new ProtocolRegistrationError(
@@ -223,7 +229,7 @@ export class ProtocolRegistrar {
         }
 
         if (platform === 'win32') {
-            const ext = path.extname(this.cliPath).toLowerCase();
+            const ext = paths.extname(this.cliPath).toLowerCase();
             if (ext !== '' && !['.exe', '.cmd', '.bat', '.com'].includes(ext)) {
                 throw new ProtocolRegistrationError(
                     `Registered binary ${this.cliPath} does not look executable on Windows`,
@@ -497,6 +503,7 @@ Terminal=false`;
 
     async diagnose(): Promise<ProtocolDiagnostics> {
         const platform = os.platform();
+        const paths = platformPath(platform);
         const base: ProtocolDiagnostics = {
             platform,
             scheme: this.protocol,
@@ -548,7 +555,7 @@ Terminal=false`;
 
         try {
             if (platform === 'win32') {
-                const ext = path.extname(cliPath).toLowerCase();
+                const ext = paths.extname(cliPath).toLowerCase();
                 base.isExecutable = ['.exe', '.cmd', '.bat', '.com'].includes(ext);
             } else {
                 await fs.access(cliPath, fsConstants.X_OK);

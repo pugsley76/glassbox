@@ -64,7 +64,9 @@ if isNew {
 }
 ```
 
-The deduplication check happens **automatically** - no explicit calls needed. If a snapshot with the same content already exists, the new write is skipped entirely, saving disk I/O and space.
+Deduplication is automatic *once a caller uses `SaveWithDedup`*: the store checks
+the content hash and skips the write when the file already exists. The CLI
+`glassbox snapshot save` uses `SavePersisted` directly and does not deduplicate.
 
 ### 2. Reliable Recovery
 
@@ -76,7 +78,10 @@ recovered, err := store.RecoverFromCorruption()
 // Returns number of valid snapshots recovered
 ```
 
-This scans all `.snap.json` files, validates each one, and rebuilds the index. Corrupted files are automatically excluded.
+This scans all `.snap.json` files and rebuilds the index from files that
+`LoadPersisted` accepts (parseable JSON plus valid metadata/schema/network).
+Fingerprint drift is **not** checked here; use `LoadWithDiagnostics()` or
+`ValidateSnapshotBeforeReplay()` for that.
 
 ### 3. Content-Based Lookup
 
@@ -106,9 +111,10 @@ uniqueCount, err := store.QueryDedup()
 // Get disk usage
 bytes, err := store.GetDiskUsage()
 
-// Find duplicate hashes (transactions with same snapshot)
+// Find duplicate hashes (same content stored under multiple names)
 duplicates, err := store.FindDuplicateHashes()
-// Returns: map[hash][]txhashes for each unique snapshot
+// Returns: map[contentHash][]storedHash, only groups with more than one hash.
+// Transaction hashes are metadata and never appear in this map.
 ```
 
 ## Data Integrity Guarantees
@@ -123,8 +129,8 @@ snap.Fingerprint = ComputeFingerprint(snap)
 
 This fingerprint is:
 - Computed deterministically by hashing sorted (key, value) pairs
-- Verified on load to detect ledger state corruption
-- Logged as a "DRIFT WARNING" if tampering is detected
+- Verified by `Load()` (logs `DRIFT DETECTED: ...`) and by `ValidateSnapshotBeforeReplay()` (hard error)
+- Returned as `*DriftWarning` by `LoadWithDiagnostics()`; `LoadPersisted()` and `RecoverFromCorruption()` do not verify it
 
 ### Atomic Writes
 
@@ -236,7 +242,7 @@ For most use cases, the dedup overhead is negligible compared to network/simulat
 ```json
 {
   "metadata": {
-    "schema_version": 1,
+    "schema_version": 2,
     "glassbox_version": "v1.2.0",
     "saved_at": "2026-06-02T10:30:00Z",
     "tx_hash": "abc123...",
@@ -244,7 +250,8 @@ For most use cases, the dedup overhead is negligible compared to network/simulat
     "envelope_xdr": "base64...",
     "result_meta_xdr": "base64...",
     "source_hash": "sha256...",
-    "param_fingerprint": "sha256..."
+    "param_fingerprint": "sha256...",
+    "ledger_format": "base64-xdr"
   },
   "snapshot": {
     "ledgerEntries": [
@@ -265,10 +272,13 @@ For most use cases, the dedup overhead is negligible compared to network/simulat
     "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
     "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
   ],
-  "created_at": "2026-06-02T10:00:00Z",
-  "updated_at": "2026-06-02T10:30:00Z"
+  "created_at": "",
+  "updated_at": ""
 }
 ```
+
+`created_at` and `updated_at` are currently always empty strings: `updateIndex`
+and `RecoverFromCorruption()` write only `hashes`.
 
 ## Error Handling
 
@@ -276,8 +286,8 @@ For most use cases, the dedup overhead is negligible compared to network/simulat
 
 | Error | Cause | Solution |
 |-------|-------|----------|
-| `schema version not supported` | Glassbox upgraded, schema changed | Re-run debug command to regenerate snapshot |
-| `fingerprint mismatch` | File corruption detected | Run `RecoverFromCorruption()` |
+| `snapshot schema version %d is too old to load` / `snapshot schema version %d was produced by a newer version of Glassbox` | Glassbox upgraded, schema changed | Re-run debug command to regenerate snapshot; upgrade Glassbox for a future-version file |
+| `snapshot fingerprint mismatch` | Ledger entries changed after save | Use `LoadWithDiagnostics()` / `ValidateSnapshotBeforeReplay()`; `RecoverFromCorruption()` does not check fingerprints |
 | `failed to read snapshot file` | File deleted or permissions issue | Restore from backup or delete corrupted cache |
 | `hash must not be empty` | Programming error (empty hash string) | Check ContentHash() return value |
 
@@ -290,12 +300,27 @@ The deduplication system includes comprehensive test coverage:
 - **Recovery**: Corrupted files → skip and rebuild index
 - **Isolation**: Multiple snapshots in single store → no interference
 - **Edge cases**: Nil snapshots, empty hashes, timestamp variations
+- **Boundary**: `TestContentHash_DedupBoundary_*` (identical collapse, minimal differences, ordering invariance, linear memory, count/ordering)
 
 Run tests:
 
 ```bash
 go test -v ./internal/snapshot/... -run Dedup
 ```
+
+### Worked example: dedup hit and fingerprint-drift failure
+
+Both outcomes are covered by checked-in tests, so this procedure can be
+repeated on a clean checkout:
+
+- Success: `TestDedupStore_SaveWithDedup_Deduplication` saves the same ledger
+  state under different metadata; both saves return the same content hash, the
+  second returns `isNew == false`, and `QueryDedup()` reports one unique file.
+- Failure: `TestValidate_FingerprintMismatch` tampers with ledger state without
+  recomputing the fingerprint. `LoadByHash` and `RecoverFromCorruption` use
+  `LoadPersisted`, which does not check fingerprints; only
+  `ValidateSnapshotBeforeReplay` reports `snapshot fingerprint mismatch`.
+
 
 ## Migration from Flat Storage
 
@@ -316,7 +341,11 @@ for _, file := range files {
 }
 ```
 
-The system gracefully handles mixed storage (some files in old locations, some deduplicated).
+`DedupStore` reads only content-addressed names under `snapshots/`:
+`GetStoredHashes()` skips subdirectories and `LoadByHash()` expects
+`<hash8>_<hash56>.snap.json`. `glassbox snapshot save` still writes
+`snapshots/<network>/<txhash[:16]>.snap.json` via `DefaultSnapshotPath`, so
+migrate those files explicitly as above.
 
 ## Best Practices
 
@@ -332,7 +361,7 @@ The system gracefully handles mixed storage (some files in old locations, some d
 Potential improvements to the deduplication system:
 
 - [ ] Compression: Store deduplicated snapshots in compressed format
-- [ ] Garbage collection: LRU eviction for old/unused snapshots
+- [ ] LRU eviction: replace the current `glassbox compact` mark-and-sweep policy (see `internal/cmd/compact.go`)
 - [ ] Diff storage: Store only differences between similar snapshots
 - [ ] Distributed index: Share dedup index across multiple Glassbox instances
 - [ ] Verification: Periodic integrity checks on stored snapshots

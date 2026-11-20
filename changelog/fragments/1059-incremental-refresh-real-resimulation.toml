@@ -1,3 +1,9 @@
+category = "fix"
+pr = 1059
+summary = "Implement real simulator invocation in IncrementalRefresher.reSimulateStep"
+breaking = false
+affects = ["go-api"]
+
 [[changes]]
 type = "feature"
 breaking = false

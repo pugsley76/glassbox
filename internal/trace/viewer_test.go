@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/dotandev/glassbox/internal/session"
 )
 
 // captureOutput temporarily redirects stdout so that the supplied function's
@@ -163,7 +161,7 @@ func TestInteractiveViewer_SnapshotIDForStep(t *testing.T) {
 }
 
 func TestInteractiveViewer_SaveAndResetViewerState(t *testing.T) {
-	t.Setenv(session.ViewerStateDirEnv, t.TempDir())
+	t.Setenv(ViewerStateDirEnv, t.TempDir())
 
 	trace := NewExecutionTrace("tx", 1)
 	trace.AddState(ExecutionState{Operation: "init"})
@@ -174,7 +172,7 @@ func TestInteractiveViewer_SaveAndResetViewerState(t *testing.T) {
 	viewer.hideStdLib = true
 	viewer.saveViewerState()
 
-	st, ok, err := session.LoadViewerState(viewer.stateFP)
+	st, ok, err := LoadViewerState(viewer.stateFP)
 	if err != nil || !ok {
 		t.Fatalf("expected persisted state after save, got ok=%v err=%v", ok, err)
 	}
@@ -191,7 +189,7 @@ func TestInteractiveViewer_SaveAndResetViewerState(t *testing.T) {
 		t.Errorf("reset command should confirm the reset, got: %s", out)
 	}
 
-	if _, ok, _ := session.LoadViewerState(viewer.stateFP); ok {
+	if _, ok, _ := LoadViewerState(viewer.stateFP); ok {
 		t.Error("persisted state should be deleted after reset")
 	}
 	if viewer.eventFilter != "" || viewer.hideStdLib {

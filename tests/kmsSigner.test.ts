@@ -52,6 +52,16 @@ function buildKmsMock(overrides: {
   return { KMSClient, SignCommand, GetPublicKeyCommand, send };
 }
 
+function buildMockedSigner(mock: ReturnType<typeof buildKmsMock>): KmsSigner {
+  return new KmsSigner({
+    kmsModuleOverride: {
+      KMSClient: mock.KMSClient,
+      SignCommand: mock.SignCommand,
+      GetPublicKeyCommand: mock.GetPublicKeyCommand,
+    },
+  });
+}
+
 // Stable sentinel key used to inject and remove the KMS mock from require.cache.
 // Using a fixed string avoids calling require.resolve() on an absent optional module.
 const KMS_MODULE_ID = '@aws-sdk/client-kms';
@@ -188,9 +198,7 @@ describe('KmsSigner', () => {
     it('returns the signature bytes from KMS as a Buffer', async () => {
       const expectedSig = Buffer.from('kms-signature-bytes');
       const mock = buildKmsMock({ signatureBytes: expectedSig });
-      injectKmsMock(mock);
-
-      const signer = new KmsSigner();
+      const signer = buildMockedSigner(mock);
       const result = await signer.sign(Buffer.from('digest'));
 
       expect(Buffer.compare(result, expectedSig)).toBe(0);
@@ -198,9 +206,7 @@ describe('KmsSigner', () => {
 
     it('calls KMS SignCommand with correct parameters', async () => {
       const mock = buildKmsMock();
-      injectKmsMock(mock);
-
-      const signer = new KmsSigner();
+      const signer = buildMockedSigner(mock);
       const digest = Buffer.from('test-digest-bytes');
       await signer.sign(digest);
 
@@ -215,9 +221,7 @@ describe('KmsSigner', () => {
     it('passes the configured signing algorithm to KMS', async () => {
       process.env.GLASSBOX_KMS_SIGNING_ALGORITHM = 'ECDSA_SHA_512';
       const mock = buildKmsMock();
-      injectKmsMock(mock);
-
-      const signer = new KmsSigner();
+      const signer = buildMockedSigner(mock);
       await signer.sign(Buffer.from('digest'));
 
       expect(mock.SignCommand).toHaveBeenCalledWith(
@@ -227,9 +231,7 @@ describe('KmsSigner', () => {
 
     it('wraps KMS API errors with a descriptive message', async () => {
       const mock = buildKmsMock({ signError: new Error('AccessDeniedException') });
-      injectKmsMock(mock);
-
-      const signer = new KmsSigner();
+      const signer = buildMockedSigner(mock);
       await expect(signer.sign(Buffer.from('digest'))).rejects.toThrow(
         'KMS signing failed: AccessDeniedException'
       );
@@ -238,9 +240,7 @@ describe('KmsSigner', () => {
     it('throws when KMS response contains no Signature field', async () => {
       const mock = buildKmsMock();
       mock.send.mockResolvedValueOnce({} as any);
-      injectKmsMock(mock);
-
-      const signer = new KmsSigner();
+      const signer = buildMockedSigner(mock);
       await expect(signer.sign(Buffer.from('digest'))).rejects.toThrow(
         'response contained no Signature field'
       );
@@ -248,9 +248,7 @@ describe('KmsSigner', () => {
 
     it('reuses the same KMS client across multiple calls', async () => {
       const mock = buildKmsMock();
-      injectKmsMock(mock);
-
-      const signer = new KmsSigner();
+      const signer = buildMockedSigner(mock);
       await signer.sign(Buffer.from('first'));
       await signer.sign(Buffer.from('second'));
 
@@ -266,9 +264,7 @@ describe('KmsSigner', () => {
   describe('public_key()', () => {
     it('returns a PEM-wrapped public key string', async () => {
       const mock = buildKmsMock();
-      injectKmsMock(mock);
-
-      const signer = new KmsSigner();
+      const signer = buildMockedSigner(mock);
       const pem = await signer.public_key();
 
       expect(pem).toMatch(/^-----BEGIN PUBLIC KEY-----/);
@@ -277,9 +273,7 @@ describe('KmsSigner', () => {
 
     it('calls GetPublicKeyCommand with the configured key ID', async () => {
       const mock = buildKmsMock();
-      injectKmsMock(mock);
-
-      const signer = new KmsSigner();
+      const signer = buildMockedSigner(mock);
       await signer.public_key();
 
       expect(mock.GetPublicKeyCommand).toHaveBeenCalledWith({
@@ -289,9 +283,7 @@ describe('KmsSigner', () => {
 
     it('wraps KMS API errors with a descriptive message', async () => {
       const mock = buildKmsMock({ publicKeyError: new Error('KeyNotFoundException') });
-      injectKmsMock(mock);
-
-      const signer = new KmsSigner();
+      const signer = buildMockedSigner(mock);
       await expect(signer.public_key()).rejects.toThrow(
         'KMS GetPublicKey failed: KeyNotFoundException'
       );
@@ -300,9 +292,7 @@ describe('KmsSigner', () => {
     it('throws when KMS response contains no PublicKey field', async () => {
       const mock = buildKmsMock();
       mock.send.mockResolvedValueOnce({} as any);
-      injectKmsMock(mock);
-
-      const signer = new KmsSigner();
+      const signer = buildMockedSigner(mock);
       await expect(signer.public_key()).rejects.toThrow(
         'response contained no PublicKey field'
       );
@@ -314,9 +304,12 @@ describe('KmsSigner', () => {
   // -------------------------------------------------------------------------
 
   describe('missing @aws-sdk/client-kms', () => {
+    afterEach(() => jest.dontMock('@aws-sdk/client-kms'));
+
     it('throws a helpful error when the SDK is not installed', async () => {
-      // Remove cache entry so require() will attempt a real resolution and fail.
-      removeKmsCacheEntry();
+      jest.doMock('@aws-sdk/client-kms', () => {
+        throw new Error('Cannot find module @aws-sdk/client-kms');
+      });
 
       const signer = new KmsSigner();
       // Both sign() and public_key() call loadKmsModule(); test one of them.
@@ -385,9 +378,7 @@ describe('AuditLogger with KmsSigner', () => {
     const sigBytes = Buffer.from('kms-sig');
     const pubKeyBytes = Buffer.concat([Buffer.from([0x30, 0x1a]), Buffer.alloc(26)]);
     const mock = buildKmsMock({ signatureBytes: sigBytes, publicKeyBytes: pubKeyBytes });
-    injectKmsMock(mock);
-
-    const signer = new KmsSigner();
+    const signer = buildMockedSigner(mock);
     const logger = new AuditLogger(signer, 'kms');
 
     const trace = {

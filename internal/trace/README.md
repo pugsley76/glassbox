@@ -11,8 +11,7 @@ The interactive trace viewer provides a powerful search and navigation interface
 - **Smart state change detection** for ledger entries, code artifacts, and memory
 - **Selective re-simulation** of only affected execution steps
 - **Preserves unchanged trace nodes** for optimal performance
-- **Interactive refresh command** in viewer: `:refresh <snapshot_path>`
-- **20x faster** than full trace regeneration for typical changes
+- **Interactive refresh command** at the viewer's `>` prompt: `refresh <snapshot_path>` (requires an attached refresh handler)
 - See [Incremental Trace Refresh Documentation](../../docs/incremental-trace-refresh.md) for details
 
 ### Search Functionality

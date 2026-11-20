@@ -1,3 +1,9 @@
+category = "fix"
+pr = 1058
+summary = "Implement extractLedgerKeysFromXDR using envelope footprint for regression harness"
+breaking = false
+affects = ["go-api"]
+
 [[changes]]
 type = "fix"
 breaking = false

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/dotandev/glassbox/internal/dwarf"
 	"github.com/dotandev/glassbox/internal/logger"
 	"github.com/dotandev/glassbox/internal/pathutil"
 )
@@ -57,23 +58,10 @@ type PathRemap struct {
 	Description string `json:"description,omitempty"`
 }
 
-// PathDiagnostic represents a warning or error encountered during path normalization.
-type PathDiagnostic struct {
-	// Severity is either "warning" or "error".
-	Severity string `json:"severity"`
-
-	// Message describes the diagnostic.
-	Message string `json:"message"`
-
-	// OriginalPath is the unnormalized input path.
-	OriginalPath string `json:"original_path"`
-
-	// NormalizedPath is the normalized result (may be empty on error).
-	NormalizedPath string `json:"normalized_path,omitempty"`
-
-	// Hint provides actionable guidance for resolving the issue.
-	Hint string `json:"hint,omitempty"`
-}
+// PathDiagnostic is a warning or error encountered during path normalization.
+// The type is defined in internal/dwarf so that package can accept a normalizer
+// without importing internal/sourcemap.
+type PathDiagnostic = dwarf.PathDiagnostic
 
 // NormalizerOption configures a PathNormalizer.
 type NormalizerOption func(*PathNormalizer)

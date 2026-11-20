@@ -22,7 +22,7 @@ what was published without trusting the CI environment.
 
 ## Toolchain pins
 
-All toolchain versions are recorded in [`toolchain.json`](../toolchain.json)
+All toolchain versions are recorded in [`go.mod`](../go.mod)
 at the repository root and enforced in CI.
 
 | Ecosystem | Pin location | Current version |

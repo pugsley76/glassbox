@@ -21,7 +21,7 @@ against checked-in golden files.
 - `text` — plain-text export (`GenerateTracePlainTextWithOptions`)
 - `markdown` — Markdown export (`GenerateTraceMarkdownWithOptions`)
 - `html` — HTML export (`GenerateTraceHTMLWithOptions`)
-- `json` — JSON export (mirrors the `json` branch of `ExportExecutionTraceWithOptions`)
+- `json` — raw `ExecutionTrace` JSON embedded by the export envelope (the test marshals the trace directly)
 
 **Fixtures** (one per semantic category from issue #547):
 
@@ -33,6 +33,11 @@ against checked-in golden files.
 | `gas` | Cost annotations and per-component breakdowns |
 | `comments` | Trace comments and session metadata |
 | `empty` | Zero-step traces and their diagnostic messaging |
+
+Reviewer-comment examples have separate golden fixtures under
+`internal/trace/testdata/annotations/` (see
+[trace-export-annotations.md](trace-export-annotations.md)); they are not part
+of this canonical fixture set.
 
 Beyond byte comparison, `TestPrinterGolden_SemanticConsistency` asserts that
 each fixture's semantic tokens (hashes, function names, errors, cost values,

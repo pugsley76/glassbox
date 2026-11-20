@@ -1,3 +1,9 @@
+category = "fix"
+pr = 805
+summary = "Add KMS signing retry classification, audit metadata, and stable error codes"
+breaking = false
+affects = ["go-api"]
+
 [[changes]]
 type = "feature"
 breaking = false

@@ -113,6 +113,81 @@ For the full version history see
 
 ---
 
+## Session data directory and overrides
+
+Closes #1302.
+
+Imported sessions, and every other piece of local session state, live under one
+data directory: `.Glassbox` in the user's home directory. The home directory
+comes from Go's `os.UserHomeDir()`, which reads `$HOME` on Linux and macOS and
+`%USERPROFILE%` on Windows.
+
+| Path (relative to home) | Contents | Defined in |
+|---|---|---|
+| `.Glassbox/sessions.db` | Session store (SQLite, WAL mode) | `internal/session/store.go` (`DefaultDBPath`, `NewStore`) |
+| `.Glassbox/active_session.json` | Crash-recovery checkpoint | `internal/session/checkpoint.go` |
+| `.Glassbox/locks/<session-id>.lock`, `.lock.meta` | Advisory write locks | `internal/session/lock.go` |
+| `.Glassbox/ui_state.db` | Viewer preferences | `internal/session/uistate.go` |
+| `.Glassbox/viewer_state/` | Viewer sidecar files | `internal/session/viewer_state_file.go` |
+
+The directory name is `.Glassbox` with a capital `G`. On case-sensitive file
+systems, `~/.glassbox` is a different directory; that is where the XDG-style
+config file `~/.glassbox/config.toml` lives (see
+[`config show`](./config-show.md)). A code comment in `uistate.go` says
+`~/.glassbox/ui_state.db`, but the code uses `.Glassbox`.
+
+### Supported overrides
+
+There is **no** `GLASSBOX_SESSION_DIR` environment variable and no global
+`--session-dir` flag. These are the only ways to change where session state
+lives:
+
+| Mechanism | Scope | Notes |
+|---|---|---|
+| `HOME` (`USERPROFILE` on Windows) | All session state | Moves everything in the table above, along with home-relative config files. |
+| `glassbox session gc --root <dir>` | `session gc` only | Opens `<dir>/sessions.db` instead of the default. |
+| `GLASSBOX_VIEWER_STATE_DIR` | Viewer sidecars only | See [Viewer state persistence](./viewer-state-persistence.md#relocating-the-state-directory). |
+
+### Example: isolated session store
+
+Use a throwaway home directory to import and inspect a shared archive without
+touching your real session store:
+
+```bash
+export HOME="$(mktemp -d)"
+glassbox session import payroll-bug.gbx --preview
+glassbox session import payroll-bug.gbx
+ls "$HOME/.Glassbox"
+# Expected: sessions.db (plus sessions.db-wal / sessions.db-shm while open)
+```
+
+Because `HOME` also moves the home-relative config files, set any values you
+need, such as `GLASSBOX_RPC_URL` or `GLASSBOX_RPC_TOKEN`, as environment
+variables in that shell.
+
+### Example: `session gc --root`
+
+`--root` must point at a directory whose final path element is exactly
+`.Glassbox`, and it must not be the file-system root
+(`ValidateGCRoot` in `internal/session/gc.go`):
+
+```bash
+# Success path: preview cleanup of another data directory
+glassbox session gc --dry-run --root /srv/ci-home/.Glassbox
+
+# Failure path: the final path element is not ".Glassbox"
+glassbox session gc --dry-run --root /srv/ci-home
+# Error: VALIDATION_FAILED: refusing to run cleanup against "/srv/ci-home" — expected a '.Glassbox' directory
+#   Fix: pass the path to your Glassbox data directory, or omit --root to use the default
+echo $?
+# 1
+```
+
+`/srv/ci-home` is an example path. If the `.Glassbox` directory does not exist
+yet, `session gc --root` creates it with an empty store.
+
+---
+
 ## Related commands
 
 | Command | Read-only? | Purpose |

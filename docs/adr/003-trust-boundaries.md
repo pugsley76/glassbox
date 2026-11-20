@@ -278,7 +278,7 @@ bindings delegate simulation to an RPC endpoint.
 - [ADR-005: Canonicalization Ownership](005-canonicalization-ownership.md)
 - [ADR-006: Provider Isolation](006-provider-isolation.md)
 - [ADR-007: Offline Guarantees](007-offline-guarantees.md)
-- [ADR-002: HSM Integration](002-hsm-integration.md)
+- ADR-002: HSM Integration (documentation not available in this repository)
 - [Deep Link Parameter Semantics](deeplink-parameters.md)
 - [Audit Signing](../audit-signing.md)
 - [Sandboxed Replay](../sandboxed-replay.md)

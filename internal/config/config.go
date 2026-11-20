@@ -393,6 +393,7 @@ func SaveConfig(config *Config) error {
 
 // -- Parsers --
 
+// For a complete list of supported environment variables, see docs/environment-variables.md
 type envParser struct{}
 
 func (envParser) Parse(cfg *Config) error {

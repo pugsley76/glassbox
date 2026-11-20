@@ -17,7 +17,6 @@ import (
 
 	"github.com/atotto/clipboard"
 	"github.com/dotandev/glassbox/internal/dwarf"
-	"github.com/dotandev/glassbox/internal/session"
 	"github.com/dotandev/glassbox/internal/visualizer"
 )
 
@@ -135,7 +134,7 @@ func (v *InteractiveViewer) Start() error {
 	// keyed by content fingerprint, so a re-fetched trace whose steps have
 	// changed simply starts fresh instead of applying stale state.
 	restored := false
-	if st, ok, err := session.LoadViewerState(v.stateFP, len(v.trace.States)); err == nil && ok {
+	if st, ok, err := LoadViewerState(v.stateFP, len(v.trace.States)); err == nil && ok {
 		if st.CurrentStep >= 0 && st.CurrentStep < len(v.trace.States) {
 			_, _ = v.trace.JumpToStep(st.CurrentStep)
 		}
@@ -754,7 +753,7 @@ func (v *InteractiveViewer) saveViewerState() {
 	if v.trace == nil || v.stateFP == "" {
 		return
 	}
-	st := session.ViewerState{
+	st := ViewerState{
 		TxHash:            v.trace.TransactionHash,
 		CurrentStep:       v.trace.CurrentStep,
 		SearchQuery:       v.search.Query(),
@@ -762,13 +761,13 @@ func (v *InteractiveViewer) saveViewerState() {
 		EventFilter:       v.eventFilter,
 		HideStdLib:        v.hideStdLib,
 		ExpandedCallFrames: v.expandedSteps(),
-		Viewport: session.ViewerViewport{
+		Viewport: ViewerViewport{
 			FirstVisible: v.trace.CurrentStep,
 			LastVisible:  min(v.trace.CurrentStep+10, len(v.trace.States)-1),
 		},
 		Annotations: v.annotationState(),
 	}
-	_ = session.SaveViewerState(v.stateFP, st)
+	_ = SaveViewerState(v.stateFP, st)
 }
 
 // expandedSteps returns the step indices of currently expanded call frames.
@@ -809,7 +808,7 @@ func (v *InteractiveViewer) annotationState() map[string][]string {
 // "all" it clears every persisted viewer state record.
 func (v *InteractiveViewer) resetViewerState(args []string) {
 	if len(args) > 0 && strings.EqualFold(args[0], "all") {
-		n, err := session.ResetAllViewerState()
+		n, err := ResetAllViewerState()
 		if err != nil {
 			fmt.Printf("%s Failed to reset viewer state: %v\n", visualizer.Error(), err)
 			return
@@ -818,7 +817,7 @@ func (v *InteractiveViewer) resetViewerState(args []string) {
 		return
 	}
 
-	existed, err := session.ResetViewerState(v.stateFP)
+	existed, err := ResetViewerState(v.stateFP)
 	if err != nil {
 		fmt.Printf("%s Failed to reset viewer state: %v\n", visualizer.Error(), err)
 		return

@@ -1,7 +1,7 @@
 # 1119: SARIF export for source map failures and security warnings
 
 category = "cli"
-pr = 0
+pr = 1119
 summary = "Add GB1xxx and GB2xxx SARIF rule families for source map failures and deprecated host function warnings"
 details = """
 `internal/sarif` gains two enumerated diagnostic rule families alongside the

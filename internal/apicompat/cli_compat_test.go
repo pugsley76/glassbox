@@ -71,20 +71,18 @@ func extractExitCodes(filename string) ([]string, error) {
 
 // resolveConstInt attempts to evaluate a simple numeric constant expression.
 // Returns nil when the expression is not a plain integer literal.
-func resolveConstInt(expr ast.Expr) *constant.Value {
+func resolveConstInt(expr ast.Expr) constant.Value {
 	switch e := expr.(type) {
 	case *ast.BasicLit:
 		if e.Kind == token.INT {
-			v := constant.MakeFromLiteral(e.Value, e.Kind, 0)
-			return &v
+			return constant.MakeFromLiteral(e.Value, e.Kind, 0)
 		}
 	case *ast.UnaryExpr:
 		inner := resolveConstInt(e.X)
 		if inner == nil {
 			return nil
 		}
-		v := constant.UnaryOp(e.Op, *inner, 0)
-		return &v
+		return constant.UnaryOp(e.Op, inner, 0)
 	}
 	return nil
 }

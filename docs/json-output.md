@@ -16,6 +16,15 @@ When `--json` is set (or `--format json`), output is wrapped as:
 }
 ```
 
+## Error envelope
+
+Errors use the same envelope with the failure under `data.error`
+(`code`, `severity`, `message`, and optional `remediation` and `context`).
+See [stable-error-codes.md](stable-error-codes.md#error-payload-fields) for
+field definitions and which `context` keys are safe for log aggregation, and
+[json-output-automation.md](json-output-automation.md) for filtering on
+`error.code`.
+
 ## Commands
 
 | Command | Flags | Envelope |

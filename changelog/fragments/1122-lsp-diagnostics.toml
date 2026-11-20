@@ -1,7 +1,7 @@
 # 1122: LSP diagnostics for simulation results
 
 category = "cli"
-pr = 0
+pr = 1122
 summary = "Publish WASM traps, high-resource instructions and deprecated host function calls as LSP diagnostics"
 details = """
 `internal/lsp` gains a JSON-RPC 2.0 client and a diagnostics publisher so a

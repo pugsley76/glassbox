@@ -2,6 +2,7 @@
 PR-*.md
 PR_*.md
 PR_ISSUE_*.md
+DOCUMENTATION_UPDATES.md
 
 # ── Test snapshots and generated test/lint artifacts ──────────────────────────
 # Jest and Vitest snapshots are generated, environment-dependent (absolute

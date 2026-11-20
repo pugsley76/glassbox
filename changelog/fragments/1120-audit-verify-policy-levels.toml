@@ -1,7 +1,7 @@
 # 1120: audit:verify directory policy enforcement
 
 category = "cli"
-pr = 0
+pr = 1120
 summary = "Add strict, warn and permissive policy levels for audit directory hash chain verification"
 details = """
 `internal/audit` gains a policy level that maps the outcome of directory

@@ -358,6 +358,6 @@ process restart. Rejected; the single-provider model is simpler to audit.
 - [ADR-003: Trust Boundaries and Component Trust Levels](003-trust-boundaries.md)
 - [ADR-005: Canonicalization Ownership](005-canonicalization-ownership.md)
 - [ADR-007: Offline Guarantees](007-offline-guarantees.md)
-- [ADR-002: HSM Integration](002-hsm-integration.md)
+- ADR-002: HSM Integration (documentation not available in this repository)
 - [Audit Signing](../audit-signing.md)
 - [AWS KMS Signing](../audit-kms-signing.md)

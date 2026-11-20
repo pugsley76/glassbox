@@ -2,7 +2,7 @@ category = "fix"
 
 pr = 900
 
-summary = "Added origin classification for DWARF-resolved source locations to distinguish user, generated, and external frames in trace output"
+summary = "Classify DWARF source locations as user, generated, or external in trace output"
 
 details = """
 Trace output and trap diagnostics now label generated build-output paths

@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-07-25T09:30:00Z",
+  "transaction_hash": "sha256:1338ced837c71f1490d94f22bced32604fefe6cecba127534ab2ca295edb8e20",
+  "comments": [
+    {
+      "id": "c3",
+      "author": "bob",
+      "body": "this allocates on every call",
+      "target": { "kind": "source", "source_file": "src/lib.rs", "source_line": 999 },
+      "severity": "warning",
+      "resolution": "resolved",
+      "created_at": "2026-07-25T09:31:00Z"
+    },
+    {
+      "id": "c4",
+      "author": "alice",
+      "body": "auth path still looks right",
+      "target": { "kind": "step", "step_id": "step-1-453bf5039851ed7f" },
+      "severity": "info",
+      "resolution": "open",
+      "created_at": "2026-07-25T09:32:00Z"
+    }
+  ]
+}

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The **Incremental Trace Refresh** feature enables efficient trace updates during interactive debugging sessions when contract state changes. Instead of rerunning the entire replay, only the affected portions of the trace are recomputed, significantly improving performance and user experience.
+The **Incremental Trace Refresh** feature enables efficient trace updates during interactive debugging sessions when contract state changes. Instead of rerunning the entire replay, the refresher re-simulates a computed range and preserves the rest of the trace.
 
 ## Motivation
 
@@ -92,30 +92,42 @@ Integrates incremental refresh into the interactive trace viewer.
 
 ### Interactive Viewer Commands
 
+The viewer reads commands at its `>` prompt; there is no `:` command mode.
+`refresh` and `refresh-status` (`rs`) are registered in `internal/trace/viewer.go`,
+but they only work after a caller attaches a `ViewerRefreshHandler` with
+`InteractiveViewer.AttachRefreshHandler` before `Start()`. The CLI
+`glassbox trace <trace-file>` path does not attach one.
+
 #### Basic Refresh
 
-```bash
-# In the interactive viewer, press ':'  to enter command mode
-:refresh /path/to/updated_snapshot.json
+```text
+> refresh /path/to/updated_snapshot.json
 ```
 
 This will:
 1. Load the updated snapshot
 2. Detect all state changes
 3. Identify affected execution steps
-4. Re-simulate the minimum necessary range
+4. Re-simulate the computed range
 5. Update the viewer with refreshed trace
+
+A successful refresh returns to the viewer; it does not produce a process exit
+code. The most important failure is missing dependencies (see
+[Scenario](#scenario-successful-refresh-and-the-most-important-failure)).
 
 #### View Refresh Status
 
-```bash
-:refresh-status
+```text
+> refresh-status
+> rs
 ```
 
 Displays:
 - Auto-refresh enabled/disabled
 - Time of last refresh
-- Number of steps refreshed in last operation
+
+Step counts are printed by `refresh` itself; `refresh-status` does not store
+them.
 
 ### Programmatic Usage
 
@@ -157,13 +169,14 @@ result, err := refresher.QuickRefresh(ctx, existingTrace, changes)
 ### Time Complexity
 
 - **Full Trace Regeneration**: O(n) where n is the total number of execution steps
-- **Incremental Refresh**: O(k) where k is the number of affected steps
+- **Incremental Refresh**: O(n) for range computation, state copying, and snapshot rebuilding; O(k) simulator invocations when `PreserveUnaffected` is true and `k` steps are recorded as affected
 - **Change Detection**: O(m) where m is the number of ledger entries
 
-For a trace with 1000 steps where only 50 are affected:
-- **Traditional approach**: ~10 seconds
-- **Incremental refresh**: ~0.5 seconds
-- **Speedup**: ~20x
+`ComputeRefreshRange` currently returns `[min(affectedSteps), totalSteps-1]`.
+A change at step 10 in a 1000-step trace therefore selects steps 10-999;
+`PreserveUnaffected: true` avoids re-simulating steps inside that range that
+have no recorded dependency, but the range scan itself is O(n). No benchmark is
+checked in for this feature, so this document makes no measured speed claim.
 
 ### Space Complexity
 
@@ -237,39 +250,51 @@ for i := 0; i < len(refreshedTrace.States); i += snapshotInterval {
 Run the comprehensive test suite:
 
 ```bash
-go test ./internal/trace -run TestIncremental -v
-go test ./internal/trace -run TestStateChange -v
+go test ./internal/trace -run 'TestIncrementalRefresh|TestRefresh|TestQuickRefresh|TestRebuildSnapshots' -v
+go test ./internal/trace -run 'Test(NewStateChangeDetector|RecordState|UpdateSnapshot|DetectCodeArtifact|GetAffectedSteps|ComputeRefreshRange)' -v
 ```
 
-### Integration Tests
+### Scenario: successful refresh and the most important failure
 
-Test with real transactions:
+The programmatic path exercised by `internal/trace/incremental_refresh_integration_test.go`
+records the ledger dependency on the same detector used by the refresher:
 
-```bash
-# Generate base trace
-glassbox debug TX_HASH --output base_trace.json
+```go
+baseSnapshot := snapshot.FromMap(map[string]string{"ledger_key": "old"})
+updatedSnapshot := snapshot.FromMap(map[string]string{"ledger_key": "new"})
+detector := trace.NewStateChangeDetector(baseSnapshot)
+detector.RecordStateDependency(10, "ledger_key")
+refresher := trace.NewIncrementalRefresher(runner)
+refresher.SetDetector(detector)
 
-# Modify snapshot
-# ... edit ledger entries in snapshot file ...
-
-# Test refresh in viewer
-glassbox debug TX_HASH --interactive
-# In viewer: :refresh updated_snapshot.json
+changes, err := detector.UpdateSnapshot(updatedSnapshot)
+if err != nil { /* handle */ }
+result, err := refresher.QuickRefresh(ctx, existingTrace, changes)
+if err != nil { /* handle */ }
+fmt.Printf("success=%v refreshed=%v preserved=%v\n",
+    result.Success, result.RefreshedSteps, result.PreservedSteps)
 ```
 
-### Benchmark Tests
+For a 30-step trace with only step 10 recorded, the output shape is:
 
-Measure refresh performance:
-
-```bash
-go test ./internal/trace -bench=BenchmarkIncrementalRefresh -benchmem
+```text
+success=true refreshed=[10] preserved=[0 1 ... 9 11 ... 29]
 ```
 
-Expected results:
+The most important failure path is the viewer flow without those dependencies.
+`ViewerRefreshHandler.InitializeWithSnapshot` seeds fingerprints only; it does
+not call `RecordStateDependency`. A ledger-key change then produces no affected
+steps, `ComputeRefreshRange` returns `-1, -1`, and the viewer prints:
+
+```text
+[FAIL] Refresh failed: refresh failed: invalid start step: -1
 ```
-BenchmarkIncrementalRefresh/10_steps-8         50000    25000 ns/op    4096 B/op    50 allocs/op
-BenchmarkIncrementalRefresh/100_steps-8         5000   250000 ns/op   40960 B/op   500 allocs/op
-BenchmarkIncrementalRefresh/1000_steps-8         500  2500000 ns/op  409600 B/op  5000 allocs/op
+
+With no handler attached at all, the earlier failure is:
+
+```text
+[FAIL] Incremental refresh is not available in this session.
+  Hint: start Glassbox with a base snapshot to enable refresh.
 ```
 
 ## Limitations and Future Work
@@ -320,22 +345,27 @@ result, _ := refresher.QuickRefresh(ctx, trace, changes)
 oldWasm := loadContractWASM("v1.wasm")
 newWasm := loadContractWASM("v2.wasm")
 
+// DetectCodeArtifactChanges returns a StateChange, but findStepsForContract
+// currently returns an empty affected-step set, so QuickRefresh will not
+// re-simulate anything from this change alone.
 change, _ := detector.DetectCodeArtifactChanges(
     oldWasm, newWasm, "CONTRACT_ID",
 )
 
-// Refresh with new code
+// Not currently wired: reSimulateStep sends only EnvelopeXdr, LedgerEntries,
+// and SkipSourceMapping to the simulator, not the new WASM bytes.
 result, _ := refresher.QuickRefresh(ctx, trace, []StateChange{*change})
 ```
 
 ### Example 3: Viewport-Only Refresh
 
 ```go
-// Refresh only visible steps (performance optimization)
+// RefreshCurrentView is programmatic only; no interactive command calls it.
 handler := NewViewerRefreshHandler(viewer, refresher)
 err := handler.RefreshCurrentView(ctx, updatedSnapshot)
 
-// Much faster for large traces - only refreshes ~20 visible steps
+// It filters to ~20 visible steps, but it is not exposed in viewer help and
+// has no dedicated test.
 ```
 
 ## Best Practices

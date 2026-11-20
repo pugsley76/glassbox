@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/dotandev/glassbox/internal/sourcemap"
 	"github.com/dotandev/glassbox/internal/wasmvalidate"
 )
 
@@ -76,7 +75,7 @@ type Parser struct {
 	data       *dwarf.Data
 	binaryType string // "wasm", "elf", "macho", "pe"
 	caps       *Capabilities
-	normalizer *sourcemap.PathNormalizer
+	normalizer PathNormalizer
 }
 
 // Capabilities returns the DWARF capability report for the binary this parser
@@ -91,12 +90,12 @@ func (p *Parser) Capabilities() *Capabilities {
 // SetPathNormalizer sets the path normalizer for DWARF source path resolution.
 // This enables cross-platform path normalization, workspace root resolution,
 // and explicit remapping tables for source locations extracted from DWARF debug info.
-func (p *Parser) SetPathNormalizer(normalizer *sourcemap.PathNormalizer) {
+func (p *Parser) SetPathNormalizer(normalizer PathNormalizer) {
 	p.normalizer = normalizer
 }
 
 // PathNormalizer returns the current path normalizer, or nil if not set.
-func (p *Parser) PathNormalizer() *sourcemap.PathNormalizer {
+func (p *Parser) PathNormalizer() PathNormalizer {
 	return p.normalizer
 }
 
@@ -580,12 +579,12 @@ func (p *Parser) findLineForAddr(lr *dwarf.LineReader, addr uint64) *SourceLocat
 				// Determine confidence based on DWARF data quality
 				hasLineInfo := prev.Line > 0
 				hasColumnInfo := prev.Column > 0
-				confidence := trace.ConfidenceLevelFromDWARFQuality(hasLineInfo, hasColumnInfo, false)
+				confidence := ConfidenceLevelFromDWARFQuality(hasLineInfo, hasColumnInfo, false)
 
 				// If path normalization was applied and produced diagnostics, lower confidence
 				if p.normalizer != nil && len(p.normalizer.GetDiagnostics()) > 0 {
-					if confidence.Level == trace.ConfidenceExact {
-						confidence = trace.DefaultConfidence(trace.ConfidenceHigh, trace.ReasonPathNormalization)
+					if confidence.Level == ConfidenceExact {
+						confidence = DefaultConfidence(ConfidenceHigh, ReasonPathNormalization)
 					}
 				}
 

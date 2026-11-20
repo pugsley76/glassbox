@@ -1,3 +1,9 @@
+category = "fix"
+pr = 806
+summary = "Implement audit verification directory policy checks with per-file results and stable error codes"
+breaking = false
+affects = ["go-api"]
+
 [[changes]]
 type = "feature"
 breaking = false

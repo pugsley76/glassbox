@@ -61,6 +61,9 @@ requires a deprecation cycle (see §6).
 Every `GLASSBOX_*` environment variable that mirrors a flag has the same
 stability level as the flag it mirrors.
 
+For a complete list of all Glassbox environment variables (including those
+without CLI flag equivalents), see [Environment Variables](environment-variables.md).
+
 | Environment variable | Mirrors | Stability |
 |---------------------|---------|-----------|
 | `GLASSBOX_NETWORK` | `--network` | stable |

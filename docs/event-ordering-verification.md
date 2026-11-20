@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide provides procedures to verify that the event ordering contract produces identical event order across runs and platforms, meeting the acceptance criteria.
+This guide provides procedures to verify that the [Event Ordering Contract](event-ordering-contract.md) produces identical event order across runs and platforms, meeting the acceptance criteria.
 
 ## Verification Methods
 
@@ -19,7 +19,9 @@ done
 
 **Expected Result**: All runs produce identical sequence IDs (1, 2, 3, ...)
 
-**Verification Script**:
+**Verification Script (illustrative only — `TestDeterministicSequenceAssignment` is
+not checked in; the executable coverage is
+`TestExecutionTrace_AddStateAssignsSequenceIDs`)**:
 ```go
 // test_deterministic_sequence.go
 func TestDeterministicSequenceAssignment(t *testing.T) {
@@ -57,30 +59,27 @@ func TestDeterministicSequenceAssignment(t *testing.T) {
 - Windows (amd64)
 
 **Procedure**:
-1. Create a deterministic trace fixture
-2. Serialize to JSON on each platform
-3. Compare the JSON outputs byte-for-byte
+1. Run the ordering tests below on each platform with `-count=5`.
+2. Compare sequence IDs and parent IDs, not raw JSON bytes: `ExecutionTrace`
+   stamps `time.Now()` on every state, so exported JSON is not byte-identical
+   across runs or machines.
 
-**Expected Result**: Identical JSON output across all platforms
+**Expected Result**: identical test results on each platform; sequence IDs are
+the cross-platform ordering contract. CI already runs these tests on Linux,
+macOS, and Windows (see [ci-test.yml](../.github/workflows/ci-test.yml)).
 
 ```bash
-# On Linux
-./glassbox simulate --fixture test.json > trace_linux.json
-
-# On macOS
-./glassbox simulate --fixture test.json > trace_macos.json
-
-# On Windows
-glassbox.exe simulate --fixture test.json > trace_windows.json
-
-# Compare
-md5sum trace_linux.json trace_macos.json trace_windows.json
-# All MD5 hashes should be identical
+go test -v ./internal/trace -run 'TestSerializationPreservesSequenceOrder|TestDiagnosticEventOrderingPreserved|TestContractEventOrderingPreserved|TestDiffWithSequenceIDs' -count=5
 ```
 
 ### 3. Parent Relationship Preservation
 
 **Test**: Verify parent-child relationships survive export and filtering.
+
+The following snippet is illustrative only: `TestParentRelationshipPreservation`
+is not checked in. Executable coverage is
+`TestSerializationPreservesSequenceOrder` in
+`internal/trace/event_ordering_integration_test.go`.
 
 ```go
 func TestParentRelationshipPreservation(t *testing.T) {
@@ -103,7 +102,7 @@ func TestParentRelationshipPreservation(t *testing.T) {
     }
     
     // Filter
-    filter := &FilterExpression{Operation: "child"}
+    filter := &FilterExpression{Function: "child"}
     ft, _ := ApplyFilter(restored, filter)
     
     // Verify parent context in filtered trace
@@ -120,6 +119,10 @@ func TestParentRelationshipPreservation(t *testing.T) {
 ### 4. Diff Stability
 
 **Test**: Verify diff operations produce identical results across runs.
+
+Illustrative only: `TestDiffStability` is not checked in. Use
+`TestDiffWithSequenceIDs` for executable coverage; the "reorder without
+sequence IDs" step below has no dedicated test yet.
 
 ```go
 func TestDiffStability(t *testing.T) {
@@ -153,6 +156,9 @@ func TestDiffStability(t *testing.T) {
 ### 5. Concurrent Collection Determinism
 
 **Test**: Verify concurrent event collection produces deterministic ordering.
+
+Illustrative only: `TestConcurrentDeterminism` is not checked in. Use
+`TestConcurrentEventCollection` for executable coverage.
 
 ```go
 func TestConcurrentDeterminism(t *testing.T) {
@@ -214,7 +220,7 @@ func TestConcurrentDeterminism(t *testing.T) {
 
 **Test Command**:
 ```bash
-go test -v ./internal/trace -run TestDeterministicSequenceAssignment -count=10
+go test -v ./internal/trace -run 'TestExecutionTrace_AddStateAssignsSequenceIDs|TestEventSequencer_MonotonicSequenceIDs' -count=10
 ```
 
 ### AC2: Parent-child relationships remain valid after export and filtering
@@ -234,7 +240,7 @@ go test -v ./internal/trace -run TestDeterministicSequenceAssignment -count=10
 
 **Test Command**:
 ```bash
-go test -v ./internal/trace -run TestParentRelationshipPreservation
+go test -v ./internal/trace -run TestSerializationPreservesSequenceOrder
 ```
 
 ### AC3: Comparison reports identify true changes rather than ordering noise
@@ -256,8 +262,7 @@ go test -v ./internal/trace -run TestParentRelationshipPreservation
 
 **Test Command**:
 ```bash
-go test -v ./internal/trace -run TestDiffWithSequenceIDs
-go test -v ./internal/trace -run TestDiffStability
+go test -v ./internal/trace -run 'TestDiffWithSequenceIDs|TestBackwardCompatibility'
 ```
 
 ## Regression Tests
@@ -285,35 +290,35 @@ go test -v ./internal/trace -run TestConcurrentEventCollection
 go test -v ./internal/trace -run TestNestedAndSimultaneousEvents
 ```
 
+### Regression example (issue #144)
+
+Both outcomes are covered by checked-in tests in
+`internal/trace/event_ordering_integration_test.go` and
+`internal/trace/event_ordering_test.go`:
+
+- Success: `TestSerializationPreservesSequenceOrder` and
+  `TestNestedAndSimultaneousEvents` verify that sequence IDs and
+  `parent_sequence_id` survive export/import and that a nested parent ID is
+  always smaller than its child's.
+- Failure: `TestEventOrdering_ValidateParentRelationships` verifies that a
+  dangling `ParentSequenceID` is rejected; `ValidateParentRelationships`
+  returns the index of the offending state (1 for a missing parent 999) rather
+  than `-1`. This is the failure to expect when a trace is edited by hand.
+
+```bash
+go test -v ./internal/trace -run 'TestSerializationPreservesSequenceOrder|TestNestedAndSimultaneousEvents|TestEventOrdering_ValidateParentRelationships'
+```
+
 ### Continuous Integration
 
-Add to CI pipeline:
-
-```yaml
-# .github/workflows/event-ordering.yml
-name: Event Ordering Verification
-
-on: [push, pull_request]
-
-jobs:
-  verify-ordering:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        go: ['1.21', '1.22']
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-go@v4
-        with:
-          go-version: ${{ matrix.go }}
-      - name: Run ordering tests
-        run: |
-          go test -v ./internal/trace -run "TestEventSequencer|TestEventOrdering|TestFilteringPreservesSequenceOrder|TestSerializationPreservesSequenceOrder|TestDiffWithSequenceIDs"
-      - name: Verify cross-platform consistency
-        run: |
-          go test -v ./internal/trace -run TestDeterministicSequenceAssignment -count=5
-```
+There is no `.github/workflows/event-ordering.yml`. Event ordering tests run in
+the `go-unit` job of [ci-test.yml](../.github/workflows/ci-test.yml), whose
+matrix covers `ubuntu-latest`, `macos-latest`, and `windows-latest` and uses
+`go test -race` over `./internal/...` with `go-version-file: go.mod`. Do not
+add a second matrix with older Go versions: [go.mod](../go.mod) requires Go
+1.26. Documentation examples are checked by
+[validate-docs.sh](../scripts/validate-docs.sh); its flag check only inspects
+lines that begin with `glassbox `.
 
 ## Performance Benchmarks
 
@@ -404,7 +409,7 @@ The event ordering contract provides:
 ✅ **Parent relationship preservation** through export and filtering
 ✅ **Stable diff output** that identifies true changes
 ✅ **Backward compatibility** with traces lacking sequence IDs
-✅ **Thread-safe concurrent collection** with guaranteed ordering
-✅ **Comprehensive test coverage** for all transformations
+✅ **Thread-safe sequence ID assignment** (`AddState`'s `States` slice is not mutex-protected; see `TestConcurrentEventCollection`)
+✅ **Focused test coverage** for the ordering contract and its main transformations; illustrative snippets in this guide are not executable tests
 
 All acceptance criteria are met through the implemented sequence ID system, parent relationship tracking, and deterministic tie-breakers.

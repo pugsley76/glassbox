@@ -461,7 +461,7 @@ invalid --trace-verbosity "extreme" — must be one of: summary, normal, verbose
 **Error example:**
 ```
 --annotations: file not found: "/path/to/annotations.json"
-  Fix: provide a valid path to an annotations JSON file
+  Check that the path is correct and the file exists
 ```
 
 ### `--gas-model`

@@ -221,6 +221,6 @@ go test ./cmd/generate-release-manifest/... -v -run TestBuildProvenance
 ## See also
 
 - [release-manifest.md](./release-manifest.md) — full manifest format reference
-- [sbom.md](./sbom.md) — SBOM generation and verification
+- [release-manifest.md](./release-manifest.md) — SBOM generation and verification
 - [ci-artifacts.md](./ci-artifacts.md) — CI artifact retrieval guide
 - [reproducible-builds.md](./reproducible-builds.md) — determinism checks
