@@ -26,7 +26,8 @@ import (
 // PolicyLevel selects how strict directory verification is.
 type PolicyLevel string
 
-// Policy levels, ordered from strictest to most permissive.const (
+// Policy levels, ordered from strictest to most permissive.
+const (
 	// PolicyStrict fails on any irregularity: a sequence gap, a missing or
 	// broken chain link, an unsigned file, a structural problem, or a
 	// signature failure. This is the correct level for a log directory that is

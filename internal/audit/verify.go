@@ -46,6 +46,14 @@ type DirPolicy struct {
 	// policy or structural violation instead of continuing to collect all
 	// issues.  Results are still valid for the portion that was checked.
 	FailFast bool `json:"fail_fast,omitempty"`
+
+	// Level selects how chain irregularities are handled after verification.
+	// Valid values: "strict" (default), "warn", "permissive".
+	// An unrecognised value falls back to strict so a config typo cannot
+	// silently downgrade an audit to advisory-only.
+	// This field is consumed by PolicyEnforcer.EnforceResult after
+	// VerifyDirectoryWithPolicy returns; it does not affect which checks run.
+	Level PolicyLevel `json:"level,omitempty"`
 }
 
 // SegmentVerifyResult is the per-segment outcome within a DirPolicyResult.
