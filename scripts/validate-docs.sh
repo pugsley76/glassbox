@@ -4,7 +4,7 @@
 #
 # validate-docs.sh — documentation validation suite.
 #
-# Runs three independent checks:
+# Runs four independent checks:
 #
 #   1. Deterministic build comparison
 #      Generates a normalised snapshot of all docs/*.md files twice from the
@@ -23,8 +23,15 @@
 #      and checks each flag against the known flag set from the API snapshot
 #      (.api-snapshots/cli-*.txt). Unknown flags fail the check.
 #
+#   4. Fixture line-ending check
+#      Scans text fixture files under test/fixtures, tests/fixtures, and
+#      test/regression/fixtures for CRLF (Windows) line endings. Fixtures are
+#      expected to use LF so golden comparisons are stable across platforms.
+#      Explicitly binary or Windows-only fixtures are skipped (see
+#      FIXTURE_CRLF_ALLOWLIST below).
+#
 # Usage:
-#   scripts/validate-docs.sh [--determinism] [--links] [--flags] [--all]
+#   scripts/validate-docs.sh [--determinism] [--links] [--flags] [--fixtures] [--all]
 #
 #   With no flags, --all is assumed.
 #
@@ -38,6 +45,8 @@
 #   SNAPSHOT_DIR          Snapshot cache directory (default: .doc-snapshots)
 #   GLASSBOX_BIN          Path to glassbox binary (default: bin/glassbox if built)
 #   SKIP_FLAG_CHECK       Set to 1 to skip flag smoke check (e.g. when binary not built)
+#   SKIP_FIXTURE_CHECK    Set to 1 to skip fixture line-ending check
+=======
 
 set -euo pipefail
 
@@ -46,21 +55,33 @@ DOCS_DIR="${DOCS_DIR:-${REPO_ROOT}/docs}"
 SNAPSHOT_DIR="${SNAPSHOT_DIR:-${REPO_ROOT}/.doc-snapshots}"
 GLASSBOX_BIN="${GLASSBOX_BIN:-${REPO_ROOT}/bin/glassbox}"
 SKIP_FLAG_CHECK="${SKIP_FLAG_CHECK:-0}"
+SKIP_FIXTURE_CHECK="${SKIP_FIXTURE_CHECK:-0}"
 API_SNAPSHOT_DIR="${REPO_ROOT}/.api-snapshots"
 
+# Fixture directories scanned by the line-ending check (relative to REPO_ROOT).
+FIXTURE_DIRS=("test/fixtures" "tests/fixtures" "test/regression/fixtures")
+
+# Fixtures that are intentionally CRLF or binary and must not be flagged.
+# Paths are relative to REPO_ROOT. Add an entry (with a comment) when a
+# fixture genuinely needs CRLF, e.g. a Windows-only golden file.
+FIXTURE_CRLF_ALLOWLIST=(
+  # "test/fixtures/windows/example.txt"   # Windows-only golden, CRLF required
+)
+
 # ── Parse flags ───────────────────────────────────────────────────────────────
-RUN_DET=0; RUN_LINKS=0; RUN_FLAGS=0
+RUN_DET=0; RUN_LINKS=0; RUN_FLAGS=0; RUN_FIXTURES=0
 for arg in "$@"; do
   case "${arg}" in
     --determinism) RUN_DET=1 ;;
     --links)       RUN_LINKS=1 ;;
     --flags)       RUN_FLAGS=1 ;;
-    --all)         RUN_DET=1; RUN_LINKS=1; RUN_FLAGS=1 ;;
-    *) echo "Unknown flag: ${arg}. Use --determinism, --links, --flags, or --all." >&2; exit 1 ;;
+    --fixtures)    RUN_FIXTURES=1 ;;
+    --all)         RUN_DET=1; RUN_LINKS=1; RUN_FLAGS=1; RUN_FIXTURES=1 ;;
+    *) echo "Unknown flag: ${arg}. Use --determinism, --links, --flags, --fixtures, or --all." >&2; exit 1 ;;
   esac
 done
-if [[ $((RUN_DET + RUN_LINKS + RUN_FLAGS)) -eq 0 ]]; then
-  RUN_DET=1; RUN_LINKS=1; RUN_FLAGS=1
+if [[ $((RUN_DET + RUN_LINKS + RUN_FLAGS + RUN_FIXTURES)) -eq 0 ]]; then
+  RUN_DET=1; RUN_LINKS=1; RUN_FLAGS=1; RUN_FIXTURES=1
 fi
 
 FAILURES=0
@@ -266,6 +287,66 @@ check_flags() {
   fi
 }
 
+# ── 4. FIXTURE LINE-ENDING CHECK ──────────────────────────────────────────────
+check_fixtures() {
+  echo ""
+  echo "4. Fixture line-ending check ..."
+
+  if [[ "${SKIP_FIXTURE_CHECK}" == "1" ]]; then
+    skip "SKIP_FIXTURE_CHECK=1 — skipping fixture line-ending check"
+    return
+  fi
+
+  # Build a lookup of allowlisted paths for fast membership tests.
+  local -A allow=()
+  local entry
+  for entry in "${FIXTURE_CRLF_ALLOWLIST[@]}"; do
+    [[ -z "${entry}" ]] && continue
+    allow["${entry}"]=1
+  done
+
+  local checked=0
+  local offending=0
+  local offending_files=()
+
+  local dir
+  for dir in "${FIXTURE_DIRS[@]}"; do
+    local abs_dir="${REPO_ROOT}/${dir}"
+    [[ -d "${abs_dir}" ]] || continue
+
+    while IFS= read -r fixture; do
+      local relpath="${fixture#${REPO_ROOT}/}"
+
+      # Skip allowlisted fixtures (binary / Windows-only).
+      [[ -n "${allow[${relpath}]:-}" ]] && continue
+
+      # Skip binary files: a NUL byte in the first 8 KiB marks it binary.
+      if LC_ALL=C grep -qP '\x00' <(head -c 8192 "${fixture}") 2>/dev/null; then
+        continue
+      fi
+
+      checked=$((checked + 1))
+
+      # Detect CRLF: a carriage return immediately followed by a newline.
+      if LC_ALL=C grep -qU $'\r$' "${fixture}" 2>/dev/null; then
+        offending=$((offending + 1))
+        offending_files+=("${relpath}")
+      fi
+    done < <(find "${abs_dir}" -type f | LC_ALL=C sort)
+  done
+
+  if [[ ${offending} -eq 0 ]]; then
+    pass "No CRLF line endings in fixtures (checked ${checked} file(s))"
+  else
+    fail "${offending} fixture file(s) contain CRLF line endings (checked ${checked} total)"
+    local f
+    for f in "${offending_files[@]}"; do
+      info "CRLF: ${f}"
+    done
+    info "Fix: convert to LF (e.g. 'sed -i \"s/\\r\$//\" <file>') or add to FIXTURE_CRLF_ALLOWLIST"
+  fi
+}
+
 # ── Run selected checks ───────────────────────────────────────────────────────
 echo "Documentation validation"
 echo "  Docs dir     : ${DOCS_DIR}"
@@ -273,9 +354,10 @@ echo "  Repo root    : ${REPO_ROOT}"
 
 cd "${REPO_ROOT}"
 
-[[ "${RUN_DET}"   -eq 1 ]] && check_determinism
-[[ "${RUN_LINKS}" -eq 1 ]] && check_links
-[[ "${RUN_FLAGS}" -eq 1 ]] && check_flags
+[[ "${RUN_DET}"      -eq 1 ]] && check_determinism
+[[ "${RUN_LINKS}"    -eq 1 ]] && check_links
+[[ "${RUN_FLAGS}"    -eq 1 ]] && check_flags
+[[ "${RUN_FIXTURES}" -eq 1 ]] && check_fixtures
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

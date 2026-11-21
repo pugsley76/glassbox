@@ -24,6 +24,9 @@ test/regression/
 
 Each subdirectory has its own `README.md` with layer-specific rules.
 
+Text fixtures must use LF line endings; see [Line endings](#line-endings) for
+the rule and the check command.
+
 ### Fixture index
 
 `fixture_index.json` is a deterministic, auto-generated catalogue of every
@@ -83,6 +86,9 @@ Where:
   `pr401`).
 - `<ext>` — file extension appropriate for the content type. Compound
   extensions such as `.trace.json` or `.expected.txt` are allowed.
+
+Line endings are not part of the name, but they are checked: text fixtures use
+LF only. See [Line endings](#line-endings).
 
 ### How the index script applies these rules
 
@@ -155,6 +161,51 @@ breaks down as:
 
 When you add a fixture, compare the failure count before and after your
 change. Your fixture should add no new `[WARN]` or `[FAIL]` lines.
+
+---
+
+## Line endings
+
+Fixtures are committed and checked out on Linux, macOS, and Windows, so line
+endings are part of the fixture contract:
+
+- **Text fixtures use LF only.** This covers every `.json`, `.txt`, `.env`,
+  `.md`, and shell (`.sh`) fixture under `test/regression/fixtures/`. A CRLF
+  byte pair in a text fixture changes the fixture's byte content and can make
+  golden-output comparisons fail on Linux CI.
+- **CRLF is only permitted for fixtures that are explicitly Windows or
+  binary.** Such a fixture must say so in its filename or in its layer
+  `README.md` (for example a `.crlf.txt` fixture that exercises Windows line
+  handling). Binary fixtures (e.g. `.wasm`) are not line-ending checked.
+
+Do not rely on `core.autocrlf` or `.gitattributes` to normalise fixtures after
+the fact; write the fixture with LF from the start.
+
+### Checking line endings
+
+From the repository root (requires `bash`):
+
+```bash
+./scripts/validate-docs.sh --fixtures
+```
+
+This runs the focused CRLF check over `test/regression/fixtures/`. On success
+it prints:
+
+```
+[OK]   Fixture line endings are LF-only.
+```
+
+and exits 0. When a text fixture contains CRLF it prints one line per file and
+exits 1, for example:
+
+```
+[FAIL] CRLF line endings in test/regression/fixtures/cli/cli_format_yaml_issue230_expected.txt
+[FAIL] 1 fixture(s) with CRLF line endings.
+```
+
+Fix the reported file by rewriting it with LF endings (for example
+`sed -i 's/\r$//' <file>` on Linux/macOS) and re-run the check.
 
 ---
 
