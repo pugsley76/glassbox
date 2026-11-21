@@ -27,14 +27,23 @@ guaranteed?**
 ### 1. The CLI host process owns the canonical form
 
 The Tier-0 CLI host (Go) is the sole authority on what constitutes the canonical
-form of an audit payload. The TypeScript SDK implements the same algorithm
-independently, but the Go implementation is the reference. Any discrepancy is
-treated as a TypeScript bug.
+form of an audit payload. The reference implementation lives in package
+`internal/cmd`, specifically `internal/cmd/canonical.go` (canonical encoder and
+`ParseCanonicalInput`) and `internal/cmd/audit.go` (signing path). The
+TypeScript SDK (`src/audit/AuditLogger.ts`, `src/audit/AuditPayloadSchema.ts`)
+implements the same algorithm independently and **must match the Go reference
+byte-for-byte**. Any discrepancy is treated as a TypeScript bug.
 
 Rationale for Go as reference: the audit log is created and signed by the Go
 CLI. Verification of a log signed by the CLI must work with the same bytes the
 CLI produced. Starting from the signer's output and working backwards is the
 only definition that guarantees correctness.
+
+`ParseCanonicalInput` is the entry point for **untrusted** input. Callers must
+not hand raw JSON to the encoder directly; untrusted payloads go through
+`ParseCanonicalInput`, which enforces the number grammar, duplicate-key
+rejection, and string normalisation described below before any bytes are
+hashed.
 
 ### 2. Canonical form specification
 
@@ -46,16 +55,44 @@ following invariants, implemented identically in Go and TypeScript:
 | Key ordering | Object keys sorted by Unicode code-point order (lexicographic), applied recursively at every nesting level | Deterministic across all JSON producers |
 | Whitespace | Zero extra whitespace — no spaces after `:` or `,`, no newlines, no indentation | Minimal and unambiguous byte sequence |
 | String encoding | UTF-8; escape sequences follow JSON spec; no locale-specific collation | Cross-platform stability |
-| Numbers | IEEE 754 double precision; `NaN` and `Infinity` are rejected before serialisation | JSON does not support non-finite floats; rejection ensures no silent encoding variation |
+| String normalisation | String values **and** object keys are NFC-normalised before encoding | Two visually identical payloads must hash identically |
+| HTML escaping | `<`, `>`, and `&` are **not** escaped (Go's default `encoding/json` HTML escaping is disabled) | Matches `fast-json-stable-stringify` output byte-for-byte |
+| Numbers | Accepted grammar: optional `-`, integer digits, optional fraction; **no exponent notation**, **no negative zero** (`-0`), magnitude within the safe-integer range ±(2^53−1); `NaN` and `Infinity` are rejected before serialisation | JSON does not support non-finite floats; a restricted grammar removes silent encoding variation |
+| Duplicate keys | Rejected with `ErrDuplicateKey` | A duplicate key has no single canonical value |
 | Arrays | Insertion order preserved; arrays are not sorted | Arrays carry semantic ordering |
 | Null | Serialised as `null` | Standard JSON |
 | Booleans | Serialised as `true` / `false` | Standard JSON |
 
 **The canonical form is NOT full RFC 8785.** It is inspired by JCS but is not
-a complete implementation. In particular, Unicode normalisation of string values
-is not applied, and the number serialisation diverges from the RFC's ULP-exact
-approach. The invariants above are the operative spec; the RFC is a reference
-point, not an authority.
+a complete implementation. In particular, the number serialisation diverges from
+the RFC's ULP-exact approach: exponent notation and negative zero are rejected
+outright rather than re-serialised. The invariants above are the operative spec;
+the RFC is a reference point, not an authority.
+
+#### Worked example
+
+Successful canonicalisation — keys are sorted, whitespace removed, and the
+result is hashed:
+
+```
+input:            {"b":1,"a":2}
+canonical bytes:  {"a":2,"b":1}
+SHA-256 (hex):    <digest of the canonical bytes>
+```
+
+The digest is computed over the exact canonical bytes shown; a verifier
+recomputing it from the stored payload must obtain the same value.
+
+Most important failure path — ambiguous numbers are rejected before hashing:
+
+```
+input:   {"n":1e10}   → rejected with ErrAmbiguousNumber (exponent notation)
+input:   {"n":-0}     → rejected with ErrAmbiguousNumber (negative zero)
+input:   {"a":1,"a":2} → rejected with ErrDuplicateKey (duplicate key)
+```
+
+These rejections occur in `ParseCanonicalInput`; no bytes are produced and no
+signature is created for a rejected payload.
 
 ### 3. Hashing
 
@@ -78,13 +115,19 @@ this SHA-256 digest.
 ### 4. Go implementation
 
 Located in `internal/cmd/canonical.go` and used by `internal/cmd/audit.go`.
+This is the reference implementation (see section 1).
 
 Algorithm:
 1. Marshal the Go struct to raw JSON (`encoding/json`).
 2. Unmarshal into `interface{}` to erase struct field ordering imposed by
    Go's reflection-based encoder.
 3. Recursively sort all `map[string]interface{}` keys with `sort.Strings`.
-4. Re-encode using `encoding/json` without indentation.
+4. Re-encode using `encoding/json` without indentation and with HTML escaping
+   disabled (so `<`, `>`, `&` are emitted literally).
+
+Untrusted input must be routed through `ParseCanonicalInput`, which applies the
+number grammar, NFC normalisation, and duplicate-key checks from section 2
+before the encoder runs.
 
 ```go
 // internal/cmd/canonical.go (representative pseudocode)
@@ -106,10 +149,12 @@ signature, _ := signer.Sign(hash[:])
 
 ### 5. TypeScript implementation
 
-Located in `src/audit/AuditLogger.ts`. Uses `fast-json-stable-stringify` for
+Located in `src/audit/AuditLogger.ts` (with schema validation in
+`src/audit/AuditPayloadSchema.ts`). Uses `fast-json-stable-stringify` for
 key-sorted serialisation, which does not rely on `JSON.stringify` key ordering
 (insertion-order in V8, unspecified by spec) and is therefore stable across
-Node.js LTS versions.
+Node.js LTS versions. The output must be byte-identical to the Go reference
+(section 1); any divergence is a TypeScript bug.
 
 ```typescript
 // src/audit/AuditLogger.ts (representative pseudocode)
@@ -184,6 +229,28 @@ logical payload. This is verified by:
 Cross-language byte-identity is validated in the test suite via a shared
 fixture file; any divergence is a test failure.
 
+#### Running the focused checks
+
+From a clean checkout, run the canonical Go tests and the shell validation
+script:
+
+```
+$ go test ./internal/cmd -run Canonical
+ok      github.com/glassbox/internal/cmd        (all Canonical tests pass)
+
+$ ./test_canonical_json.sh
+<all canonical JSON checks pass; exit code 0>
+```
+
+Both commands must exit `0`. If either fails, record the failure separately as
+a pre-existing baseline (capture the failing test name and output) rather than
+mixing it into an unrelated change. Verify documentation links with:
+
+```
+$ scripts/validate-docs.sh --links
+<no broken links; exit code 0>
+```
+
 ## Rationale
 
 ### Why Go as the reference rather than a shared library?
@@ -241,6 +308,9 @@ approach allows ad-hoc payload fields without schema changes.
 | TypeScript determinism across 100 invocations | `tests/audit-canonical.test.ts` |
 | Schema validation precedes canonicalisation | `src/audit/AuditPayloadSchema.ts`, `internal/cmd/audit.go` |
 | `NaN`/`Infinity` rejected | `src/audit/AuditPayloadSchema.ts` |
+| Exponent notation, negative zero, and out-of-range numbers rejected with `ErrAmbiguousNumber` | `internal/cmd/canonical.go` |
+| Duplicate keys rejected with `ErrDuplicateKey` | `internal/cmd/canonical.go` |
+| NFC normalisation of string values and keys | `internal/cmd/canonical.go` |
 | Hardware attestation included in hash when present | `docs/audit-canonicalization.md` |
 | Four-step verification procedure | `docs/audit-verify-command.md` |
 

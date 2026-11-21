@@ -303,6 +303,8 @@ When adding or modifying IPC messages, schema fields, or component boundaries:
 
 ## See also
 
+- [ADR index](./adr/README.md) — architecture decision records
+- [Canonicalization ownership](./adr/005-canonicalization-ownership.md) — ADR for canonicalization ownership
 - [Trace schema](./schema/trace-schema.md) — execution trace formal specification
 - [Schema registry](./schema/README.md) — JSON Schema definitions
 - [Debug command](./debug-command.md) — CLI reference
