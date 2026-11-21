@@ -325,7 +325,47 @@ process restart. Rejected; the single-provider model is simpler to audit.
 | Only SHA-256 digest (not payload) passed as `data` to `Signer.Sign` | `internal/cmd/audit.go` |
 | `KeyOrigin()` returns non-sensitive metadata only; never contains credentials | `internal/signer/signer.go` (`KeyOriginMetadata`) |
 
+### Trust-boundary review scenarios
+
+Each claim in the table above can be re-checked from a clean checkout with the
+commands below. Run them from the repository root; all are read-only and do not
+require an HSM, KMS credentials, or network access.
+
+| Claim | Command | Expected result |
+|---|---|---|
+| `Signer` interface definition (4 methods) | `go test ./internal/signer/... -run TestSigner -v` | `PASS`; no method-set drift in `internal/signer/signer.go` |
+| Provider selected via `GLASSBOX_SIGNER_TYPE` | `go test ./internal/signer/... -run TestFactory -v` | `PASS`; `software`/`pkcs11` resolved by first match, default `software` |
+| Mock provider registered in `DefaultRegistry`, not in `NewFromEnv` | `go test ./internal/signer/... -run TestRegistry -v` | `PASS`; `mock` reachable only via `Registry.CreateSigner("mock", cfg)` |
+| PKCS#11: module path/type validated before load, `--validate-only` preflight | `go test ./internal/signer/... -run TestPKCS11 -v` | `PASS`; invalid path/type fails before `dlopen`, preflight reports `[OK]`/`[FAIL]` per step |
+| KMS: `kms:GetPublicKey` called once at construction | `go test ./internal/signer/... -run TestKMS -v` | `PASS`; `GetPublicKey` invoked once, subsequent `Sign` calls use only `kms:Sign` |
+| Only SHA-256 digest passed as `data` to `Signer.Sign` | `go test ./internal/cmd/... -run TestAuditSign -v` | `PASS`; `Sign` receives `hash[:]`, not the canonical payload |
+
+**Success path — single-provider selection:**
+
+```sh
+export GLASSBOX_SIGNER_TYPE=software
+export GLASSBOX_SOFTWARE_PRIVATE_KEY_HEX=<64-char-hex-seed>
+glassbox audit:sign --payload audit.json --output audit-signed.json
+# Expected: exit 0; exactly one Signer constructed; audit-signed.json written
+```
+
+**Failure path — configured provider unavailable (no fallback):**
+
+```sh
+export GLASSBOX_SIGNER_TYPE=pkcs11
+export GLASSBOX_PKCS11_MODULE=/nonexistent/libpkcs11.so
+glassbox audit:sign --payload audit.json --output audit-signed.json
+# Expected: non-zero exit with an actionable error naming the module path;
+# the process does NOT fall back to the software provider.
+```
+
+The failure path is the observable consequence of the "no fallback chain"
+decision in [Rationale](#why-is-there-no-provider-fallback-chain): an
+unavailable configured provider surfaces as an error rather than a silent
+downgrade to software signing.
+
 ## Consequences
+=======
 
 **Positive:**
 - The `Signer` interface allows operators to select a provider that matches

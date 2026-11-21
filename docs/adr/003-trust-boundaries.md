@@ -226,6 +226,47 @@ possible but would expose the full simulator attack surface to browser
 sandboxing, which is weaker than OS process isolation. Rejected; browser
 bindings delegate simulation to an RPC endpoint.
 
+## Review scenarios
+
+The following scenarios let a reviewer verify each trust boundary from a clean
+checkout. Run each command from the repository root; the expected outcome is
+the observable result that distinguishes a passing boundary from a regression.
+Record any pre-existing failure separately rather than folding it into an
+unrelated change.
+
+| Tier | Scenario | Command | Expected outcome |
+|---|---|---|---|
+| Tier 0 — CLI host | Analyzer boundary checker flags an unauthenticated state write | `go test ./internal/analyzer -run TestSecurityBoundaryChecker -v` | Test passes; the `storage_write`-without-auth case reports `unauthorized_state_modification` at severity `high`, and the auth-before-`storage_write` case reports no violation. |
+| Tier 1 — Simulator subprocess | Simulator env construction and buffer caps | `go test ./internal/simulator -run 'TestSimulatorEnv|TestBuffer' -v` | Test passes; `simulatorEnv()` inherits the parent environment and only adjusts `RUST_LOG`. |
+| Tier 2 — Plugin subprocess | Denied capability refused at load time | `go test ./internal/plugin -run 'TestPolicy|TestSandbox' -v` | Test passes; a plugin declaring a denied capability is refused before launch. |
+| Tier 3 — Signing provider | Provider resolved once at startup | `go test ./internal/signer -run 'TestFactory|TestRegistry' -v` | Test passes; provider selection is fixed at startup with no runtime switching. |
+| Tier 4 — External services | URL credentials stripped before display | `go test ./internal/config -run TestRedact -v` | Test passes; `user:password@` is removed from displayed URLs. |
+| Tier 5 — Browser bindings | Generated `package.json` excludes Node primitives | `go test ./internal/bindings -run TestBrowser -v` | Test passes; the `"browser"` field excludes `child_process`, `fs`, and `path`. |
+| Documentation | ADR link integrity | `scripts/validate-docs.sh --links` | Exits `0`; all internal links in this ADR resolve. |
+
+### Focused example: analyzer trust boundary
+
+`internal/analyzer/security_boundary.go` inspects contract call sequences for
+state mutations that occur before an authorization check. The success path
+calls `auth` before `storage_write` and produces no violation:
+
+```
+auth(...) -> storage_write(...)   # no violation
+```
+
+The failure path calls `storage_write` without a preceding `auth`, which the
+checker reports as `unauthorized_state_modification` with severity `high`:
+
+```
+storage_write(...)                # unauthorized_state_modification (high)
+```
+
+Reproduce both paths with:
+
+```
+go test ./internal/analyzer -run TestSecurityBoundaryChecker -v
+```
+
 ## Implementation
 
 | Claim | Verified in |

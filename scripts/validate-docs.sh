@@ -23,10 +23,18 @@
 #      and checks each flag against the known flag set from the API snapshot
 #      (.api-snapshots/cli-*.txt). Unknown flags fail the check.
 #
-# Usage:
-#   scripts/validate-docs.sh [--determinism] [--links] [--flags] [--all]
+#   4. Observability manifest check (opt-in, not part of --all)
+#      Validates docs/observability-manifest.json: the file parses as JSON,
+#      schema_version is "1", and every prometheus_metrics entry carries the
+#      required keys (name, type, labels, description, stability,
+#      documented_in) with documented_in paths that exist on disk.
 #
-#   With no flags, --all is assumed.
+# Usage:
+#   scripts/validate-docs.sh [--determinism] [--links] [--flags] [--manifest] [--all]
+#
+#   With no flags, --all is assumed. --all runs checks 1-3 only; the manifest
+#   check is opt-in via --manifest so existing CI is unaffected.
+=======
 #
 # Exit codes:
 #   0   All requested checks passed.
@@ -49,17 +57,18 @@ SKIP_FLAG_CHECK="${SKIP_FLAG_CHECK:-0}"
 API_SNAPSHOT_DIR="${REPO_ROOT}/.api-snapshots"
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
-RUN_DET=0; RUN_LINKS=0; RUN_FLAGS=0
+RUN_DET=0; RUN_LINKS=0; RUN_FLAGS=0; RUN_MANIFEST=0
 for arg in "$@"; do
   case "${arg}" in
     --determinism) RUN_DET=1 ;;
     --links)       RUN_LINKS=1 ;;
     --flags)       RUN_FLAGS=1 ;;
+    --manifest)    RUN_MANIFEST=1 ;;
     --all)         RUN_DET=1; RUN_LINKS=1; RUN_FLAGS=1 ;;
-    *) echo "Unknown flag: ${arg}. Use --determinism, --links, --flags, or --all." >&2; exit 1 ;;
+    *) echo "Unknown flag: ${arg}. Use --determinism, --links, --flags, --manifest, or --all." >&2; exit 1 ;;
   esac
 done
-if [[ $((RUN_DET + RUN_LINKS + RUN_FLAGS)) -eq 0 ]]; then
+if [[ $((RUN_DET + RUN_LINKS + RUN_FLAGS + RUN_MANIFEST)) -eq 0 ]]; then
   RUN_DET=1; RUN_LINKS=1; RUN_FLAGS=1
 fi
 
@@ -266,6 +275,76 @@ check_flags() {
   fi
 }
 
+# ── 4. OBSERVABILITY MANIFEST CHECK ───────────────────────────────────────────
+check_manifest() {
+  echo ""
+  echo "4. Observability manifest check ..."
+
+  local manifest="${DOCS_DIR}/observability-manifest.json"
+
+  if [[ ! -f "${manifest}" ]]; then
+    fail "Manifest not found: ${manifest}"
+    return
+  fi
+
+  if ! command -v jq >/dev/null 2>&1; then
+    skip "jq not installed — cannot validate ${manifest}"
+    return
+  fi
+
+  if ! jq empty "${manifest}" >/dev/null 2>&1; then
+    fail "Manifest is not valid JSON: ${manifest}"
+    return
+  fi
+  pass "Manifest parses as JSON"
+
+  local schema_version
+  schema_version="$(jq -r '.schema_version // empty' "${manifest}")"
+  if [[ "${schema_version}" == "1" ]]; then
+    pass "schema_version is \"1\""
+  else
+    fail "schema_version must be \"1\" (found: '${schema_version:-<missing>}')"
+  fi
+
+  local required_keys=("name" "type" "labels" "description" "stability" "documented_in")
+  local entry_count
+  entry_count="$(jq -r '.prometheus_metrics | length' "${manifest}" 2>/dev/null || echo "0")"
+
+  if [[ "${entry_count}" == "0" ]]; then
+    fail "prometheus_metrics is missing or empty"
+    return
+  fi
+
+  local missing=0
+  local idx
+  for ((idx = 0; idx < entry_count; idx++)); do
+    local key
+    for key in "${required_keys[@]}"; do
+      if [[ "$(jq -r --argjson i "${idx}" --arg k "${key}" '.prometheus_metrics[$i] | has($k)' "${manifest}")" != "true" ]]; then
+        fail "prometheus_metrics[${idx}] missing required key '${key}'"
+        missing=$((missing + 1))
+      fi
+    done
+
+    local documented_in
+    documented_in="$(jq -r --argjson i "${idx}" '.prometheus_metrics[$i].documented_in // empty' "${manifest}")"
+    if [[ -n "${documented_in}" ]]; then
+      local resolved
+      resolved="$(realpath -m "${REPO_ROOT}/${documented_in}" 2>/dev/null || echo "")"
+      if [[ -z "${resolved}" || ! -e "${resolved}" ]]; then
+        fail "prometheus_metrics[${idx}].documented_in path not found: '${documented_in}'"
+        missing=$((missing + 1))
+      fi
+    fi
+  done
+
+  if [[ ${missing} -eq 0 ]]; then
+    pass "All ${entry_count} prometheus_metrics entr(ies) have required keys and existing documented_in paths"
+  else
+    fail "${missing} manifest problem(s) found across ${entry_count} prometheus_metrics entr(ies)"
+  fi
+}
+
 # ── Run selected checks ───────────────────────────────────────────────────────
 echo "Documentation validation"
 echo "  Docs dir     : ${DOCS_DIR}"
@@ -273,9 +352,10 @@ echo "  Repo root    : ${REPO_ROOT}"
 
 cd "${REPO_ROOT}"
 
-[[ "${RUN_DET}"   -eq 1 ]] && check_determinism
-[[ "${RUN_LINKS}" -eq 1 ]] && check_links
-[[ "${RUN_FLAGS}" -eq 1 ]] && check_flags
+[[ "${RUN_DET}"      -eq 1 ]] && check_determinism
+[[ "${RUN_LINKS}"    -eq 1 ]] && check_links
+[[ "${RUN_FLAGS}"    -eq 1 ]] && check_flags
+[[ "${RUN_MANIFEST}" -eq 1 ]] && check_manifest
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

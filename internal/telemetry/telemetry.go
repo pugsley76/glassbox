@@ -340,3 +340,56 @@ func sanitizeCommandName(name string) string {
 	}
 	return b.String()
 }
+
+// TestIsTelemetryEnabled_OptOutHierarchy verifies the consent resolution
+// hierarchy documented in docs/observability-troubleshooting.md:
+//
+//  1. GLASSBOX_TELEMETRY environment variable (highest precedence)
+//  2. ~/.Glassbox/telemetry_consent.json consent file
+//  3. Runtime flag set via Init()
+//  4. Default: disabled
+//
+// Each case uses t.Setenv and a temporary consent file path so the test is
+// hermetic and does not depend on the developer's real consent file.
+func TestIsTelemetryEnabled_OptOutHierarchy(t *testing.T) {
+	// Save and restore package-level runtime flag so cases are independent.
+	origEnabled := commandTelemetryEnabled
+	t.Cleanup(func() { commandTelemetryEnabled = origEnabled })
+
+	writeConsent := func(t *testing.T, enabled bool) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "telemetry_consent.json")
+		body := fmt.Sprintf(`{"enabled":%t}`, enabled)
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write consent file: %v", err)
+		}
+		t.Setenv("GLASSBOX_TELEMETRY_CONSENT_FILE", path)
+	}
+
+	t.Run("env false overrides enabled consent file", func(t *testing.T) {
+		writeConsent(t, true)
+		t.Setenv("GLASSBOX_TELEMETRY", "false")
+		commandTelemetryEnabled = true // runtime flag must not win over env
+		if IsTelemetryEnabled() {
+			t.Fatal("expected telemetry disabled: GLASSBOX_TELEMETRY=false must override enabled consent file")
+		}
+	})
+
+	t.Run("env true overrides disabled consent file", func(t *testing.T) {
+		writeConsent(t, false)
+		t.Setenv("GLASSBOX_TELEMETRY", "true")
+		commandTelemetryEnabled = false
+		if !IsTelemetryEnabled() {
+			t.Fatal("expected telemetry enabled: GLASSBOX_TELEMETRY=true must override disabled consent file")
+		}
+	})
+
+	t.Run("default disabled with no env and no consent file", func(t *testing.T) {
+		t.Setenv("GLASSBOX_TELEMETRY", "")
+		t.Setenv("GLASSBOX_TELEMETRY_CONSENT_FILE", filepath.Join(t.TempDir(), "absent.json"))
+		commandTelemetryEnabled = false
+		if IsTelemetryEnabled() {
+			t.Fatal("expected telemetry disabled by default when no env var and no consent file are present")
+		}
+	})
+}

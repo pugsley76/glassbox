@@ -133,3 +133,45 @@ func TestSecurityBoundaryChecker_UnknownContract_Skipped(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, violations)
 }
+
+// TestSecurityBoundaryChecker_ADR003ReviewScenarios exercises the trust-boundary
+// review scenarios documented in docs/adr/003-trust-boundaries.md. It mirrors the
+// documented command:
+//
+//	go test ./internal/analyzer -run TestSecurityBoundaryChecker -v
+//
+// The success path shows an auth event preceding a storage_write on a non-SAC
+// contract producing no violations. The failure path shows a storage_write
+// without prior auth on a non-SAC contract producing exactly one
+// unauthorized_state_modification violation at high severity.
+func TestSecurityBoundaryChecker_ADR003ReviewScenarios(t *testing.T) {
+	t.Run("success: auth precedes storage_write", func(t *testing.T) {
+		events := []string{
+			`{"type":"contract_call","contract":"CABC123"}`,
+			`{"type":"auth","address":"GABC123","contract":"CABC123"}`,
+			`{"type":"storage_write","contract":"CABC123"}`,
+		}
+
+		checker := NewSecurityBoundaryChecker()
+		violations, err := checker.Analyze(events)
+
+		assert.NoError(t, err)
+		assert.Empty(t, violations)
+	})
+
+	t.Run("failure: storage_write without prior auth", func(t *testing.T) {
+		events := []string{
+			`{"type":"contract_call","contract":"CABC123"}`,
+			`{"type":"storage_write","contract":"CABC123"}`,
+		}
+
+		checker := NewSecurityBoundaryChecker()
+		violations, err := checker.Analyze(events)
+
+		assert.NoError(t, err)
+		assert.Len(t, violations, 1)
+		assert.Equal(t, "unauthorized_state_modification", violations[0].Type)
+		assert.Equal(t, "high", violations[0].Severity)
+		assert.Equal(t, "CABC123", violations[0].Contract)
+	})
+}

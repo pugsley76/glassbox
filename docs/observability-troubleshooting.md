@@ -127,6 +127,36 @@ glassbox daemon start
 See [internal/metrics/README.md](../internal/metrics/README.md) for PromQL
 examples and Grafana dashboard reference.
 
+### Metric naming conventions
+
+Metric names and labels follow a single convention, derived from
+[docs/observability-manifest.json](observability-manifest.json) and the
+definitions in `internal/metrics`:
+
+- Names are lowercase `snake_case` (no camelCase, no dots).
+- `Counter` metrics end in `_total`.
+- Time-based `Gauge` and `Histogram` metrics end in `_seconds`.
+- Unix-timestamp `Gauge` metrics end in `_timestamp_seconds`.
+- Label names are `snake_case` (e.g. `node_address`, `network`, `status`).
+
+Valid example — a `Counter` with the `_total` suffix and snake_case labels:
+
+```
+remote_node_response_total{node_address="https://soroban-testnet.stellar.org",network="testnet",status="success"} 42
+```
+
+Invalid example — a `Counter` named `RemoteNodeResponse` (camelCase, missing
+`_total`).  The manifest validator rejects it:
+
+```bash
+bash scripts/verify-manifest.sh
+# Expected (non-zero exit):
+# ERROR: metric "RemoteNodeResponse" violates naming convention: Counter must end in "_total"
+```
+
+Fix the name to `remote_node_response_total` and re-run
+`bash scripts/verify-manifest.sh`; it should exit `0` with no output.
+
 ### Checking metric values manually
 
 ```bash
@@ -309,7 +339,92 @@ export GLASSBOX_TELEMETRY=false
 Glassbox applies a sampling policy before exporting events to reduce noise.
 See [docs/telemetry-sampling.md](telemetry-sampling.md) for the current policy.
 
+### Telemetry opt-out verification
+
+Telemetry is disabled by default.  The effective state is resolved from the
+following sources, in order of precedence (highest first):
+
+1. `GLASSBOX_TELEMETRY` environment variable (`true`/`false`).
+2. The consent file `~/.Glassbox/telemetry_consent.json`.
+3. The per-invocation `--telemetry` runtime flag.
+4. The default: disabled.
+
+The consent file is written by `glassbox telemetry enable` / `glassbox telemetry
+disable` and records the operator's persistent choice.  The environment
+variable always wins, so CI and air-gapped shells can force a state without
+touching the consent file.
+
+#### Step-by-step verification
+
+Run these commands from a clean checkout to confirm opt-out is honored.  The
+`status` subcommand reports both the resolved `Source` and the effective
+`Enabled` value.
+
+```bash
+# 1. Inspect the current state and where it came from
+glassbox telemetry status
+# Expected (default, no consent file, no env var):
+# Source: default
+# Enabled: false
+
+# 2. Persist an opt-out; this writes ~/.Glassbox/telemetry_consent.json
+glassbox telemetry disable
+# Expected:
+# Telemetry disabled.
+
+# 3. Confirm the consent file is now the source
+glassbox telemetry status
+# Expected:
+# Source: consent file
+# Enabled: false
+
+# 4. Override with the environment variable (takes precedence)
+GLASSBOX_TELEMETRY=false glassbox telemetry status
+# Expected:
+# Source: environment variable
+# Enabled: false
+
+# 5. Confirm the env var wins even when the consent file says enabled
+GLASSBOX_TELEMETRY=true glassbox telemetry status
+# Expected:
+# Source: environment variable
+# Enabled: true
+```
+
+#### Success example: opt-out honored
+
+With the consent file written by `glassbox telemetry disable` and no
+`GLASSBOX_TELEMETRY` override, a command run performs **no OTLP export
+attempt**:
+
+```bash
+glassbox telemetry disable
+glassbox --log-level debug debug abc123... 2>&1 | grep -i otlp
+# Expected: no output (no export attempted, no connection errors)
+```
+
+#### Failure example: unrecognized environment value
+
+If `GLASSBOX_TELEMETRY` is set to a value that is not `true` or `false`, the
+status output still reports the environment variable as the source and shows
+the effective state, so the misconfiguration is visible:
+
+```bash
+GLASSBOX_TELEMETRY=yes glassbox telemetry status
+# Expected:
+# Source: environment variable
+# Enabled: false
+```
+
+Treat any `Source: environment variable` line you did not intend as a
+misconfiguration and unset the variable (`unset GLASSBOX_TELEMETRY`) before
+re-running the verification.
+
+The manifest of telemetry fields and their privacy treatment is maintained in
+[docs/observability-manifest.json](observability-manifest.json).
+
 ---
+=======
 
 ## 5. Common end-to-end scenarios
 

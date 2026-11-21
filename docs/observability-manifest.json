@@ -65,5 +65,76 @@
     { "code": "export_failed",          "phase": "export",   "description": "Writing trace output file failed" },
     { "code": "operation_cancelled",    "phase": "*",        "description": "Operation was cancelled by the user or context" }
   ],
-  "deprecations": []
+  "deprecations": [],
+  "maintenance": {
+    "purpose": "Companion guidance for maintainers editing this manifest. Describes each top-level key, how to add or update entries, and the exact validation commands. This object is documentation only and is not consumed by runtime code.",
+    "top_level_keys": [
+      {
+        "key": "schema_version",
+        "purpose": "Version of the manifest schema. Bump only when the shape of existing keys changes incompatibly; do not change it for additive documentation such as this maintenance object."
+      },
+      {
+        "key": "prometheus_metrics",
+        "purpose": "Every public Prometheus metric emitted by Glassbox. Each entry records name, type, labels, description, stability, and the docs that reference it. Metric names follow the conventions in internal/metrics (snake_case, unit suffix such as _seconds or _total, counters end in _total)."
+      },
+      {
+        "key": "progress_event_phases",
+        "purpose": "Ordered lifecycle phases emitted as progress events. Add a phase only when the implementation emits it; keep names lowercase and single-word."
+      },
+      {
+        "key": "progress_event_statuses",
+        "purpose": "Statuses a progress event may carry, with a terminal flag. Terminal statuses end a phase; error is always accompanied by an error_code."
+      },
+      {
+        "key": "progress_event_fields",
+        "purpose": "Fields present on progress events. required marks fields always emitted; sensitive marks fields that must never carry secrets."
+      },
+      {
+        "key": "stable_error_codes",
+        "purpose": "Error codes that callers may rely on. Each entry names the code, the phase it originates from (or * for any phase), and a short description."
+      },
+      {
+        "key": "deprecations",
+        "purpose": "Retired signals kept for reference. Empty when nothing is deprecated."
+      }
+    ],
+    "how_to_update": [
+      "Add or update an entry in the relevant top-level array; do not reorder existing entries.",
+      "Preserve existing field names (name, type, labels, description, stability, documented_in) and JSON formatting (two-space indent, trailing newline).",
+      "Reference the documentation file that describes the signal in documented_in so CI can cross-check tables and examples.",
+      "Do not change schema_version for additive edits."
+    ],
+    "validation": [
+      {
+        "command": "scripts/validate-docs.sh --links",
+        "expected_exit_code": 0,
+        "purpose": "Verifies internal documentation links resolve."
+      },
+      {
+        "command": "scripts/verify-manifest.sh",
+        "expected_exit_code": 0,
+        "purpose": "Validates this manifest against the release schema; exits 0 on a valid release manifest."
+      }
+    ],
+    "examples": {
+      "valid_prometheus_metric": {
+        "name": "example_operation_total",
+        "type": "Counter",
+        "labels": ["status"],
+        "description": "Total example operations by status",
+        "stability": "stable",
+        "documented_in": ["docs/observability-troubleshooting.md"]
+      },
+      "invalid_prometheus_metric": {
+        "entry": {
+          "type": "Counter",
+          "labels": ["status"],
+          "description": "Missing the required name field",
+          "stability": "stable",
+          "documented_in": ["docs/observability-troubleshooting.md"]
+        },
+        "expected_failure": "scripts/verify-manifest.sh exits non-zero because the prometheus_metrics entry is missing the required 'name' field."
+      }
+    }
+  }
 }

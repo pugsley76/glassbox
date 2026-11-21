@@ -6,6 +6,14 @@ set -euo pipefail
 #   `glassbox` binary using fixtures in `test/validation/fixtures/`.
 # - Produces `ci-artifacts/validation/summary.json`, per-journey logs, and
 #   `report.md` suitable for CI artifact upload. Runs redaction if available.
+#
+# Observability manifest maintenance:
+# - The observability manifest lives at `docs/observability-manifest.json`.
+#   Validate it with `scripts/validate-docs.sh --manifest` and
+#   `scripts/verify-manifest.sh`; both exit 0 on success and 1 on failure.
+# - Example valid entry:
+#   {"path": "docs/observability-manifest.json", "owner": "observability"}
+# - This runner does not validate the manifest; run the scripts above directly.
 
 GLASSBOX_BINARY=${GLASSBOX_BINARY:-bin/glassbox}
 OUTDIR=${OUTDIR:-ci-artifacts/validation}
