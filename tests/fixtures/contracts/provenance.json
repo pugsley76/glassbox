@@ -1,0 +1,57 @@
+{
+  "_comment": "Machine-readable provenance record for every file in tests/fixtures/contracts/. Update this file whenever a contract fixture is added, removed, or materially changed. Schema: see tests/fixtures/contracts/README.md.",
+  "schema_version": "1",
+  "fixtures": [
+    {
+      "file": "counter.rust",
+      "contract_name": "Counter",
+      "entry_points": ["increment", "get"],
+      "storage_keys": ["COUNT"],
+      "origin": "hand-authored",
+      "purpose": "Time-travel integration tests: verifies step indices align with WASM instruction trace offsets.",
+      "sdk": "soroban-sdk",
+      "no_std": true,
+      "real_contract_id": null,
+      "real_tx_hash": null,
+      "contains_secrets": false,
+      "wasm_compiled": false,
+      "test_references": [
+        "integration tests that drive MockRunner for time-travel step index verification"
+      ]
+    },
+    {
+      "file": "auth_test.rust",
+      "contract_name": "AuthTestContract",
+      "entry_points": ["init", "authorize_step", "nonce"],
+      "storage_keys": ["Nonce"],
+      "origin": "hand-authored",
+      "purpose": "Auth-debug regression tests: provides require_auth() call sites for two-signer authorization tracing.",
+      "sdk": "soroban-sdk",
+      "no_std": true,
+      "real_contract_id": null,
+      "real_tx_hash": null,
+      "contains_secrets": false,
+      "wasm_compiled": false,
+      "test_references": [
+        "auth-debug command regression tests requiring multi-signer call sites"
+      ]
+    },
+    {
+      "file": "panic.rust",
+      "contract_name": "PanicContract",
+      "entry_points": ["init", "step", "panic_with_snapshot"],
+      "storage_keys": ["Counter"],
+      "origin": "hand-authored",
+      "purpose": "Snapshot-consistency tests: verifies trap capture occurs after state mutation (counter value is embedded in panic message).",
+      "sdk": "soroban-sdk",
+      "no_std": true,
+      "real_contract_id": null,
+      "real_tx_hash": null,
+      "contains_secrets": false,
+      "wasm_compiled": false,
+      "test_references": [
+        "snapshot-consistency tests that assert trap message includes counter state"
+      ]
+    }
+  ]
+}
