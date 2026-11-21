@@ -1,4 +1,5 @@
 .PHONY: build test lint lint-strict lint-unused test-unused validate-ci validate-interface clean
+.PHONY: test-plugin test-focused
 .PHONY: rust-lint rust-lint-strict rust-test rust-build lint-all-strict
 .PHONY: build test lint validate-errors clean bench bench-rpc bench-sim bench-replay bench-sourcemap bench-profile bench-perf-regression
 .PHONY: fmt fmt-go fmt-rust pre-commit
@@ -247,6 +248,38 @@ sbom-diff:
 # Run tests
 test:
 	go test ./...
+
+# ──────────────────────────────────────────────
+# Focused test commands
+#
+# Narrow invocations for iterating on a single area without running the
+# full suite.  Each command is copy-pasteable from a clean checkout.
+#
+#   make test-plugin
+#     Runs the custom decoder plugin tests in ./internal/cmd.
+#     Expected: "--- PASS: TestRunPlugin" lines and "ok  .../internal/cmd".
+#
+#   make test-focused
+#     Prints the focused invocations below; run them directly as needed.
+#     Expected: exit 0 and the command list on stdout.
+#
+# Direct equivalents (same commands, no Make wrapper):
+#   go test ./internal/cmd -run TestRunPlugin -v
+#   go test ./internal/cmd -run TestCanonicalConformance -v
+#   go test ./internal/decoder/...
+# ──────────────────────────────────────────────
+
+# Run the custom decoder plugin tests only.
+# See examples/plugins/custom-decoder/README.md for the plugin build steps.
+test-plugin:
+	go test ./internal/cmd -run TestRunPlugin -v
+
+# Print focused test command examples for narrow iteration.
+test-focused:
+	@echo "Focused test commands (run from the repository root):"
+	@echo "  go test ./internal/cmd -run TestRunPlugin -v"
+	@echo "  go test ./internal/cmd -run TestCanonicalConformance -v"
+	@echo "  go test ./internal/decoder/..."
 
 # Run full linter suite
 lint:

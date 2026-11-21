@@ -155,6 +155,46 @@ Unicode normalisation: Go also applies NFC to strings and TypeScript does not.
 A case that relies on NFC needs a hand-written `canonical` value and a note in
 its `notes` field.
 
+## Running the demo
+
+`examples/canonical_json_demo.go` is a self-contained, runnable walkthrough of
+the canonical JSON guarantees described above. It needs only the Go toolchain
+and does not depend on the conformance corpus or the Jest suite.
+
+```bash
+go run examples/canonical_json_demo.go
+```
+
+The demo prints three sections, each demonstrating one property:
+
+| Section | What it shows |
+|---|---|
+| Deterministic hashing | The same logical payload, built with keys inserted in different orders, canonicalizes to one byte-exact string and one SHA-256 digest |
+| Tampering detection | A modified payload produces a different digest, so a verifier rejects it |
+| Cross-platform consistency | The canonical string uses sorted keys, no whitespace, and raw UTF-8, matching the TypeScript implementation |
+
+A successful run exits 0. The tampering section is the focused failure path:
+it shows the original and tampered digests side by side and reports that the
+tampered payload is detected, for example:
+
+```
+Tampering detected: digest mismatch
+  original: <hex digest>
+  tampered: <different hex digest>
+```
+
+If the tampered payload were *not* detected, the demo would report a failure
+and exit non-zero. Treat any non-zero exit as a regression in canonicalization,
+not as an expected outcome.
+
+> **Known baseline (pre-existing, unrelated to the demo):** on current `main`,
+> `go test ./internal/cmd/...` reports `[build failed]` because of compile
+> errors in packages it imports (`internal/demangle`, `internal/cache`,
+> `internal/decoder`, `internal/snapshot`, `internal/deterministic`). The demo
+> in `examples/` does not import those packages, so `go run
+> examples/canonical_json_demo.go` is the narrowest check that works on a clean
+> checkout until those build errors are fixed.
+
 ## Running the conformance suite
 
 ### Go

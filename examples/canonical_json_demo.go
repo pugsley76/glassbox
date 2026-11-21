@@ -18,6 +18,20 @@ import (
 
 // This example demonstrates how canonical JSON serialization ensures
 // deterministic hashing across different platforms and scenarios.
+//
+// Run it from the repository root with:
+//
+//	go run examples/canonical_json_demo.go
+//
+// A successful run prints several "[OK]" markers (signature verification,
+// deterministic hashing, tampering detection) and ends with the line
+// "=== Demo Complete ===". The tampering example (step 6) demonstrates the
+// failure path: mutating the payload causes cmd.Verify to return an error,
+// which is reported as "[OK] Tampering detected: ...".
+//
+// The behavior shown here is described in docs/canonical-conformance.md and
+// is exercised by the conformance corpus; see that document for the canonical
+// JSON rules and the fixtures used to validate them.
 
 func main() {
 	fmt.Println("=== Canonical JSON Serialization Demo ===")

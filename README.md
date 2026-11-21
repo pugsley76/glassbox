@@ -679,6 +679,43 @@ docs: Add comprehensive contribution guidelines
   go test -bench=. -benchmem ./...
   ```
 
+#### Focused test commands
+
+Use these narrower commands when iterating on a specific area. They run from the
+repository root on a clean checkout and require the Go toolchain version declared in
+`go.mod` (currently `go 1.26`). No Rust build is needed for any of them.
+
+```bash
+# Canonical JSON conformance (audit log hashing)
+go test ./internal/cmd -run TestCanonicalConformance -v
+
+# Plugin execution path
+go test ./internal/cmd -run TestRunPlugin -v
+
+# Decoder package (all tests)
+go test ./internal/decoder/...
+
+# Full Go test suite via Make
+make test
+
+# Verify README command references match the CLI surface
+./scripts/check-readme-commands.sh
+```
+
+Expected outcomes:
+
+| Command | Expected result |
+|---------|-----------------|
+| `go test ./internal/cmd -run TestCanonicalConformance -v` | `PASS` (`ok` for the package) |
+| `go test ./internal/cmd -run TestRunPlugin -v` | `PASS` (`ok` for the package) |
+| `go test ./internal/decoder/...` | `PASS` for every package under `internal/decoder` |
+| `make test` | Exits `0`; all Go packages pass |
+| `./scripts/check-readme-commands.sh` | Exits `0` with no unknown command references |
+
+If a focused command fails, re-run it on an unmodified checkout to confirm whether the
+failure is pre-existing before attributing it to your change. Record any pre-existing
+failure separately rather than mixing it into an unrelated PR.
+
 ### Development Workflow
 
 1. **Create a branch**:

@@ -1,5 +1,7 @@
 module github.com/dotandev/glassbox
 
+// go 1.26 is the minimum toolchain for the focused test commands documented in
+// README.md and Makefile; do not lower this without re-validating those examples.
 go 1.26
 
 require (
