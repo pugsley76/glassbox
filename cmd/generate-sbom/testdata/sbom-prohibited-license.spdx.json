@@ -1,0 +1,81 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "glassbox-v1.1.0",
+  "documentNamespace": "https://glassbox.dev/sbom/v1.1.0/glassbox-v1.1.0",
+  "creationInfo": {
+    "created": "2026-02-01T00:00:00Z",
+    "creators": ["Tool: glassbox-v1.1.0", "Organization: Glassbox Users"]
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-glassbox",
+      "name": "github.com/dotandev/glassbox",
+      "versionInfo": "v1.1.0",
+      "downloadLocation": "https://github.com/dotandev/glassbox",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/dotandev/glassbox"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-newdep",
+      "name": "github.com/new/dep",
+      "versionInfo": "v1.0.0",
+      "downloadLocation": "https://proxy.golang.org/github.com/new/dep/@v/v1.0.0.zip",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/new/dep"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-sharedlib",
+      "name": "github.com/shared/lib",
+      "versionInfo": "v1.6.0",
+      "downloadLocation": "https://proxy.golang.org/github.com/shared/lib/@v/v1.6.0.zip",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/shared/lib"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-gplpkg",
+      "name": "github.com/gpl/pkg",
+      "versionInfo": "v2.0.0",
+      "downloadLocation": "https://proxy.golang.org/github.com/gpl/pkg/@v/v2.0.0.zip",
+      "filesAnalyzed": false,
+      "licenseConcluded": "GPL-3.0-only",
+      "licenseDeclared": "GPL-3.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/gpl/pkg"
+        }
+      ]
+    }
+  ]
+}

@@ -79,8 +79,9 @@ anyone verify a release without trusting the build environment.
 1. The CI `sign-manifest` job builds `cmd/generate-release-manifest` from
    source.
 2. It scans `dist/release/`, hashes every file, and serialises the
-   `ReleaseManifest` struct to canonical JSON (Go struct field order, no HTML
-   escaping, sorted artifact list).
+   `ReleaseManifest` struct to canonical JSON using `json.MarshalIndent`
+   (`ordered`, `""`, `"  "`): 2-space indentation, Go struct field order,
+   HTML-escaped strings, and a lexicographically sorted artifact list.
 3. SHA-256 of that canonical JSON becomes `manifest_hash`.
 4. The PKCS#8 PEM Ed25519 private key stored as the `MANIFEST_SIGNING_KEY`
    repository secret signs the raw `manifest_hash` bytes with `ed25519.Sign`.
@@ -152,6 +153,12 @@ Artifact directory:         .
 
 Result: all manifest verification checks passed.
 ```
+
+When the `cryptography` package (and `openssl`) are not installed, step 5 still
+re-derives and checks `manifest_hash`, but the Ed25519 signature line reads
+`[SKIP]` instead of `[PASS]`. All other checks run unchanged and the script still
+exits 0, so the signature library is only required to confirm authenticity, not
+integrity of the artifact set.
 
 ### What each check catches
 
@@ -263,7 +270,7 @@ echo "Public key matches pinned value"
 | `<file> missing or empty` | Artifact not downloaded | Download the missing file from the release page |
 | `SHA-256 mismatch for <file>` | File corrupted in transit or substituted | Re-download the file and re-verify |
 | `artifact not listed in manifest` | Local file not covered by manifest | Cross-check the release page; do not use uncovered files |
-| `MANIFEST_SIGNING_KEY is not set` (CI) | Secret not configured | Add the key to Settings → Secrets → Actions |
+| `GLASSBOX_MANIFEST_SIGNING_KEY is not set` (CI) | `MANIFEST_SIGNING_KEY` repository secret not configured | Add the key as a repository secret in Settings → Secrets → Actions |
 
 ## Integration with CI
 

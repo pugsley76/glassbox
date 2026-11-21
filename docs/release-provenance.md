@@ -181,9 +181,9 @@ The Ed25519 public key is embedded in every `manifest.json` as the `public_key`
 field (hex-encoded). This means you do **not** need a separate key file to
 verify the signature — the manifest is self-contained.
 
-The public key is also committed to the repository at
-`docs/release-signing-pubkey.txt` so it can be independently retrieved from the
-source tree.
+The public key is also embedded in every `manifest.json` as the `public_key`
+field, so no separate key file is needed to verify a release — the manifest is
+self-contained.
 
 To extract the public key from a manifest:
 
@@ -221,6 +221,5 @@ go test ./cmd/generate-release-manifest/... -v -run TestBuildProvenance
 ## See also
 
 - [release-manifest.md](./release-manifest.md) — full manifest format reference
-- [release-manifest.md](./release-manifest.md) — SBOM generation and verification
 - [ci-artifacts.md](./ci-artifacts.md) — CI artifact retrieval guide
 - [reproducible-builds.md](./reproducible-builds.md) — determinism checks

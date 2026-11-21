@@ -234,3 +234,93 @@ When the mutation score falls below the agreed threshold (70 %), the
 
 Changes to these settings should be reviewed and approved by a maintainer
 because they affect the reliability signal visible to all contributors.
+
+
+---
+
+## SBOM diff and verification
+
+Every release produces an SPDX 2.3 SBOM (`glassbox-<version>.spdx.json`). Three
+scripts work with SBOMs in CI and locally:
+
+- `cmd/generate-sbom` / `scripts/generate-sbom.sh` — generate the SBOM from the
+  Go, Rust, and Node lockfiles.
+- `scripts/sbom-diff.sh` — compare two SBOMs and report additions, removals,
+  version changes, license changes, and policy violations.
+- `scripts/verify-sbom.sh` — validate a single SBOM's structure and, with
+  `--manifest`, confirm it is covered by the signed release manifest.
+
+### Comparing two releases
+
+```bash
+# Compare the previous release SBOM against the current one (Make target)
+make sbom-diff PREV_SBOM=dist/old/glassbox-v1.0.0.spdx.json \
+               NEW_SBOM=dist/release/glassbox-v1.1.0.spdx.json
+
+# Or call the script directly
+bash scripts/sbom-diff.sh old.spdx.json new.spdx.json --policy license-policy.json
+```
+
+Text output (the default) lists each category with a count and the affected
+components:
+
+```
+SBOM diff
+  Old : old.spdx.json
+  New : new.spdx.json
+  Policy: license-policy.json
+
+  Added:          1
+  Removed:        1
+  Version changes:2
+  License changes:0
+  Policy violations: 0
+  New components (1):
+    + github.com/new/dep v1.0.0 (go) [MIT]
+  Removed components (1):
+    - github.com/old/dep v1.0.0 (go) [MIT]
+  Version changes (2):
+    ~ github.com/shared/lib (go): v1.5.0 -> v1.6.0
+```
+
+For automation, request JSON or Markdown and write it to a file:
+
+```bash
+bash scripts/sbom-diff.sh old.spdx.json new.spdx.json \
+  --format json --output sbom-diff.json
+```
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | No policy violations; additions, removals, and changes are advisory only |
+| 1 | A prohibited or undeclared license was found in a new or changed component |
+| 2 | A `--fail-on-*` threshold was exceeded (e.g. `--strict`) |
+
+By default only policy violations fail the run. Use `--fail-on-addition`,
+`--fail-on-removal`, `--fail-on-license-change`, or `--strict` (all three) to
+fail on structural changes as well.
+
+### Interpreting version changes
+
+The diff keys components on their full PURL. The Glassbox SBOM generator embeds
+the version in each PURL (e.g. `pkg:golang/github.com/example/lib@v1.2.3`), so a
+dependency upgrade normally appears as a **removal** of the old version plus an
+**addition** of the new version, not as a "version change". The "Version changes"
+category fires only when a component keeps an identical PURL while its
+`versionInfo` changes. When reviewing a diff between two Glassbox release SBOMs,
+treat a paired removal + addition of the same package name as a version bump.
+
+### Verifying a single SBOM
+
+```bash
+# Structural check plus manifest coverage
+bash scripts/verify-sbom.sh glassbox-v1.1.0.spdx.json --manifest manifest.json
+```
+
+`verify-sbom.sh` checks SPDX-2.3 structure, PURL ecosystem coverage, and (with
+`--manifest`) that the SBOM file is listed in the signed manifest with a matching
+SHA-256. See [release-manifest.md](./release-manifest.md) for the manifest format
+and [license-policy.md](./license-policy.md) for the license rules the diff
+enforces.

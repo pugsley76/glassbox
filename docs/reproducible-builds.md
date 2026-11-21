@@ -15,7 +15,7 @@ what was published without trusting the CI environment.
 | `glassbox-darwin-arm64` | Reproducible | Same |
 | `glassbox-windows-amd64.exe` | Reproducible | Same |
 | `*.tar.gz` | Reproducible | `--sort=name`, `--mtime=@EPOCH`, `--owner=0` |
-| `*.zip` | Reproducible | `zip -X` strips metadata |
+| `*.zip` | Reproducible | `zip --no-dir-entries -X` strips metadata |
 | `checksums.sha256` | Reproducible | `LC_ALL=C sort` for stable ordering |
 | Rust simulator binary | Partial | Depends on `rust-toolchain.toml` pin |
 | TypeScript `dist/` | Best-effort | `npm ci` + pinned `package-lock.json` |
@@ -27,9 +27,9 @@ at the repository root and enforced in CI.
 
 | Ecosystem | Pin location | Current version |
 |-----------|-------------|-----------------|
-| Go | `go.mod` (`go` directive) + `setup-go` `go-version-file` | 1.24.x |
+| Go | `go.mod` (`go` directive) + `setup-go` `go-version-file` | 1.26 |
 | Rust | [`rust-toolchain.toml`](../rust-toolchain.toml) | 1.86.0 |
-| Node | `setup-node` `node-version` in CI + `toolchain.json` | 20.19.0 LTS |
+| Node | `setup-node` `node-version` in CI workflows | 20 (LTS) |
 | npm packages | `package-lock.json` (committed) | — |
 | Go modules | `go.sum` (committed) | — |
 | Cargo crates | `Cargo.lock` (committed) | — |
@@ -73,9 +73,10 @@ during the build, which varies.
 **`--owner=0 --group=0 --numeric-owner`** strips UID/GID names. A file owned
 by `runner` on GitHub Actions vs `alice` locally would otherwise differ.
 
-**`zip -X`** (`--no-dir-entries`) strips the "extra field" metadata that zip
-normally records (OS type, timestamps in extended attributes) to produce a
-deterministic archive.
+**`zip --no-dir-entries -X`** — `--no-dir-entries` (`-D`) omits directory
+entries so the archive contains only files, and `-X` (`--no-extra`) strips the
+"extra field" metadata that zip normally records (OS type, timestamps, extended
+attributes) to produce a deterministic archive.
 
 ### Checksums file
 
@@ -106,6 +107,9 @@ make reproducibility-check
 
 # Or specify a different target
 bash scripts/check-reproducibility.sh linux-arm64
+
+# Windows produces a reproducible .zip instead of a .tar.gz
+bash scripts/check-reproducibility.sh windows-amd64
 ```
 
 Expected output when reproducible:
@@ -215,7 +219,7 @@ Work through this checklist:
    code.
 
 6. **Different Go toolchain** — Confirm both builds use the exact same Go
-   version. A minor version difference (1.24.3 vs 1.24.4) can change binary
+   version. A patch-level difference (e.g. 1.26.0 vs 1.26.1) can change binary
    content.
 
 ### Archive hashes differ but binary hashes match

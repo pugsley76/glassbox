@@ -203,15 +203,26 @@ for k in BODY_FIELDS:
     if k in raw and raw[k] is not None:
         body[k] = raw[k]
 
-# Canonical JSON: sorted keys within objects (Go's json.Marshal sorts map keys
-# alphabetically, and struct fields appear in declaration order — we replicate
-# Go's struct field order for top-level keys explicitly, but nested objects
-# (artifacts array items) use sorted keys as Go json.Marshal emits them).
-canonical = json.dumps(body, separators=(",", ":"), sort_keys=False, ensure_ascii=True)
-# Sort keys inside each artifact dict to match Go's struct serialisation order.
-import re
+# Canonical JSON must byte-match Go's manifest.CanonicalJSON, which serialises
+# the ReleaseManifest struct with json.MarshalIndent(ordered, "", "  "): 2-space
+# indentation, ": " (colon-space) key separators, and Go struct field order for
+# the top-level keys (replicated via BODY_FIELDS above). Nested objects such as
+# artifact array items are read back from the manifest file — which Go wrote in
+# struct declaration order — so preserving their order here matches Go exactly.
+#
+# json.MarshalIndent HTML-escapes '&', '<', '>' and the U+2028/U+2029 line/
+# paragraph separators by default, so we replicate that escaping here. Manifest
+# content is ASCII (versions, hex hashes, URLs, filenames, RFC3339 dates), so
+# ensure_ascii=False matches Go's raw UTF-8 output.
+canonical = json.dumps(body, indent=2, sort_keys=False, ensure_ascii=False)
+canonical = (canonical
+    .replace("&", "\\u0026")
+    .replace("<", "\\u003c")
+    .replace(">", "\\u003e")
+    .replace("\u2028", "\\u2028")
+    .replace("\u2029", "\\u2029"))
 
-derived_hash = hashlib.sha256(canonical.encode()).hexdigest()
+derived_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 if derived_hash.lower() != stored_hash.lower():
     print(f"HASH_MISMATCH: derived={derived_hash[:16]}... stored={stored_hash[:16]}...", file=sys.stderr)

@@ -34,6 +34,12 @@ The following SPDX identifiers are allowed without exception:
 | Unlicense | Public domain dedication |
 | 0BSD | Zero-clause BSD |
 | BlueOak-1.0.0 | Modern permissive license |
+| Unicode-DFS-2016 | Unicode Data Files and Software License — used by Unicode data tables |
+| Zlib | Permissive; short notice requirement |
+| OpenSSL | OpenSSL License — historically paired with Apache-2.0 |
+| Python-2.0 | Historic Python license (PSF predecessor) |
+| PSF-2.0 | Python Software Foundation License |
+| Apache-2.0 WITH LLVM-exception | Apache-2.0 with LLVM exception — used by codegen runtimes |
 
 ## Disallowed licenses
 
@@ -47,6 +53,8 @@ These licenses are blocked at the build level:
 | SSPL-1.0 | Server Side Public License — designed to restrict SaaS |
 | BUSL-1.1 | Business Source License — delayed open source, non-permissive during delay period |
 | Commons-Clause | Restricts commercial use; not an OSI-approved open-source license |
+| OSL-3.0 | Open Software License — strong copyleft with a network-use trigger |
+| CPAL-1.0 | Common Public Attribution License — network copyleft with attribution requirement |
 | Proprietary | No redistribution rights |
 
 ## Ambiguous licenses
@@ -58,7 +66,7 @@ these identifiers fails the build and requires an explicit exception:
 - OFL-1.1 (Open Font License — allowed for fonts only; not for software)
 - EPL-1.0, EPL-2.0 (Eclipse Public License — weak copyleft)
 - CDDL-1.0 (Common Development and Distribution License — incompatible with GPL dependencies)
-- CPOL-1.02, SISSL, OSL-3.0, CPAL-1.0
+- CPOL-1.02, SISSL
 
 ## Vulnerability severity thresholds
 
@@ -94,6 +102,23 @@ failures, because they are never compiled into release binaries.
 5. Reports are always uploaded as artifacts (retained 30 days) even on pass.
 6. The `license-gate` job aggregates results; a single failing ecosystem blocks
    merge when branch protection requires this check.
+
+Example output for a disallowed license (the failure path that blocks merge):
+
+```
+=== Go Dependencies ===
+  [FAIL] Go: github.com/example/gpl-dep uses disallowed license: GPL-3.0
+  Go: 3 packages scanned, 1 violation(s), 0 warning(s)
+  [FAIL] Go license policy violated — see license-reports/go-violations.txt
+```
+
+A clean scan reports no violations:
+
+```
+=== Go Dependencies ===
+  Go: 3 packages scanned, 0 violation(s), 0 warning(s)
+  [PASS] Go license policy satisfied
+```
 
 ## Adding an exception
 

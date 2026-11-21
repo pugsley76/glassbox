@@ -1,0 +1,64 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "glassbox-v1.0.0",
+  "documentNamespace": "https://glassbox.dev/sbom/v1.0.0/glassbox-v1.0.0",
+  "creationInfo": {
+    "created": "2026-01-01T00:00:00Z",
+    "creators": ["Tool: glassbox-v1.0.0", "Organization: Glassbox Users"]
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-glassbox",
+      "name": "github.com/dotandev/glassbox",
+      "versionInfo": "v1.0.0",
+      "downloadLocation": "https://github.com/dotandev/glassbox",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/dotandev/glassbox"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-olddep",
+      "name": "github.com/old/dep",
+      "versionInfo": "v1.0.0",
+      "downloadLocation": "https://proxy.golang.org/github.com/old/dep/@v/v1.0.0.zip",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/old/dep"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-sharedlib",
+      "name": "github.com/shared/lib",
+      "versionInfo": "v1.5.0",
+      "downloadLocation": "https://proxy.golang.org/github.com/shared/lib/@v/v1.5.0.zip",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:golang/github.com/shared/lib"
+        }
+      ]
+    }
+  ]
+}
