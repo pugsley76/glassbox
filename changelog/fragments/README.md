@@ -9,6 +9,29 @@ See `docs/changelog-fragments.md` for the full authoring guide.
 
 ---
 
+## Filename convention
+
+Name every fragment file `<pr-number>-<slug>.toml`, where:
+
+- `<pr-number>` is the GitHub PR number (integer, e.g. `597`).
+- `<slug>` is a short lowercase hyphenated description (e.g. `api-compat-checks`).
+
+Examples:
+
+```
+597-api-compat-checks.toml
+1060-session-schema-v4-tags.toml
+```
+
+The validator enforces uniqueness of the `pr` field inside each file, not the
+filename itself, but keeping the number in the filename makes the directory
+easy to scan and avoids accidental reuse.
+
+The file `example-cli-flag.toml` is a copy-able template. It is skipped by
+both the validator and the generation script; do not use it as a real fragment.
+
+---
+
 ## Validating fragments locally
 
 Run the validator against all pending fragments before pushing:
@@ -44,3 +67,38 @@ Reusing the same PR number produces an error and exits 1:
 ```
 
 To resolve it, correct the `pr` field to match the actual GitHub PR number.
+
+---
+
+## Breaking change fragments
+
+Set `breaking = true` when users must change their invocation, scripts, or
+integration code after the release. The validator enforces a non-empty
+`migration_note` whenever `breaking = true`:
+
+```toml
+category = "breaking"
+pr = 900
+summary = "Remove --legacy-output flag"
+breaking = true
+migration_note = "Replace --legacy-output with --json. See MIGRATION_GUIDE.md."
+affects = ["cli-flags"]
+```
+
+A missing or empty `migration_note` with `breaking = true` fails validation:
+
+```
+[FAIL] 900-remove-legacy-output.toml: breaking=true requires a non-empty migration_note
+
+1 error(s) found. Fix fragments before releasing.
+```
+
+Breaking fragments are placed at the top of the generated release section
+(before all other categories) and trigger a highlighted warning block pointing
+to `MIGRATION_GUIDE.md`. Every breaking fragment also requires:
+
+- An entry in `docs/compatibility-matrix.md` updating the affected surface's
+  stability level.
+- A before/after example in `MIGRATION_GUIDE.md`.
+- Updated API snapshot files (CI snapshot check fails until they are
+  regenerated).

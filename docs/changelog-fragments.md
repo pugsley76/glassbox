@@ -152,6 +152,61 @@ git commit -m "release: prepare v1.3.0 changelog"
 The generation is deterministic: the same set of fragments always produces the
 same output, so the changelog can be reproduced from a clean checkout.
 
+### Expected dry-run output
+
+`make changelog-dry-run` prints the generated release section to stdout and
+exits 0. No files are written. A successful run looks like:
+
+```
+── dry-run: generated release section ──
+
+## [v1.3.0] — 2026-11-21
+
+### Breaking Changes
+
+- Remove --legacy-output flag ([#900](https://github.com/dotandev/glassbox/pull/900))
+  **Migration:** Replace --legacy-output with --json. See MIGRATION_GUIDE.md.
+
+---
+
+> **⚠ Breaking changes in this release.** Review the entries marked
+> **Migration:** above and consult [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md).
+
+### CLI
+
+- Add --progress-json flag to debug for structured NDJSON progress events ([#612](https://github.com/dotandev/glassbox/pull/612))
+
+── end dry-run ──
+
+[INFO] 2 fragment(s) consumed (dry-run, no files written)
+```
+
+The version shown comes from `git describe --tags --abbrev=0`; override it with
+`make changelog-dry-run VERSION=v1.3.0` to preview a specific tag. The section
+structure and category order (breaking → security → cli → schema → fix →
+performance) are always the same regardless of fragment insertion order.
+
+If no fragments are pending the script prints:
+
+```
+[INFO] No fragments found — nothing to generate
+```
+
+and exits 0.
+
+### Writing dry-run output to a file
+
+The underlying script accepts `--output FILE` to write the generated section to
+a file instead of CHANGELOG.md. This is useful for diffing or archiving a
+preview without touching the live changelog:
+
+```bash
+bash scripts/generate-changelog.sh --dry-run --version v1.3.0 --output /tmp/preview.md
+```
+
+`make changelog-dry-run` does not expose `--output` directly; call the script
+directly when you need file output from a dry run.
+
 ---
 
 ## Breaking changes

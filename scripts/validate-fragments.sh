@@ -7,14 +7,18 @@
 # Checks every .toml file in changelog/fragments/ (excluding the example and
 # README) and exits non-zero if any rule is violated.
 #
-# Rules enforced:
+# Rules enforced (numbered to match docs/changelog-fragments.md § Validation rules):
 #   1. Required fields present: category, pr, summary, breaking, affects
 #   2. category is one of the allowed values
-#   3. pr is a positive integer unique within the pending fragment set
-#   4. summary is non-empty and ≤ 120 characters
-#   5. breaking=true fragments must have a non-empty migration_note
-#   6. affects contains only recognised surface names
-#   7. No duplicate pr values across fragments (duplicate detector)
+#   3. pr is a positive integer
+#   4. No duplicate pr values across fragments (duplicate detector)
+#   5. summary is non-empty and ≤ 120 characters
+#   6. breaking=true fragments must have a non-empty migration_note
+#   7. affects contains only recognised surface names
+#   8. compatibility (optional field) must be one of the allowed values
+#
+# Note: rules 3 and 4 are both checked in the same code block below.  The
+# docs number them separately to make the invariants explicit.
 #
 # Usage:
 #   scripts/validate-fragments.sh                   # validate all fragments
@@ -113,6 +117,7 @@ validate_fragment() {
   fi
 
   # 3. pr is a positive integer
+  # 4. No duplicate pr values — checked in this same block (see header note).
   local pr
   pr="$(get_field "$file" "pr")"
   if [[ -n "$pr" ]]; then
@@ -120,7 +125,7 @@ validate_fragment() {
       fail "$fname: pr must be a positive integer, got '$pr'"
       file_errors=$((file_errors + 1))
     else
-      # Duplicate detection
+      # Rule 4: duplicate detection
       if [[ -n "${seen_prs[$pr]+x}" ]]; then
         fail "$fname: duplicate pr=$pr already used in ${seen_prs[$pr]}"
         file_errors=$((file_errors + 1))
@@ -130,7 +135,7 @@ validate_fragment() {
     fi
   fi
 
-  # 4. summary length
+  # 5. summary length
   local summary
   summary="$(get_field "$file" "summary")"
   if [[ -n "$summary" ]]; then
@@ -141,7 +146,7 @@ validate_fragment() {
     fi
   fi
 
-  # 5. breaking fragments need migration_note
+  # 6. breaking fragments need migration_note
   local breaking
   breaking="$(get_field "$file" "breaking")"
   if [[ "$breaking" == "true" ]]; then
@@ -153,7 +158,7 @@ validate_fragment() {
     fi
   fi
 
-  # 6. affects values
+  # 7. affects values
   local affects
   affects="$(get_array "$file" "affects")"
   for surface in $affects; do
@@ -167,7 +172,7 @@ validate_fragment() {
     fi
   done
 
-  # 7. compatibility level (optional field — validate if present)
+  # 8. compatibility level (optional field — validate if present)
   local compat
   compat="$(get_field "$file" "compatibility")"
   if [[ -n "$compat" ]]; then

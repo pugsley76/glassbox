@@ -235,7 +235,7 @@ quantifying dropped events.
 
 ```sh
 # Show queue statistics.
-glassbox telemetry \
+glassbox telemetry status \
   > "$INCIDENT_DIR/telemetry-status.txt" 2>&1
 
 echo "telemetry collection exit code: $?"
@@ -247,6 +247,13 @@ The telemetry status output includes:
 - Oldest event age
 - Dropped-by-size and dropped-by-age counters
 - Queue file path
+
+The `telemetry_queue` check in `glassbox doctor --json` captures the same queue
+state inside the diagnostics bundle under the `checks` array with
+`"id": "telemetry_queue"` (see [Diagnostics Bundle](./diagnostics-bundle.md)
+for the full check-ID inventory). Use `glassbox doctor --json` when you need a
+machine-readable record; use `glassbox telemetry status` for a quick human
+summary during triage.
 
 If you need to clear the queue as part of incident cleanup:
 
@@ -365,6 +372,12 @@ The generated `.gbdiag` bundle:
 - Contains version info, health check results, and log excerpts.
 - Excludes private keys, tokens, RPC secrets, and file system paths.
 - Is JSON-line encoded for easy parsing.
+
+The bundle archive contains `manifest.json` and `README.txt`. Recipients can
+inspect it offline with standard `unzip` tooling. See
+[Diagnostics Bundle](./diagnostics-bundle.md) for the full archive layout,
+`manifest.json` schema (including the complete `checks` array check IDs), and
+redaction policy.
 
 ---
 
