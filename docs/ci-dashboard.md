@@ -18,20 +18,23 @@ without any network access or CI API calls.
 
 ```sh
 # Generate from a prepared input manifest
-generate-dashboard --input manifest.json --output dashboard.json
+go run ./cmd/generate-dashboard --input manifest.json --output dashboard.json
 
 # Text table for terminal inspection
-generate-dashboard --input manifest.json --format text
+go run ./cmd/generate-dashboard --input manifest.json --format text
 
 # Allow missing artifacts (emit 'unknown' status instead of failing)
-generate-dashboard --input manifest.json --offline
+go run ./cmd/generate-dashboard --input manifest.json --offline
 
 # Exit with code 1 when any journey failed (useful for CI gating)
-generate-dashboard --input manifest.json --exit-on-fail
+go run ./cmd/generate-dashboard --input manifest.json --exit-on-fail
 
 # Write to stdout (useful for piping)
-generate-dashboard --input manifest.json --output -
+go run ./cmd/generate-dashboard --input manifest.json --output -
 ```
+
+If you have built the binary (`go build -o bin/generate-dashboard ./cmd/generate-dashboard`),
+replace `go run ./cmd/generate-dashboard` with `./bin/generate-dashboard` in all commands above.
 
 ## Input manifest schema
 
@@ -128,7 +131,7 @@ The input manifest is a JSON file with schema version `"1.0"`:
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Stable journey identifier (`job_name/platform` or filename-derived) |
-| `status` | string | `passed`, `failed`, `skipped`, or `unknown` |
+| `status` | string | `passed`, `failed`, `skipped`, or `unknown` (emitted when the artifact is missing; only occurs in `--offline` mode) |
 | `platform` | string | OS/arch this record was collected on |
 | `commit` | string | Git commit SHA |
 | `duration_ms` | int | Wall-clock duration in milliseconds |
@@ -206,14 +209,14 @@ output:
 - name: Generate validation dashboard
   run: |
     # Build the input manifest from downloaded artifacts
-    cat > manifest.json << 'EOF'
+    cat > manifest.json << EOF
     {
       "schema_version": "1.0",
-      "generated_at": "${{ steps.date.outputs.date }}",
+      "generated_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
       "critical_journeys": ["go-unit", "go-integration", "ts-test"],
       "artifacts": [
         {
-          "path": "ci-artifacts/failure-unit-ubuntu-latest-${{ github.run_id }}/junit.xml",
+          "path": "ci-artifacts/junit.xml",
           "kind": "junit",
           "platform": "ubuntu-latest",
           "commit": "${{ github.sha }}",

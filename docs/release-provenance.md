@@ -132,9 +132,34 @@ git ls-remote https://github.com/dotandev/glassbox refs/tags/v1.2.3
 ```bash
 SBOM="glassbox-${VERSION}.spdx.json"
 curl -LO "https://github.com/${REPO}/releases/download/${VERSION}/${SBOM}"
-curl -LO "https://raw.githubusercontent.com/${REPO}/refs/tags/${VERSION}/scripts/verify-sbom.sh"
 
-bash verify-sbom.sh "${SBOM}" --manifest manifest.json
+# Confirm the SBOM is valid SPDX 2.3 JSON and its spdxVersion field is present.
+python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert d.get('spdxVersion') == 'SPDX-2.3', f'unexpected spdxVersion: {d.get(\"spdxVersion\")}'
+assert d.get('documentHash'), 'documentHash is empty'
+print('[PASS] spdxVersion:', d['spdxVersion'])
+print('[PASS] packages:   ', len(d.get('packages', [])))
+print('[PASS] documentHash:', d['documentHash'][:16] + '...')
+" "${SBOM}"
+
+# Cross-check the SBOM's documentHash against the reference in manifest.json
+# (the manifest lists the SBOM file as an artifact with its SHA-256).
+python3 -c "
+import json, hashlib, sys
+sbom_path, manifest_path = sys.argv[1], sys.argv[2]
+raw = open(sbom_path, 'rb').read()
+actual = hashlib.sha256(raw).hexdigest()
+m = json.load(open(manifest_path))
+for a in m.get('artifacts', []):
+    if a.get('name', '').endswith('.spdx.json'):
+        expected = a.get('sha256', '')
+        if expected:
+            assert actual == expected, f'SBOM hash mismatch: {actual} != {expected}'
+            print('[PASS] SBOM SHA-256 matches manifest artifact entry')
+        break
+" "${SBOM}" manifest.json
 ```
 
 ---
@@ -220,7 +245,6 @@ go test ./cmd/generate-release-manifest/... -v -run TestBuildProvenance
 
 ## See also
 
-- [release-manifest.md](./release-manifest.md) — full manifest format reference
-- [release-manifest.md](./release-manifest.md) — SBOM generation and verification
+- [release-manifest.md](./release-manifest.md) — full manifest format reference and signing key configuration
 - [ci-artifacts.md](./ci-artifacts.md) — CI artifact retrieval guide
 - [reproducible-builds.md](./reproducible-builds.md) — determinism checks

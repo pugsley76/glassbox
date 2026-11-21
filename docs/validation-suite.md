@@ -37,14 +37,44 @@ Reporting & Retention
   the workflow). The validation runner writes `ci-artifacts/validation/summary.json`
   and `report.md` which are uploaded as part of the artifact bundle.
 
+- **`summary.json` schema** — each file is a JSON object with a `journeys` array.
+  Every journey entry has the following fields:
+
+  | Field | Type | Description |
+  |-------|------|-------------|
+  | `name` | string | Journey identifier (e.g. `debug-trace`, `replay-deterministic`) |
+  | `exitcode` | int | Exit code of the journey script (0 = pass) |
+  | `fingerprint` | string | 12-char hex derived from name + exitcode + fixture hash |
+  | `output` | string | Tail of journey log (last 50 lines, redacted) |
+
+  Example:
+  ```json
+  {
+    "journeys": [
+      { "name": "debug-trace",          "exitcode": 0, "fingerprint": "a3f8c12d4e5b", "output": "..." },
+      { "name": "replay-deterministic", "exitcode": 0, "fingerprint": "b7e1d09f3c2a", "output": "..." }
+    ]
+  }
+  ```
+
 - A helper script `scripts/generate-compat-report.sh` aggregates multiple
   `summary.json` files into `compatibility_report.md` to support quarterly
-  compatibility reviews and follow-up issue tracking.
+  compatibility reviews and follow-up issue tracking. **Note:** this script
+  is not yet present in the repository; until it is added, aggregate the
+  `summary.json` files manually using `jq '.journeys[]' summary.json`.
 
 - Long-term retention of specific failing-run artifacts should be performed by
   maintainers downloading the artifact and storing it in an internal archive
   if required for extended investigations. By default, the CI retention policy
   is intentionally short to limit exposure of debugging data.
+
+Artifact redaction
+
+- Before upload, all artifact files are passed through `scripts/redact-logs.sh`
+  which removes tokens, PEM blocks, API keys, and connection strings.
+  **Note:** `scripts/redact-logs.sh` is not yet present in the repository;
+  until it is added, the upload step in `validation-suite.yml` skips redaction
+  (`|| true`) and logs a warning. Do not share raw artifacts externally.
 
 Fixtures
 

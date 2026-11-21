@@ -147,5 +147,5 @@ never mutates the original manifest map — it always returns a fresh copy.
 ## See Also
 
 - [`glassbox debug`](./debug-command.md) — debug a single transaction in detail
-- [`glassbox doctor`](./sandboxed-replay.md) — environment setup checker
+- [`glassbox doctor`](./health-report.md) — environment setup checker
 - [`glassbox version`](./debug-command.md) — check supported protocol versions
