@@ -535,6 +535,62 @@ The CI pipeline fails immediately on:
 - Dead code
 - Any linting warnings
 
+### Pre-commit Hooks
+
+The repository ships a [`.pre-commit-config.yaml`](.pre-commit-config.yaml) that runs the same
+formatting and lint checks locally before a commit is created. The hook definitions are the
+source of truth; the commands below mirror them.
+
+1.  Install the `pre-commit` framework and register the git hook:
+
+    ```bash
+    pip install pre-commit
+    pre-commit install
+    ```
+
+    Expected output:
+
+    ```
+    pre-commit installed at .git/hooks/pre-commit
+    ```
+
+2.  Run every hook against the whole tree (useful before opening a PR or after changing the
+    config):
+
+    ```bash
+    pre-commit run --all-files
+    ```
+
+    Expected output when everything passes (exit code `0`):
+
+    ```
+    go fmt...............................................................Passed
+    go vet...............................................................Passed
+    golangci-lint........................................................Passed
+    cargo fmt............................................................Passed
+    cargo clippy.........................................................Passed
+    ```
+
+    A failing hook prints `Failed` for that hook, shows the diff or error, and exits non-zero
+    (`1`). Fix the reported issue and re-run; `pre-commit` re-stages files it rewrote
+    automatically.
+
+3.  Bypass the hooks when you intentionally need to commit without running them:
+
+    ```bash
+    # Skip every hook for a single commit
+    git commit --no-verify -m "wip: scratch commit"
+
+    # Skip only specific hooks by id (comma-separated)
+    SKIP=golangci-lint,cargo-clippy git commit -m "docs: fix typo"
+    ```
+
+    `--no-verify` and `SKIP` only affect the local commit; CI still runs the full lint suite, so
+    bypassed commits must pass `make lint-all-strict` before merge.
+
+Hook ids used with `SKIP` are the `id:` values in [`.pre-commit-config.yaml`](.pre-commit-config.yaml).
+Run `pre-commit run --all-files` after editing that file to confirm the hooks still pass.
+
 ### Telemetry and Privacy
 
 Glassbox includes optional telemetry to help diagnose runtime issues. Privacy-preserving defaults and explicit opt-in are enforced:

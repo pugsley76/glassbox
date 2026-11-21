@@ -395,7 +395,13 @@ fmt: fmt-go fmt-rust
 # Pre-commit setup
 # ──────────────────────────────────────────────
 
-# Install pre-commit hooks
+# Install the git pre-commit hooks defined in .pre-commit-config.yaml.
+#
+# Run once per clone:  make pre-commit
+# The hooks then run automatically on `git commit`.  To run them manually
+# against every tracked file:  pre-commit run --all-files
+# To bypass the hooks for a single commit (use sparingly):
+#   git commit --no-verify
 pre-commit:
 	@echo "Setting up pre-commit hooks..."
 	@if command -v pre-commit >/dev/null 2>&1; then \

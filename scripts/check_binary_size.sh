@@ -1,4 +1,29 @@
 #!/bin/bash
+#
+# check_binary_size.sh - Verify release artifacts stay within the binary size budget.
+#
+# Review procedure:
+#   1. Build the artifacts you want to check (e.g. `make build` and the release
+#      binaries under dist/release/). The script only measures files that exist.
+#   2. Run the check from the repository root:
+#        bash scripts/check_binary_size.sh
+#      or, equivalently, via the Make target:
+#        make size-check
+#   3. Thresholds are read from size_thresholds.conf (MAX_GO_SIZE, MAX_RUST_SIZE,
+#      in bytes). If that file is missing, built-in defaults are used.
+#
+# Behavior:
+#   - Missing artifacts are skipped with a "Warning: File ... not found" message
+#     and do not fail the run.
+#   - Each checked artifact prints its size and the configured maximum, e.g.:
+#        Size of bin/glassbox: 12345678 bytes (Max: 31457280 bytes)
+#   - Exit code 0: every existing artifact is within its threshold, ending with
+#        "All binary sizes are within thresholds."
+#   - Exit code 1: at least one artifact exceeds its threshold. The offending
+#     file reports an error and the run ends with:
+#        ERROR: bin/glassbox exceeds maximum allowed size of 31457280 bytes!
+#        One or more binaries exceeded size thresholds.
+#
 set -e
 
 # Load configuration if it exists

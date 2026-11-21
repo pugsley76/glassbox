@@ -81,6 +81,79 @@ Snapshots are byte-for-byte identical across runs because:
 
 ---
 
+## Dependency compatibility report
+
+The dependency compatibility report summarises the Go module and npm
+dependency graph against the versions declared in `go.mod` and
+`package.json`, and is aggregated into the validation suite (see
+[docs/validation-suite.md](validation-suite.md)).
+
+### Generating the report
+
+```bash
+# Generate the report (writes build/compat-report.json):
+make compat-report
+
+# Equivalent direct invocation:
+scripts/generate-compat-report.sh --output build/compat-report.json
+```
+
+`make compat-report` depends on `make build`, so the compiled `glassbox`
+binary is available when the report runs.
+
+### Expected output fields
+
+`build/compat-report.json` contains:
+
+| Field | Meaning |
+|---|---|
+| `generated_at` | UTC timestamp of the run (informational only) |
+| `go_modules` | Sorted list of `{module, version, compatible}` entries from `go.mod` |
+| `npm_packages` | Sorted list of `{name, version, compatible}` entries from `package.json` |
+| `summary` | `{total, compatible, incompatible}` counts |
+| `incompatible` | Sorted list of dependency names that failed the compatibility check |
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Report generated; all dependencies compatible |
+| `1` | Report generated; one or more dependencies incompatible (see `incompatible`) |
+| `2` | Report could not be generated (missing `summary.json`, unreadable manifest) |
+
+### Success example
+
+```bash
+$ make compat-report
+scripts/generate-compat-report.sh --output build/compat-report.json
+compat-report: 42 dependencies checked, 0 incompatible
+$ echo $?
+0
+```
+
+### Failure examples
+
+Missing `summary.json` (exit `2`):
+
+```bash
+$ scripts/generate-compat-report.sh --output build/compat-report.json
+compat-report: error: summary.json not found under build/; run `make build` first
+$ echo $?
+2
+```
+
+Incompatible dependency (exit `1`):
+
+```bash
+$ make compat-report
+compat-report: 42 dependencies checked, 1 incompatible
+  - example.com/legacy-module v0.3.0
+$ echo $?
+1
+```
+
+---
+
 ## Snapshot file compatibility policy
 
 Snapshot files (`.snap.json`) persist across releases and may be shared
