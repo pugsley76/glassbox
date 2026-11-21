@@ -196,6 +196,68 @@ A Docker Compose file for a local Jaeger instance is provided:
 docker compose -f docker-compose.jaeger.yml up -d
 ```
 
+### Distributed tracing smoke test
+
+This procedure verifies end-to-end trace export from the CLI to a local Jaeger
+instance.  It can be repeated from a clean checkout.
+
+**Prerequisites**
+
+- Docker Compose v2 (`docker compose version` succeeds).
+- A built `glassbox` binary on your `PATH` (e.g., `make build`).
+
+**Steps**
+
+1. Start Jaeger (OTLP HTTP on `4318`, UI on `16686`):
+
+   ```bash
+   docker compose -f docker-compose.jaeger.yml up -d
+   ```
+
+2. Point the CLI at the local collector:
+
+   ```bash
+   export GLASSBOX_TELEMETRY=true
+   export GLASSBOX_TELEMETRY_ENDPOINT=http://localhost:4318
+   ```
+
+3. Run any command that emits spans:
+
+   ```bash
+   glassbox debug abc123...
+   ```
+
+4. Confirm the `glassbox` service is registered with Jaeger:
+
+   ```bash
+   curl -s 'http://localhost:16686/api/services'
+   # Expected: JSON containing "glassbox", e.g.
+   # {"data":["glassbox","jaeger-query"],"total":2,"limit":0,"offset":0,"errors":null}
+   ```
+
+5. Open the Jaeger UI at `http://localhost:16686`, select service `glassbox`,
+   and confirm a trace for the run appears.  Spans carry the attributes listed
+   in the [Span attributes](#span-attributes) table below (for example
+   `glassbox.command=debug`, `glassbox.network=testnet`, and a fingerprinted
+   `glassbox.tx_hash`).
+
+6. Tear down when finished:
+
+   ```bash
+   docker compose -f docker-compose.jaeger.yml down
+   ```
+
+**Failure path: collector not running**
+
+If the collector is unreachable, the CLI reports
+`failed to export spans: connection refused` and continues normally.  Confirm
+the endpoint before re-running:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://localhost:4318/v1/traces
+# Expected: 405 (method not allowed) or 200, not connection refused
+```
+
 ### Span attributes
 
 | Attribute | Value | Privacy |

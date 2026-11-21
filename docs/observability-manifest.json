@@ -35,6 +35,30 @@
       "documented_in": ["docs/observability-troubleshooting.md"]
     }
   ],
+  "telemetry_sampling_examples": [
+    {
+      "name": "sampled",
+      "description": "Telemetry enabled with an endpoint; events are emitted",
+      "command": "glassbox telemetry --json",
+      "expected_fields": {
+        "enabled": true,
+        "endpoint": "https://telemetry.example.com/v1/events",
+        "anonymized": true
+      },
+      "documented_in": ["docs/telemetry-sampling.md"]
+    },
+    {
+      "name": "unsampled",
+      "description": "Telemetry disabled; no events are emitted",
+      "command": "glassbox telemetry --json",
+      "expected_fields": {
+        "enabled": false,
+        "endpoint": "",
+        "anonymized": true
+      },
+      "documented_in": ["docs/telemetry-sampling.md"]
+    }
+  ],
   "progress_event_phases": [
     { "name": "init",     "description": "Command initialisation (flag validation, telemetry setup)" },
     { "name": "fetch",    "description": "Fetching the transaction envelope from the network" },

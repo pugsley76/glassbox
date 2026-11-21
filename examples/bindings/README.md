@@ -19,6 +19,79 @@ glassbox generate-bindings contract.wasm \
   --wasm-source ./contract.wasm
 ```
 
+## Command Reference
+
+`glassbox generate-bindings` accepts:
+
+| Flag | Description |
+|------|-------------|
+| `--output`, `-o` | Output directory for generated files (required) |
+| `--package` | npm package name written to `package.json` |
+| `--debug-metadata` | Emit per-function ABI descriptors in `metadata.ts` |
+| `--wasm-source` | Source path recorded in debug metadata `source` hints |
+| `--runtime` | Target runtime: `node` (default), `browser`, or `universal` |
+
+`glassbox check-bindings` accepts:
+
+| Flag | Description |
+|------|-------------|
+| `--output`, `-o` | Directory containing previously generated bindings (required) |
+| `--spec-file` | Path to the contract spec used to regenerate and compare |
+| `--spec-format` | Format of `--spec-file` (e.g. `wasm`, `json`) |
+| `--regenerate` | Regenerate bindings from the spec before comparing |
+| `--json` | Emit machine-readable JSON instead of human-readable text |
+======>>>REPLACE
+<<<<<<< SEARCH
+| `index.ts` | Barrel export |
+| `package.json` | npm package manifest |
+| `README.md` | Usage documentation |
+=======
+| `index.ts` | Barrel export |
+| `package.json` | npm package manifest |
+| `README.md` | Usage documentation |
+
+This list matches the canonical `generatedFileNames` set used by
+`glassbox check-bindings`; any missing or extra file is reported as stale.
+
+## Validating Generated Bindings
+
+`glassbox check-bindings` verifies that a generated directory is up to date
+with the contract spec. On success it reports no stale files:
+
+```bash
+glassbox check-bindings --output ./generated --json
+```
+
+```json
+{
+  "isStale": false,
+  "staleCount": 0,
+  "staleFiles": []
+}
+```
+
+When the directory is out of date, `isStale` is `true` and each stale entry
+carries a reason:
+
+```bash
+glassbox check-bindings --output ./generated --spec-file ./contract.wasm --json
+```
+
+```json
+{
+  "isStale": true,
+  "staleCount": 1,
+  "staleFiles": [
+    {
+      "file": "client.ts",
+      "reason": "content differs from regenerated output"
+    }
+  ]
+}
+```
+
+A non-zero exit code accompanies `isStale: true`, so the check can gate CI.
+
 ## Environment Matrix Targets
 
 Generate bindings specifically tailored for your execution runtime:
