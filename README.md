@@ -422,6 +422,11 @@ glassbox version --json
 - **[Runtime Binding Validation](docs/runtime-binding-validation.md)**: Runtime validators for command inputs, trace payloads, audit records, and session envelopes.
 - **[Sandboxed Replay](docs/sandboxed-replay.md)**: Isolated WASM replay in a sandboxed environment.
 - **[Session Bookmarking](docs/session-bookmarking.md)**: Persistent session management and bookmarks.
+- **[Session Schema Migration](docs/schema/session-migration-guide.md)**: Schema versions, auto-upgrade, and rows from newer binaries.
+- **[Session Locking](docs/session-locking.md)**: Concurrency model and failure scenarios for session state.
+- **[Portable Session Bundles](docs/session-portability.md)**: `.gbx` archive contents and import validation.
+- **[Session Doctor Examples](docs/session-doctor-examples.md)**: Before-and-after `session doctor` output.
+- **[Session Recovery Decision Guide](docs/session-recovery-decision.md)**: Choosing between `recover`, `doctor`, `delete`, and re-debugging.
 - **[Security Warnings](docs/security-warnings.md)**: Deprecated host functions and security findings.
 - **[Telemetry Metadata](docs/telemetry-metadata.md)**: What telemetry data is collected and how.
 - **[Telemetry Sampling](docs/telemetry-sampling.md)**: Sampling strategy for telemetry events.
