@@ -33,10 +33,10 @@ echo -e "${YELLOW}1. Setting up Docker buildx...${NC}"
 # Create builder if it doesn't exist
 if ! docker buildx ls | grep -q multiarch; then
     docker buildx create --name multiarch --use
-    echo -e "${GREEN}âœ“ Created multiarch builder${NC}"
+    echo -e "${GREEN}[OK] Created multiarch builder${NC}"
 else
     docker buildx use multiarch
-    echo -e "${GREEN}âœ“ Using existing multiarch builder${NC}"
+    echo -e "${GREEN}[OK] Using existing multiarch builder${NC}"
 fi
 
 # Bootstrap the builder
@@ -44,32 +44,33 @@ docker buildx inspect --bootstrap
 echo ""
 
 echo -e "${YELLOW}2. Building for current platform...${NC}"
-docker build -t GLASSBOX:test .
-echo -e "${GREEN}âœ“ Single-platform build successful${NC}"
+# Build with the same tag used by docker-compose.yml so compose can reuse the layer cache.
+docker build -t glassbox:local .
+echo -e "${GREEN}[OK] Single-platform build successful${NC}"
 echo ""
 
 echo -e "${YELLOW}3. Testing single-platform image...${NC}"
 # Test version command
-if docker run --rm GLASSBOX:test --version; then
-    echo -e "${GREEN}âœ“ Version command works${NC}"
+if docker run --rm glassbox:local --version; then
+    echo -e "${GREEN}[OK] Version command works${NC}"
 else
-    echo -e "${RED}âœ— Version command failed${NC}"
+    echo -e "${RED}[FAIL] Version command failed${NC}"
     exit 1
 fi
 
 # Test help command
-if docker run --rm GLASSBOX:test --help > /dev/null 2>&1; then
-    echo -e "${GREEN}âœ“ Help command works${NC}"
+if docker run --rm glassbox:local --help > /dev/null 2>&1; then
+    echo -e "${GREEN}[OK] Help command works${NC}"
 else
-    echo -e "${RED}âœ— Help command failed${NC}"
+    echo -e "${RED}[FAIL] Help command failed${NC}"
     exit 1
 fi
 
-# Check simulator binary exists
-if docker run --rm GLASSBOX:test sh -c "test -f /app/simulator/target/release/glassbox-sim"; then
-    echo -e "${GREEN}âœ“ Simulator binary exists${NC}"
+# Check simulator binary exists at the path the Dockerfile installs it to.
+if docker run --rm glassbox:local sh -c "test -f /app/simulator/glassbox-sim"; then
+    echo -e "${GREEN}[OK] Simulator binary exists${NC}"
 else
-    echo -e "${RED}âœ— Simulator binary not found${NC}"
+    echo -e "${RED}[FAIL] Simulator binary not found at /app/simulator/glassbox-sim${NC}"
     exit 1
 fi
 echo ""
@@ -78,38 +79,38 @@ echo -e "${YELLOW}4. Building multi-architecture images...${NC}"
 echo "This may take several minutes..."
 docker buildx build \
     --platform linux/amd64,linux/arm64 \
-    --tag GLASSBOX:multiarch \
+    --tag glassbox:multiarch \
     --build-arg VERSION=test \
     --build-arg COMMIT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown") \
     --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
     --load \
     . 2>&1 | grep -E "(Building|exporting|writing|naming)" || true
 
-echo -e "${GREEN}âœ“ Multi-architecture build successful${NC}"
+echo -e "${GREEN}[OK] Multi-architecture build successful${NC}"
 echo ""
 
 echo -e "${YELLOW}5. Inspecting image...${NC}"
-docker image inspect GLASSBOX:test | grep -E "(Architecture|Os)" | head -2
+docker image inspect glassbox:local | grep -E "(Architecture|Os)" | head -2
 echo ""
 
 echo -e "${YELLOW}6. Checking binary architecture...${NC}"
-docker run --rm --entrypoint file GLASSBOX:test /app/Glassbox
-docker run --rm --entrypoint file GLASSBOX:test /app/simulator/target/release/glassbox-sim
+docker run --rm --entrypoint file glassbox:local /app/glassbox
+docker run --rm --entrypoint file glassbox:local /app/simulator/glassbox-sim
 echo ""
 
 echo -e "${YELLOW}7. Verifying static linking...${NC}"
-if docker run --rm --entrypoint ldd GLASSBOX:test /app/Glassbox 2>&1 | grep -q "not a dynamic executable"; then
-    echo -e "${GREEN}âœ“ Go binary is statically linked${NC}"
+if docker run --rm --entrypoint ldd glassbox:local /app/glassbox 2>&1 | grep -q "not a dynamic executable"; then
+    echo -e "${GREEN}[OK] Go binary is statically linked${NC}"
 else
-    echo -e "${YELLOW}âš  Go binary has dynamic dependencies${NC}"
-    docker run --rm --entrypoint ldd GLASSBOX:test /app/Glassbox
+    echo -e "${YELLOW}[WARN] Go binary has dynamic dependencies${NC}"
+    docker run --rm --entrypoint ldd glassbox:local /app/glassbox
 fi
 
-if docker run --rm --entrypoint ldd GLASSBOX:test /app/simulator/target/release/glassbox-sim 2>&1 | grep -q "not a dynamic executable"; then
-    echo -e "${GREEN}âœ“ Rust binary is statically linked${NC}"
+if docker run --rm --entrypoint ldd glassbox:local /app/simulator/glassbox-sim 2>&1 | grep -q "not a dynamic executable"; then
+    echo -e "${GREEN}[OK] Rust binary is statically linked${NC}"
 else
-    echo -e "${YELLOW}âš  Rust binary has dynamic dependencies${NC}"
-    docker run --rm --entrypoint ldd GLASSBOX:test /app/simulator/target/release/glassbox-sim
+    echo -e "${YELLOW}[WARN] Rust binary has dynamic dependencies${NC}"
+    docker run --rm --entrypoint ldd glassbox:local /app/simulator/glassbox-sim
 fi
 echo ""
 
@@ -121,26 +122,26 @@ if command -v docker-compose &> /dev/null || docker compose version &> /dev/null
         COMPOSE_CMD="docker-compose"
     fi
 
-    $COMPOSE_CMD build Glassbox
-    echo -e "${GREEN}âœ“ Docker Compose build successful${NC}"
+    $COMPOSE_CMD build glassbox
+    echo -e "${GREEN}[OK] Docker Compose build successful${NC}"
 else
-    echo -e "${YELLOW}âš  Docker Compose not available, skipping${NC}"
+    echo -e "${YELLOW}[WARN] Docker Compose not available, skipping${NC}"
 fi
 echo ""
 
 echo -e "${YELLOW}9. Checking image size...${NC}"
-SIZE=$(docker image inspect GLASSBOX:test --format='{{.Size}}' | awk '{print $1/1024/1024}')
+SIZE=$(docker image inspect glassbox:local --format='{{.Size}}' | awk '{print $1/1024/1024}')
 echo "Image size: ${SIZE} MB"
 if (( $(echo "$SIZE < 200" | bc -l) )); then
-    echo -e "${GREEN}âœ“ Image size is reasonable${NC}"
+    echo -e "${GREEN}[OK] Image size is reasonable${NC}"
 else
-    echo -e "${YELLOW}âš  Image size is larger than expected${NC}"
+    echo -e "${YELLOW}[WARN] Image size is larger than expected${NC}"
 fi
 echo ""
 
 echo -e "${GREEN}=== All Docker tests passed! ===${NC}"
 echo ""
 echo "Next steps:"
-echo "  - Push to registry: docker push GLASSBOX:multiarch"
-echo "  - Test on different platform: docker run --platform linux/arm64 GLASSBOX:test --version"
+echo "  - Push to registry: docker push glassbox:multiarch"
+echo "  - Test on different platform: docker run --platform linux/arm64 glassbox:local --version"
 echo "  - Run CI workflow: git push origin <branch>"

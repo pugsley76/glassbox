@@ -83,10 +83,13 @@ services:
     tty: true
     restart: "no"
     environment:
-      NO_COLOR:           ${NO_COLOR:-}
-      GLASSBOX_NO_COLOR:  ${GLASSBOX_NO_COLOR:-}
-      GLASSBOX_RPC_URL:   ${GLASSBOX_RPC_URL:-}
-      GLASSBOX_NETWORK:   ${GLASSBOX_NETWORK:-testnet}
+      NO_COLOR:            ${NO_COLOR:-}
+      GLASSBOX_NO_COLOR:   ${GLASSBOX_NO_COLOR:-}
+      GLASSBOX_RPC_URL:    ${GLASSBOX_RPC_URL:-}
+      GLASSBOX_NETWORK:    ${GLASSBOX_NETWORK:-testnet}
+      # Pass through the RPC token when set in the calling environment.
+      # Never hard-code a value here; inject via: docker compose run -e GLASSBOX_RPC_TOKEN
+      GLASSBOX_RPC_TOKEN:  ${GLASSBOX_RPC_TOKEN:-}
 
   # ── glassbox-degraded (dependency-unavailable test) ─────────────────────────
   # Verifies that the container reports unhealthy when the binary cannot run,

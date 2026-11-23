@@ -243,3 +243,70 @@ func TestProfile_ContractIDs(t *testing.T) {
 		t.Error("name should be preserved")
 	}
 }
+
+// ── effectivePlaceholder coverage ────────────────────────────────────────────
+// These tests verify that the custom placeholder is used consistently across
+// all three Apply* entry points after the method was moved out of the struct
+// body (where it was syntactically invalid Go).
+
+func TestProfile_CustomPlaceholder_Apply(t *testing.T) {
+	p := &Profile{
+		Name:                "custom",
+		RedactedPlaceholder: "***HIDDEN***",
+		Rules: []Rule{
+			{Type: FieldSecret, Pattern: `^S[A-Z2-7]{55}$`},
+		},
+	}
+	if err := p.Compile(); err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	got := p.Apply("SDXL6BUWX7HQZQBZJN5HQUV3LQHZ7FJVHQXQ5Y3T6GFLQY2SDNM2Q")
+	if got != "***HIDDEN***" {
+		t.Errorf("Apply with custom placeholder: got %q, want %q", got, "***HIDDEN***")
+	}
+}
+
+func TestProfile_CustomPlaceholder_ApplyToMap(t *testing.T) {
+	p := &Profile{
+		Name:                "custom-map",
+		RedactedPlaceholder: "***HIDDEN***",
+		Rules: []Rule{
+			{Field: "rpc_token", Type: FieldToken},
+		},
+	}
+	if err := p.Compile(); err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	result := p.ApplyToMap(map[string]interface{}{
+		"rpc_token": "my-secret-token",
+		"network":   "testnet",
+	})
+	if result["rpc_token"] != "***HIDDEN***" {
+		t.Errorf("ApplyToMap rpc_token: got %q, want %q", result["rpc_token"], "***HIDDEN***")
+	}
+	if result["network"] != "testnet" {
+		t.Errorf("ApplyToMap network: got %q, want preserved", result["network"])
+	}
+}
+
+func TestProfile_DefaultPlaceholder_WhenRedactedPlaceholderEmpty(t *testing.T) {
+	p := &Profile{
+		Name:                "no-override",
+		RedactedPlaceholder: "", // must fall back to Placeholder constant
+		Rules: []Rule{
+			{Field: "secret_key", Type: FieldSecret},
+		},
+	}
+	if err := p.Compile(); err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+
+	result := p.ApplyToStringMap(map[string]string{
+		"my_secret_key": "value",
+	})
+	if result["my_secret_key"] != Placeholder {
+		t.Errorf("expected default Placeholder %q, got %q", Placeholder, result["my_secret_key"])
+	}
+}

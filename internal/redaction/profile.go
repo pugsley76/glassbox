@@ -64,19 +64,19 @@ type Profile struct {
 	// If empty, Placeholder is used.
 	RedactedPlaceholder string `json:"redacted_placeholder,omitempty"`
 
-	// effectivePlaceholder returns the effective placeholder for this profile.
-	// It returns p.RedactedPlaceholder if non-empty, otherwise Placeholder.
-	func (p *Profile) effectivePlaceholder() string {
-		if p.RedactedPlaceholder != "" {
-			return p.RedactedPlaceholder
-		}
-		return Placeholder
-	}
-
 	// OptIn controls whether the profile is opt-in (false) or opt-out (true).
 	// When OptIn is true, fields not explicitly listed are NOT redacted.
 	// When OptIn is false (default), all matched fields are redacted.
 	OptIn bool `json:"opt_in,omitempty"`
+}
+
+// effectivePlaceholder returns the placeholder for this profile.
+// It returns p.RedactedPlaceholder if non-empty, otherwise Placeholder.
+func (p *Profile) effectivePlaceholder() string {
+	if p.RedactedPlaceholder != "" {
+		return p.RedactedPlaceholder
+	}
+	return Placeholder
 }
 
 // RedactionSummary records what was redacted for inclusion in report metadata.

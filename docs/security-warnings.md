@@ -43,6 +43,79 @@ so that tokens, keys, and passwords never appear in the signed record.
 Both long-form (`--rpc-token value`, `--rpc-token=value`) and short-form
 (`-t value`) flag values are covered by the redaction pass.
 
+The diagnostics bundle (`glassbox doctor --bundle`) applies an additional layer
+of environment-variable redaction. `GLASSBOX_RPC_TOKEN`,
+`GLASSBOX_SENTRY_DSN`, `GLASSBOX_CONFIG_PASSPHRASE`, and
+`GLASSBOX_CRASH_ENDPOINT` are always replaced with `[REDACTED]` regardless of
+their content (`internal/diagnostics/redact.go: secretEnvKeys`).
+
+The `session share` command uses a separate, configurable redaction system
+(`internal/redaction/profile.go`). Two built-in profiles are provided:
+
+| Profile name | What it redacts |
+|---|---|
+| `full` (default) | Secrets, tokens, account IDs, contract IDs, paths, PINs |
+| `secrets-only` | Only secrets, tokens, and credentials; account/contract IDs and paths are preserved |
+
+Select a profile with `--redact <profile-name>`. Use `--preview` to inspect
+what would be removed before writing the archive. Custom profiles can be loaded
+from a JSON file with `LoadProfileFromFile` (`internal/redaction/profile.go`).
+
+#### Verifying redaction behaviour from a clean checkout
+
+**Success path — audit log redaction:**
+
+```sh
+# A flag whose name contains "token" is redacted in the signed record.
+# Run from the repository root; no network required.
+glassbox audit:sign \
+  --signing-provider software \
+  --software-private-key "$(openssl genpkey -algorithm ed25519 2>/dev/null)" \
+  --rpc-token example-not-a-real-token \
+  --payload '{"input":{},"state":{},"events":[],"timestamp":"2026-01-01T00:00:00.000Z"}' \
+  | python3 -m json.tool | grep -A2 '"args"'
+# Expected: "REDACTED" appears in place of the token value; the flag name is kept.
+```
+
+**Success path — config show redaction (lowercase `[redacted]`):**
+
+```sh
+GLASSBOX_RPC_TOKEN=example-not-a-real-token glassbox config show --json \
+  | python3 -m json.tool | grep -A3 rpc_token
+# Expected output:
+# "rpc_token": {
+#   "value": "[redacted]",
+#   "source": "environment"
+# }
+```
+
+Note: `config show` uses `[redacted]` (lowercase). The audit log and
+diagnostics bundle use `REDACTED` and `[REDACTED]` respectively — these are
+different surfaces with different placeholders by design.
+
+**Failure path — running `config show` without a token set:**
+
+```sh
+glassbox config show --json | python3 -m json.tool | grep rpc_token
+# Expected: no output (the key is absent from .values when no token is set)
+```
+
+**Verifying source constants:**
+
+```sh
+# Audit log placeholder ("REDACTED")
+grep -n '"REDACTED"' internal/cmd/operation_audit.go
+
+# Session-share / report placeholder ("[REDACTED]")
+grep -n 'Placeholder' internal/redaction/profile.go | head -3
+
+# Diagnostics bundle placeholder ("[REDACTED]")
+grep -n 'RedactedPlaceholder' internal/diagnostics/redact.go | head -1
+
+# secretEnvKeys list (always-redacted env vars in doctor bundle)
+grep -A8 'secretEnvKeys' internal/diagnostics/redact.go
+```
+
 ### Metadata entry validation
 
 User-supplied `--metadata key=value` entries are validated before being

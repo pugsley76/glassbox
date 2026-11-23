@@ -149,6 +149,7 @@ Every entry links to an existing guide; nothing is duplicated here.
 | Secrets in archives (redaction and scanning) | [Audit Signing](./audit-signing.md) |
 | Command security review checklist | [Command Security Review](./command-security-review.md) |
 | Docker image hardening | [Docker Security](./docker-security.md) |
+| Injecting secrets (RPC token) into containers | [Docker Security — Secret injection](./docker-security.md#secret-injection) |
 | SARIF security rules | [SARIF Diagnostic Rules](./sarif-diagnostic-rules.md) |
 | Vulnerability scanner integration | [Vulnerability Scanner](./vulnerability-scanner.md) |
 

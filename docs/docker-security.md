@@ -144,6 +144,71 @@ docker compose --profile test up glassbox-degraded
 docker compose --profile tracing up
 ```
 
+## Secret injection
+
+Glassbox reads credentials exclusively from environment variables; it does not
+consume Docker-native `secrets:` mounts. The two runtime credentials are:
+
+| Secret | Environment variable | Used by |
+|--------|---------------------|---------|
+| RPC authentication token | `GLASSBOX_RPC_TOKEN` | All RPC-backed commands (`debug`, `explain`, `dry-run`, `shell`, `compare`, `profile`, `debug bundle create`) |
+| Release manifest signing key | `GLASSBOX_MANIFEST_SIGNING_KEY` | CI release pipeline only — **never** pass this to a runtime container |
+
+### Passing the RPC token to a container
+
+Inject the token at runtime so it never touches the image layer or the
+repository. The recommended pattern uses `docker compose run --env`:
+
+```bash
+# Read the token without echoing it, then pass it to the container.
+read -rs GLASSBOX_RPC_TOKEN
+export GLASSBOX_RPC_TOKEN
+
+docker compose --profile debug run --rm \
+  -e GLASSBOX_RPC_TOKEN \
+  glassbox-debug debug --network testnet <tx-hash>
+```
+
+In CI, map the token from the platform secret store:
+
+```yaml
+# GitHub Actions example
+- name: Run debug
+  env:
+    GLASSBOX_RPC_TOKEN: ${{ secrets.GLASSBOX_RPC_TOKEN }}
+  run: |
+    docker compose --profile debug run --rm \
+      -e GLASSBOX_RPC_TOKEN \
+      glassbox-debug debug --network testnet $TX_HASH
+```
+
+The `glassbox-debug` service in `docker-compose.yml` already declares
+`GLASSBOX_RPC_TOKEN` as a pass-through variable (empty default), so the token
+is forwarded when it is set in the calling environment without any further
+compose file edits.
+
+Confirm the token was picked up without printing it:
+
+```bash
+docker compose --profile debug run --rm \
+  -e GLASSBOX_RPC_TOKEN \
+  glassbox-debug config show --json | python3 -m json.tool | grep rpc_token
+# Expected: "value": "[redacted]"
+```
+
+For the full token resolution order and additional safe-handling techniques,
+see [RPC Bearer Token Examples](./rpc-token-examples.md).
+
+### What is never baked into the image
+
+- No `ENV` directive in the Dockerfile sets any credential.
+- The `GLASSBOX_MANIFEST_SIGNING_KEY` variable is consumed only inside the CI
+  `generate-release-manifest` tool and is never forwarded to a container.
+- The `glassbox.example.toml` file (bind-mounted read-only as
+  `/app/glassbox.toml`) contains no credentials. Any real `rpc_token` or
+  `rpc_url` with embedded credentials belongs in an untracked local config
+  file, not in `glassbox.example.toml`.
+
 ## Running the full hardened stack
 
 ```bash
@@ -208,5 +273,5 @@ docker inspect glassbox:local \
 - [ ] `cap_drop: [ALL]` is set
 - [ ] `no-new-privileges:true` is set
 - [ ] Health check is configured and transitions to unhealthy on failure
-- [ ] No secrets are baked into the image (use environment variables or secrets mounts)
-- [ ] `GLASSBOX_MANIFEST_SIGNING_KEY` is never passed to the runtime container
+- [ ] No secrets are baked into the image (inject via `-e`/`--env` at `docker compose run` time, or via CI secret stores)
+- [ ] `GLASSBOX_MANIFEST_SIGNING_KEY` is never passed to a runtime container (CI pipeline only)
