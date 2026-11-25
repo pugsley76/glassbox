@@ -15,14 +15,15 @@ import (
 )
 
 var (
-	auditVerifyDirPath            string
-	auditVerifyDirJSON            bool
-	auditVerifyDirFailFast        bool
-	auditVerifyDirPolicyConfig    string
-	auditVerifyDirExpectedSigners string
-	auditVerifyDirExpectedSchema  string
+	auditVerifyDirPath             string
+	auditVerifyDirJSON             bool
+	auditVerifyDirFailFast         bool
+	auditVerifyDirPolicyConfig     string
+	auditVerifyDirExpectedSigners  string
+	auditVerifyDirExpectedSchema   string
 	auditVerifyDirMaxRetentionDays int
-	auditVerifyDirRequireChain    bool
+	auditVerifyDirRequireChain     bool
+	auditVerifyDirPolicyLevel      string
 )
 
 var auditVerifyDirCmd = &cobra.Command{
@@ -117,6 +118,8 @@ func init() {
 	auditVerifyDirCmd.Flags().StringVar(&auditVerifyDirExpectedSchema, "expected-schema-version", "", "Expected manifest schema_version for all segments")
 	auditVerifyDirCmd.Flags().IntVar(&auditVerifyDirMaxRetentionDays, "max-retention-days", 0, "Flag segments older than this many days (0 = disabled)")
 	auditVerifyDirCmd.Flags().BoolVar(&auditVerifyDirRequireChain, "require-chain", false, "Treat a missing or broken hash chain as a policy violation")
+	auditVerifyDirCmd.Flags().StringVar(&auditVerifyDirPolicyLevel, "policy-level", string(audit.DefaultPolicyLevel),
+		"How to treat chain irregularities: strict (default), warn, or permissive")
 	rootCmd.AddCommand(auditVerifyDirCmd)
 }
 
@@ -226,7 +229,19 @@ func runAuditVerifyDir(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if !result.Valid {
+	// Apply the selected policy level to decide whether to fail.
+	level, ok := audit.ParsePolicyLevel(audit.PolicyLevel(auditVerifyDirPolicyLevel))
+	if !ok {
+		return errors.WrapValidationError(fmt.Sprintf("unknown --policy-level %q: must be strict, warn, or permissive", auditVerifyDirPolicyLevel))
+	}
+	enforcer := audit.NewPolicyEnforcer(level)
+	outcome := enforcer.EnforceResult(result)
+
+	if !auditVerifyDirJSON && len(outcome.Issues) > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "\nPolicy level: %s — %s\n", outcome.Level, outcome.Reason)
+	}
+
+	if outcome.Fatal {
 		totalViolations := result.StructuralIssues + result.PolicyViolations
 		return errors.WrapAuditDirPolicyViolation(
 			"audit log directory failed verification",
