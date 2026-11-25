@@ -20,6 +20,9 @@ type GlobalConfig struct {
 	AutoClean bool `json:"auto_clean"`
 	// AutoCleanThreshold is the size threshold that triggers automatic cleanup
 	AutoCleanThreshold int64 `json:"auto_clean_threshold"`
+	// Eviction holds the scored eviction strategy configuration.
+	// When zero-valued, DefaultEvictionConfig() is used.
+	Eviction EvictionConfig `json:"eviction,omitempty"`
 }
 
 // DefaultGlobalConfig returns the default configuration
@@ -28,6 +31,7 @@ func DefaultGlobalConfig() GlobalConfig {
 		MaxSizeBytes:       1024 * 1024 * 1024, // 1GB
 		AutoClean:          true,               // Enabled by default
 		AutoCleanThreshold: 1024 * 1024 * 1024, // 1GB
+		Eviction:           DefaultEvictionConfig(),
 	}
 }
 
