@@ -319,3 +319,29 @@ func ExportDiagnosticsWithFindings(
 	})
 	return mergeDiagnosticLog(base, failures, warnings, opts)
 }
+
+// ExportDiagnosticsJSON is a convenience function that calls ExportDiagnostics
+// then Marshal. It is the single call a CLI command needs to produce a
+// standards-compliant SARIF file from source map failures and security
+// warnings. Use ExportDiagnosticsWithFindingsJSON when the run also produced
+// security findings.
+func ExportDiagnosticsJSON(
+	failures []SourceMapFailure,
+	warnings []SecurityWarning,
+	opts DiagnosticOptions,
+) ([]byte, error) {
+	log := ExportDiagnostics(failures, warnings, opts)
+	return Marshal(log)
+}
+
+// ExportDiagnosticsWithFindingsJSON is a convenience function that calls
+// ExportDiagnosticsWithFindings then Marshal.
+func ExportDiagnosticsWithFindingsJSON(
+	findings []security.Finding,
+	failures []SourceMapFailure,
+	warnings []SecurityWarning,
+	opts DiagnosticOptions,
+) ([]byte, error) {
+	log := ExportDiagnosticsWithFindings(findings, failures, warnings, opts)
+	return Marshal(log)
+}
